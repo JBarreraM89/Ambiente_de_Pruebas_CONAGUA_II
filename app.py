@@ -126,7 +126,7 @@ modelo_conceptual = st.Page("pages/7_🧊_Modelo_Conceptual.py", title="Modelo C
 
 paginas = {
     "Herramientas Base": [geovisor, calculadora],
-    "Reportes y Análisis": [reportes, analista_virtual, red_piezometrica], # AGREGADA AQUÍ
+    "Reportes y Análisis": [reportes, analista_virtual, red_piezometrica],
     "Vulnerabilidad": [vulnerabilidad],
     "Modelo Conceptual": [modelo_conceptual]
 }
