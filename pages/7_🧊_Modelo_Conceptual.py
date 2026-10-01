@@ -684,7 +684,6 @@ geojson_estructuras = gdf_estructuras_50k.to_json() if gdf_estructuras_50k is no
 # 💾 EXPORTACIÓN SHAPEFILE SEGURA (DBF DE 10 CARACTERES CACHEADA)
 # =======================================================
 @st.cache_data(show_spinner=False)
-@st.cache_data(show_spinner=False)
 def exportar_shapefile_zip(_gdf_origen, base_name):  # 👈 NOTA EL GUION BAJO: _gdf_origen
     if _gdf_origen is None or _gdf_origen.empty:
         return None
