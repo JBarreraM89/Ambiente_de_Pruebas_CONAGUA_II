@@ -48,7 +48,7 @@ st.set_page_config(layout="wide", page_title="Modelo Conceptual 3D", page_icon="
 inyectar_css_oficial()
 banner_institucional()
 
-st.subheader("🧊 Estación de Trabajo: Modelo Conceptual")
+st.subheader("🧊 Estación de Trabajo: Modelo Conceptual 3D")
 st.caption("Modelación geológica y física 3D: Bloque aislado 360°, estructuras 1:50k SGM y pozos con profundidad real.")
 
 if "lista_marcadores" not in st.session_state:
@@ -520,7 +520,6 @@ def preparar_geologia_vectorial(clave_ac):
     geom_4326 = datos_ac.geometry
     gdf_sgm = None
 
-    # Si hay caché previo de solo 3 columnas, eliminarlo para forzar la recarga completa
     if ruta_cache_parquet.exists() and ruta_cache_parquet.stat().st_size > 2000:
         try:
             gdf_cached = gpd.read_parquet(ruta_cache_parquet)
@@ -531,7 +530,6 @@ def preparar_geologia_vectorial(clave_ac):
         except Exception:
             pass
 
-    # Búsqueda y recorte en archivos locales
     if gdf_sgm is None or gdf_sgm.empty:
         rutas_busqueda = [DIRECTORIO_RAIZ / "data" / "geologia", Path.home() / "Downloads"]
         for r_dir in rutas_busqueda:
@@ -562,25 +560,37 @@ def preparar_geologia_vectorial(clave_ac):
                     except Exception: pass
             if gdf_sgm is not None: break
 
+            for z in r_dir.glob("*.zip"):
+                try:
+                    with zipfile.ZipFile(z, 'r') as z_ref:
+                        shps = [a for a in z_ref.namelist() if a.endswith(".shp") and ("lito" in a.lower() or "geo" in a.lower() or "cnal" in a.lower()) and "estructura" not in a.lower()]
+                        if shps:
+                            with tempfile.TemporaryDirectory() as tmp_z:
+                                z_ref.extractall(tmp_z)
+                                for s in Path(tmp_z).rglob("*.shp"):
+                                    gdf_temp = gpd.read_file(s, encoding='latin1')
+                                    if gdf_temp.crs is None: gdf_temp = gdf_temp.set_crs(epsg=4326)
+                                    else: gdf_temp = gdf_temp.to_crs(epsg=4326)
+                                    recorte = gdf_temp.clip(geom_4326)
+                                    if not recorte.empty:
+                                        gdf_sgm = recorte
+                                        break
+                    if gdf_sgm is not None: break
+                except Exception: pass
+            if gdf_sgm is not None: break
+
     if gdf_sgm is not None and not gdf_sgm.empty:
-        # -------------------------------------------------------------
-        # 🛠️ CORRECCIÓN DE MOJIBAKE EN PYTHON (UTF-8 / LATIN-1)
-        # -------------------------------------------------------------
+        # Sanitización de mojibake en Python
         def reparar_texto_mojibake(val):
-            if val is None or pd.isna(val):
-                return ""
+            if val is None or pd.isna(val): return ""
             s = str(val).strip()
-            try:
-                s = s.encode('latin1').decode('utf-8')
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                pass
+            try: s = s.encode('latin1').decode('utf-8')
+            except (UnicodeEncodeError, UnicodeDecodeError): pass
             return s
 
-        # Limpiar todas las columnas de texto
         for col in gdf_sgm.select_dtypes(include=['object', 'string']).columns:
             if col != 'geometry':
                 gdf_sgm[col] = gdf_sgm[col].apply(reparar_texto_mojibake)
-        # -------------------------------------------------------------
 
         cols_upper = [c.upper() for c in gdf_sgm.columns]
         if "CLAVE_SGM" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE_SGM")]
@@ -604,8 +614,7 @@ def preparar_geologia_vectorial(clave_ac):
 
         try:
             gdf_sgm.to_parquet(ruta_cache_parquet)
-        except Exception:
-            pass
+        except Exception: pass
 
         return gdf_sgm, dic_leyenda, col_sel
 
@@ -619,7 +628,16 @@ geojson_borde = gdf_borde.to_json()
 minx, miny, maxx, maxy = datos_ac.geometry.bounds
 centro_lon = (minx + maxx) / 2.0
 centro_lat = (miny + maxy) / 2.0
-geojson_geologia = gdf_geologia_recortada.to_json() if gdf_geologia_recortada is not None else "{}"
+
+# 🛡️ GEOJSON OPTIMIZADO PARA EL VISOR 3D (Sin romper JavaScript con saltos de línea ni comillas)
+if gdf_geologia_recortada is not None and not gdf_geologia_recortada.empty:
+    cols_visor = [c for c in ['CLAVE_SGM', 'ETIQUETA_LITO', 'COLOR_HEX', 'FORMACION', 'LITOLOGIA', 'ROCA', 'PERIODO', 'EDINICIO', 'EDFINAL', 'ERA', 'geometry'] if c in gdf_geologia_recortada.columns]
+    gdf_visor = gdf_geologia_recortada[cols_visor].copy()
+    for col in gdf_visor.select_dtypes(include=['object', 'string']).columns:
+        gdf_visor[col] = gdf_visor[col].fillna("").astype(str).str.replace('"', '').str.replace('\n', ' ').str.replace('\r', '')
+    geojson_geologia = gdf_visor.to_json()
+else:
+    geojson_geologia = "{}"
 
 # Serializar puntos sincronizados de la sesión con profundidad
 pozos_3d_json = json.dumps(st.session_state.get("lista_marcadores", []))
@@ -633,18 +651,15 @@ def obtener_estructuras_50k(datos_ac, clave_ac):
     carpeta_cache.mkdir(parents=True, exist_ok=True)
     ruta_cache_acuifero = carpeta_cache / f"ESTRUCTURAS_50K_{clave_ac}.parquet"
 
-    # 1. Validar si el caché existente contiene la columna AZIMUTH (si es viejo, se elimina)
     if ruta_cache_acuifero.exists():
         try:
             gdf_cached = gpd.read_parquet(ruta_cache_acuifero)
             if any("AZIMUTH" in c.upper() for c in gdf_cached.columns):
                 return gdf_cached
             else:
-                ruta_cache_acuifero.unlink()  # 👈 Borra el caché viejo incompleto
-        except Exception:
-            pass
+                ruta_cache_acuifero.unlink()
+        except Exception: pass
 
-    # 2. Recorte instantáneo desde el Parquet Nacional Maestro con todas sus columnas
     ruta_nacional = DIRECTORIO_RAIZ / "data" / "geologia" / "Estructuras_Nacional_SGM.parquet"
     if ruta_nacional.exists():
         try:
@@ -665,18 +680,65 @@ def obtener_estructuras_50k(datos_ac, clave_ac):
 gdf_estructuras_50k = obtener_estructuras_50k(datos_ac, clave_actual)
 geojson_estructuras = gdf_estructuras_50k.to_json() if gdf_estructuras_50k is not None and not gdf_estructuras_50k.empty else "{}"
 
-# Exportaciones SIG oficiales con botones secundarios
-def exportar_shapefile_zip(gdf, base_name):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        shp_path = os.path.join(tmpdir, f"{base_name}.shp")
+# =======================================================
+# 💾 EXPORTACIÓN SHAPEFILE SEGURA (DBF DE 10 CARACTERES CACHEADA)
+# =======================================================
+@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False)
+def exportar_shapefile_zip(_gdf_origen, base_name):  # 👈 NOTA EL GUION BAJO: _gdf_origen
+    if _gdf_origen is None or _gdf_origen.empty:
+        return None
+    try:
+        gdf = _gdf_origen.copy()
         if gdf.crs is None: gdf = gdf.set_crs(epsg=4326)
         else: gdf = gdf.to_crs(epsg=4326)
-        gdf.to_file(shp_path, driver="ESRI Shapefile", encoding="utf-8")
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in os.listdir(tmpdir): zf.write(os.path.join(tmpdir, f), arcname=f)
-        buf.seek(0)
-        return buf.getvalue()
+
+        # 1. Quitar geometrías nulas o vacías
+        gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty].copy()
+
+        # 2. Truncar nombres a 10 caracteres para formato DBF de Shapefile
+        cols_map, cols_usadas = {}, set()
+        for col in gdf.columns:
+            if col == 'geometry': continue
+            c_clean = re.sub(r'[^A-Za-z0-9_]', '', str(col).upper())[:10]
+            if not c_clean: c_clean = "COL"
+            c_final, suf = c_clean, 1
+            while c_final in cols_usadas:
+                c_final = f"{c_clean[:8]}_{suf}"
+                suf += 1
+            cols_usadas.add(c_final)
+            cols_map[col] = c_final
+
+        gdf = gdf.rename(columns=cols_map)
+
+        # 3. Rellenar nulos para evitar error de tipo en DBF
+        for col in gdf.columns:
+            if col == 'geometry': continue
+            if gdf[col].dtype == 'object':
+                gdf[col] = gdf[col].fillna("").astype(str)
+            elif np.issubdtype(gdf[col].dtype, np.number):
+                gdf[col] = gdf[col].fillna(0)
+
+        # 4. Escribir Shapefile temporal y comprimir
+        with tempfile.TemporaryDirectory() as tmpdir:
+            shp_path = os.path.join(tmpdir, f"{base_name}.shp")
+            gdf.to_file(shp_path, driver="ESRI Shapefile", encoding="utf-8")
+            
+            prj_path = os.path.join(tmpdir, f"{base_name}.prj")
+            if not os.path.exists(prj_path):
+                with open(prj_path, "w") as f_prj:
+                    f_prj.write('GEOGCS["GCS_WGS_1984",DATUM["D_WGS_1984",SPHEROID["WGS_1984",6378137.0,298.257223563]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]]')
+
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in os.listdir(tmpdir):
+                    zf.write(os.path.join(tmpdir, f), arcname=f)
+            buf.seek(0)
+            return buf.getvalue()
+            
+    except Exception as e:
+        print(f"Error exportando Shapefile {base_name}: {e}")
+        return None
 
 if ruta_dem_local and ruta_dem_local.exists():
     st.sidebar.markdown("---")
@@ -692,21 +754,20 @@ if ruta_dem_local and ruta_dem_local.exists():
         )
     if gdf_geologia_recortada is not None and not gdf_geologia_recortada.empty:
         zip_shp_bytes = exportar_shapefile_zip(gdf_geologia_recortada, f"Geologia_{clave_actual}")
-        st.sidebar.download_button(
-            label="📦 Descargar Geología Shapefile (.zip)",
-            data=zip_shp_bytes,
-            file_name=f"Geologia_Shapefile_{clave_actual}.zip",
-            mime="application/zip",
-            type="secondary",
-            use_container_width=True
-        )
+        if zip_shp_bytes:
+            st.sidebar.download_button(
+                label="📦 Descargar Geología Shapefile (.zip)",
+                data=zip_shp_bytes,
+                file_name=f"Geologia_Shapefile_{clave_actual}.zip",
+                mime="application/zip",
+                type="secondary",
+                use_container_width=True
+            )
         
-        # Descarga de la tabla de atributos completa en CSV
         df_atributos_geo = gdf_geologia_recortada.drop(columns=["geometry"], errors="ignore")
-        csv_geo_bytes = df_atributos_geo.to_csv(index=False).encode('utf-8-sig')
         st.sidebar.download_button(
             label="📄 Descargar Atributos Geología (CSV)",
-            data=csv_geo_bytes,
+            data=df_atributos_geo.to_csv(index=False).encode('utf-8-sig'),
             file_name=f"Atributos_Geologia_{clave_actual}.csv",
             mime="text/csv",
             type="secondary",
@@ -715,14 +776,15 @@ if ruta_dem_local and ruta_dem_local.exists():
         
     if gdf_estructuras_50k is not None and not gdf_estructuras_50k.empty:
         zip_fallas_bytes = exportar_shapefile_zip(gdf_estructuras_50k, f"Estructuras_50k_{clave_actual}")
-        st.sidebar.download_button(
-            label="📦 Descargar Fallas Shapefile (.zip)",
-            data=zip_fallas_bytes,
-            file_name=f"Estructuras_50k_{clave_actual}.zip",
-            mime="application/zip",
-            type="secondary",
-            use_container_width=True
-        )
+        if zip_fallas_bytes:
+            st.sidebar.download_button(
+                label="📦 Descargar Fallas Shapefile (.zip)",
+                data=zip_fallas_bytes,
+                file_name=f"Estructuras_50k_{clave_actual}.zip",
+                mime="application/zip",
+                type="secondary",
+                use_container_width=True
+            )
 
 # =======================================================
 # 🌐 9. PREPARACIÓN DE LA MALLA THREE.JS (MODO AISLADO 360°)
@@ -1017,19 +1079,21 @@ html_threejs_isolated = f"""
     let pasoCotasActual = 50;
 
     function redibujarTexturaCompleta() {{
-        ctx.clearRect(0, 0, 2048, 2048);
+        // 🛡️ FONDO BASE: Evita que el relieve se pinte de negro si la textura es transparente
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, 2048, 2048);
 
         // 1. Polígonos de Litología SGM
-        const verContactos = document.getElementById('chk-lines').checked;
-        if (dataGeologia && dataGeologia.features) {{
+        const verContactos = document.getElementById('chk-lines') ? document.getElementById('chk-lines').checked : true;
+        if (dataGeologia && dataGeologia.features && dataGeologia.features.length > 0) {{
             dataGeologia.features.forEach(f => {{
-                const color = f.properties.COLOR_HEX || '#B0BEC5';
+                const color = (f.properties && f.properties.COLOR_HEX) ? f.properties.COLOR_HEX : '#FFF5AF';
                 const geom = f.geometry;
                 const stroke = verContactos ? '#334155' : null;
                 const w = verContactos ? 1.5 : 0;
-                if (geom.type === 'Polygon') {{
+                if (geom && geom.type === 'Polygon') {{
                     dibujarPoligono(geom.coordinates[0], color, stroke, w);
-                }} else if (geom.type === 'MultiPolygon') {{
+                }} else if (geom && geom.type === 'MultiPolygon') {{
                     geom.coordinates.forEach(poly => {{
                         dibujarPoligono(poly[0], color, stroke, w);
                     }});
@@ -1462,7 +1526,6 @@ html_threejs_isolated = f"""
                         const coordsArr = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates;
                         for (let coords of coordsArr) {{
                             for (let pt of coords) {{
-                                // Tolerancia de clic (~300 metros)
                                 const dist = Math.hypot(pt[0] - lon, pt[1] - lat);
                                 if (dist < 0.003) {{
                                     fallaEncontrada = f.properties;
@@ -1475,9 +1538,7 @@ html_threejs_isolated = f"""
                     }}
                 }}
 
-                // -------------------------------------------------------------
                 // CASO 1: SE TOCÓ UNA FALLA O FRACTURA (SGM 1:50k)
-                // -------------------------------------------------------------
                 if (fallaEncontrada) {{
                     let azVal = fallaEncontrada.AZIMUTH !== undefined && fallaEncontrada.AZIMUTH !== null ? fallaEncontrada.AZIMUTH : (fallaEncontrada.Azimuth || fallaEncontrada.azimuth || fallaEncontrada.AZIMUT);
                     let azTxt = (azVal !== undefined && azVal !== null && String(azVal).trim() !== '' && String(azVal) !== 'null') ? parseFloat(azVal).toFixed(2) + '°' : 'S/D';
@@ -1485,7 +1546,6 @@ html_threejs_isolated = f"""
                     let incVal = fallaEncontrada.INCLINACION !== undefined && fallaEncontrada.INCLINACION !== null ? fallaEncontrada.INCLINACION : (fallaEncontrada.Inclinacion || fallaEncontrada.inclinacion);
                     let incTxt = (incVal !== undefined && incVal !== null && String(incVal).trim() !== '' && String(incVal) !== 'null') ? parseFloat(incVal).toFixed(0) + '°' : '0°';
 
-                    // Si no tiene NOMBRE o es nulo, asigna el tipo de estructura al título
                     let tipoEstr = fallaEncontrada.ESTRUCTURAS || fallaEncontrada.TIPO_ESTR || 'Estructura Geológica';
                     let rawNom = fallaEncontrada.NOMBRE || fallaEncontrada.NOM_ESTR;
                     let tieneNom = rawNom && String(rawNom).trim() !== '' && String(rawNom).toUpperCase() !== 'NULL' && String(rawNom).toUpperCase() !== 'NONE';
@@ -1505,9 +1565,7 @@ html_threejs_isolated = f"""
                         </div>
                     `;
                 
-                // -------------------------------------------------------------
                 // CASO 2: SE TOCÓ LA ROCA (FICHA LITOLÓGICA ENRIQUECIDA)
-                // -------------------------------------------------------------
                 }} else {{
                     const infoLito = identificarFormacionGeologica(lon, lat);
 
@@ -1518,7 +1576,6 @@ html_threejs_isolated = f"""
                         const roca = infoLito.ROCA || 'Sedimentaria';
                         const colorHex = infoLito.COLOR_HEX || '#B0BEC5';
 
-                        // Construcción de la edad geológica: Periodo (Ed. Inicio - Ed. Final)
                         let edadGeo = infoLito.PERIODO || '';
                         if (infoLito.EDINICIO || infoLito.EDFINAL) {{
                             const ini = infoLito.EDINICIO || '';
@@ -1963,7 +2020,7 @@ html_maplibre_world = f"""
                         <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5;">
                             <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
                                 <div style="display:flex; align-items:center; gap:6px;">
-                                    <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block; flex-shrink:0;"></span>
+                                    <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block;"></span>
                                     <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{formacion}}</h4>
                                 </div>
                                 <span style="background:#F1F5F9; border:1px solid #CBD5E1; color:#334155; font-size:9.5px; font-weight:700; padding:1px 4px; border-radius:3px;">${{claveSgm}}</span>
@@ -1999,7 +2056,6 @@ html_maplibre_world = f"""
             map.on('mouseleave', 'estructuras-layer', () => {{ map.getCanvas().style.cursor = ''; }});
 
             map.on('click', 'estructuras-layer', (e) => {{
-                // 🛑 SI SE TOCÓ UN POZO QUE PASA CERCA DE LA LÍNEA, NO ABRIR LA FALLA
                 if (e.originalEvent && e.originalEvent.target && e.originalEvent.target.closest('.maplibregl-marker')) return;
 
                 clickConsumido = true;
@@ -2109,12 +2165,11 @@ html_maplibre_world = f"""
                 const lonNum = typeof p.lon === 'number' ? p.lon : parseFloat(p.lon);
                 const profVal = p.profundidad && p.profundidad > 0 ? p.profundidad : 150;
 
-                // Popup nativo asociado directamente al marcador
                 const popupPozo = new maplibregl.Popup({{ offset: 12, maxWidth: '300px' }})
                     .setHTML(`
                         <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5; min-width:140px;">
                             <div style="display:flex; align-items:center; gap:6px; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
-                                <span style="color:#691C32; font-size:15px;">📍</span>
+                                <span style="color:#691C32; font-size:14px;">📍</span>
                                 <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{p.nombre || 'Pozo'}}</h4>
                             </div>
                             <b>Tipo:</b> ${{p.tipo || 'Infraestructura'}}<br>
@@ -2123,7 +2178,6 @@ html_maplibre_world = f"""
                         </div>
                     `);
 
-                // Al abrir este popup, cerramos cualquier otro de geología o falla que estuviera abierto
                 popupPozo.on('open', () => {{
                     if (popupActivo && popupActivo !== popupPozo) {{
                         popupActivo.remove();
