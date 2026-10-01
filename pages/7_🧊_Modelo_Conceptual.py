@@ -48,7 +48,7 @@ st.set_page_config(layout="wide", page_title="Modelo Conceptual 3D", page_icon="
 inyectar_css_oficial()
 banner_institucional()
 
-st.subheader("🧊 Estación de Trabajo: Modelo Conceptual")
+st.subheader("🧊 Estación de Trabajo: Modelo Conceptual 3D")
 st.caption("Modelación geológica y física 3D: Bloque aislado 360°, estructuras 1:50k SGM y pozos con profundidad real.")
 
 if "lista_marcadores" not in st.session_state:
