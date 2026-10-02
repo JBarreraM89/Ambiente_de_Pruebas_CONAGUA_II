@@ -1839,7 +1839,6 @@ if seleccion_final:
         parrafo_dma_ia=parrafo_dma_ia
     )
     
-    @st.fragment
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
         if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
             contexto_global_str = construir_contexto_completo(
