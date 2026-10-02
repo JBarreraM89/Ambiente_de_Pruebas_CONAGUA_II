@@ -467,7 +467,6 @@ def buscar_valor(df, palabra_clave, columna='VOLUMEN_hm3', es_total=False):
 @st.cache_resource(show_spinner=False)
 def cargar_modelo_embeddings_local():
     return SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
-_ = cargar_modelo_embeddings_local()
 
 def responder_busqueda_semantica(prompt_usuario, contexto_completo_str, clave_ac, nombre_ac):
     parrafos = [p.strip() for p in contexto_completo_str.split("\n\n") if p.strip()]
