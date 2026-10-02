@@ -51,9 +51,9 @@ st.caption("Validación Física: Evaluación espacial, temporal, modelación geo
 # =======================================================
 # 🔍 1. SELECTOR Y SINCRONIZACIÓN DE SESIÓN GLOBAL
 # =======================================================
-clave_actual = st.session_state.get("clave_global")
-nombre_actual = st.session_state.get("nombre_global")
-area_actual = st.session_state.get("area_total_global", 0)
+clave_actual = st.session_state.get("clave_piezo")
+nombre_actual = st.session_state.get("nombre_piezo")
+area_actual = st.session_state.get("area_total_piezo", 0)
 
 abrir_buscador = True if not clave_actual else False
 
@@ -75,11 +75,11 @@ with st.expander("📍 Búsqueda de Acuífero en Catálogo Oficial", expanded=ab
 
             if seleccion:
                 clave_sel = seleccion.split(" - ")[0]
-                if clave_sel != st.session_state.get("clave_global"):
+                if clave_sel != st.session_state.get("clave_piezo"):
                     datos_acu = df_est[df_est["CLAVE_SIGM"] == clave_sel].iloc[0]
-                    st.session_state["clave_global"] = str(datos_acu["CLAVE_SIGM"])
-                    st.session_state["nombre_global"] = str(datos_acu["ACUÍFERO"])
-                    st.session_state["area_total_global"] = round(float(datos_acu["AREA_KM2"]), 1)
+                    st.session_state["clave_piezo"] = str(datos_acu["CLAVE_SIGM"])
+                    st.session_state["nombre_piezo"] = str(datos_acu["ACUÍFERO"])
+                    st.session_state["area_total_piezo"] = round(float(datos_acu["AREA_KM2"]), 1)
                     st.rerun()
         except Exception as e:
             st.error(f"Error cargando catálogo: {e}")
