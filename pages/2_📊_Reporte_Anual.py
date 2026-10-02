@@ -24,14 +24,11 @@ import json
 import os
 import gc
 import numpy as np
-from google.auth.transport.requests import Request
 from streamlit_folium import st_folium
 from plotly.subplots import make_subplots
 
 # --- IMPORTACIONES DEL CORE (FASE 1 y 2) ---
 from utils.styles import inyectar_css_oficial, banner_institucional, inyectar_css_navegacion
-from core.drive_api import buscar_metadatos_drive, descargar_json_crudo_rapido, obtener_servicio_drive
-from core.generador_excel import generar_excel_matriz
 from core.data_loader import cargar_catalogo, cargar_historico_excel, cargar_datos_maestros
 
 # =======================================================
@@ -311,6 +308,9 @@ if activar_tendencia:
     anio_comparacion = col_y2.number_input("Año de Publicación Anterior:", min_value=2015, max_value=2100, value=2023, step=1)
 
 if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
+    from google.auth.transport.requests import Request
+    from core.drive_api import buscar_metadatos_drive, descargar_json_crudo_rapido, obtener_servicio_drive
+    from core.generador_excel import generar_excel_matriz
     limpiar_temporales_antiguos()    
     if activar_tendencia and anio_comparacion >= anio_reporte:
         st.error("⚠️ Error de lógica temporal: El año histórico no puede ser mayor o igual al evaluado.")
