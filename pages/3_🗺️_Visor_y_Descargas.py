@@ -99,31 +99,31 @@ def cargar_localidades_parquet():
 
 @st.cache_data(show_spinner=False)
 def obtener_capa_exacta_cache(id_archivo, clave_ac):
+    cve_norm = str(clave_ac).strip().zfill(4)
+    
     if id_archivo == "localidades":
         gdf_frac = cargar_localidades_parquet()
+        if gdf_frac is None or gdf_frac.empty: return None
+        if 'CLV_ACUI' in gdf_frac.columns:
+            return gdf_frac[gdf_frac['CLV_ACUI'].astype(str).str.zfill(4) == cve_norm].copy()
     else:
-        gdf_frac = cargar_fraccion(id_archivo)
+        # ⚡ CARGA ULTRA-RÁPIDA: Solo extrae el acuífero desde el disco
+        gdf_frac = cargar_fraccion(id_archivo, cve_norm)
+        if gdf_frac is not None and not gdf_frac.empty:
+            return gdf_frac
+            
+        # Fallback: Si vino vacío, puede que la capa no tenga columna CLV_ACUI.
+        # Cargamos todo y hacemos intersección espacial (solo ocurre en capas raras)
+        gdf_frac = cargar_fraccion(id_archivo) 
+        if gdf_frac is None or gdf_frac.empty: return None
         
-    if gdf_frac is None or gdf_frac.empty: 
-        return None
-        
-    def normalizar_cve(val):
-        try: return str(int(float(val))).zfill(4)
-        except: return str(val).strip().zfill(4)
-        
-    cve_norm = normalizar_cve(clave_ac)
-    
-    if 'CLV_ACUI' in gdf_frac.columns:
-        gdf_frac['CLV_TEMP'] = gdf_frac['CLV_ACUI'].apply(normalizar_cve)
-        return gdf_frac[gdf_frac['CLV_TEMP'] == cve_norm].copy()
-        
+    # Intersección espacial (se mantiene igual)
     gdf_m = cargar_datos_maestros()
-    geom_acuifero = gdf_m[gdf_m['CLV_ACUI'].apply(normalizar_cve) == cve_norm].iloc[0].geometry
+    geom_acuifero = gdf_m[gdf_m['CLV_ACUI'].astype(str).str.zfill(4) == cve_norm].iloc[0].geometry
     minx, miny, maxx, maxy = geom_acuifero.bounds
     
     candidatos = gdf_frac.cx[minx:maxx, miny:maxy]
-    if candidatos.empty: 
-        return None
+    if candidatos.empty: return None
         
     posibles_idx = list(candidatos.sindex.intersection(geom_acuifero.bounds))
     posibles = candidatos.iloc[posibles_idx]
@@ -362,47 +362,43 @@ def mostrar_pares_en_parrafo(titulo_seccion, nombres, extras, prefijo_extra="", 
         st.write(f"**{titulo_seccion}:** {', '.join(formateados)}")
 
 def mostrar_desde_fraccion_vertical(titulo_seccion, clave_ac, id_capa, campo_nombre, campo_fecha, prefijo_fecha="DOF: ", formato_titulo=False):
-    df_capa = cargar_fraccion(id_capa)
-    if df_capa is not None:
-        fraccion = df_capa[df_capa['CLV_ACUI'] == clave_ac]
-        if not fraccion.empty:
-            unicos = fraccion.drop_duplicates(subset=[campo_nombre])
-            pares = []
-            for _, row in unicos.iterrows():
-                nom = limpiar_texto(row.get(campo_nombre))
-                if formato_titulo and nom: nom = nom.title()
-                fec = row.get(campo_fecha)
-                if nom:
-                    f_limpia = formatear_fecha(fec)
-                    try:
-                        dt_obj = pd.to_datetime(f_limpia, format='%d/%m/%Y')
-                        sk = (0, dt_obj.year, dt_obj.month, dt_obj.day)
-                    except: sk = (1, 0, 0, 0)
-                    pares.append({"nombre": nom, "fecha": f_limpia, "sk": sk})
-            if pares:
-                st.write(f"**{titulo_seccion}:**")
-                pares = sorted(pares, key=lambda x: (x['sk'], x['nombre']))
-                for p in pares: st.markdown(f"*({prefijo_fecha}{p['fecha']})* {p['nombre']}")
-                return
+    fraccion = cargar_fraccion(id_capa, clave_ac) # ⚡ Carga filtrada
+    if fraccion is not None and not fraccion.empty:
+        unicos = fraccion.drop_duplicates(subset=[campo_nombre])
+        pares = []
+        for _, row in unicos.iterrows():
+            nom = limpiar_texto(row.get(campo_nombre))
+            if formato_titulo and nom: nom = nom.title()
+            fec = row.get(campo_fecha)
+            if nom:
+                f_limpia = formatear_fecha(fec)
+                try:
+                    dt_obj = pd.to_datetime(f_limpia, format='%d/%m/%Y')
+                    sk = (0, dt_obj.year, dt_obj.month, dt_obj.day)
+                except: sk = (1, 0, 0, 0)
+                pares.append({"nombre": nom, "fecha": f_limpia, "sk": sk})
+        if pares:
+            st.write(f"**{titulo_seccion}:**")
+            pares = sorted(pares, key=lambda x: (x['sk'], x['nombre']))
+            for p in pares: st.markdown(f"*({prefijo_fecha}{p['fecha']})* {p['nombre']}")
+            return
     st.write(f"**{titulo_seccion}:** Sin información")
 
 def mostrar_desde_fraccion_en_linea(titulo_seccion, clave_ac, id_capa, campo_nombre, campo_fecha, prefijo_fecha="DOF: ", formato_titulo=False):
-    df_capa = cargar_fraccion(id_capa)
-    if df_capa is not None:
-        fraccion = df_capa[df_capa['CLV_ACUI'] == clave_ac]
-        if not fraccion.empty:
-            unicos = fraccion.drop_duplicates(subset=[campo_nombre])
-            pares = []
-            for _, row in unicos.iterrows():
-                nom = limpiar_texto(row.get(campo_nombre))
-                if formato_titulo and nom: nom = nom.title()
-                fec = row.get(campo_fecha)
-                if nom:
-                    f_limpia = formatear_fecha(fec)
-                    pares.append(f"({prefijo_fecha}{f_limpia}) {nom}")
-            if pares:
-                st.write(f"**{titulo_seccion}:** {', '.join(pares)}")
-                return
+    fraccion = cargar_fraccion(id_capa, clave_ac) # ⚡ Carga filtrada
+    if fraccion is not None and not fraccion.empty:
+        unicos = fraccion.drop_duplicates(subset=[campo_nombre])
+        pares = []
+        for _, row in unicos.iterrows():
+            nom = limpiar_texto(row.get(campo_nombre))
+            if formato_titulo and nom: nom = nom.title()
+            fec = row.get(campo_fecha)
+            if nom:
+                f_limpia = formatear_fecha(fec)
+                pares.append(f"({prefijo_fecha}{f_limpia}) {nom}")
+        if pares:
+            st.write(f"**{titulo_seccion}:** {', '.join(pares)}")
+            return
     st.write(f"**{titulo_seccion}:** Sin información")
 
 def mostrar_municipios_agrupados_y_condicion(clave_ac, str_total, str_parcial):
@@ -420,31 +416,29 @@ def mostrar_municipios_agrupados_y_condicion(clave_ac, str_total, str_parcial):
         for sep in [' | ', '|', ';', '\n']: t = t.replace(sep, ',')
         return [limpiar_acentos(x.strip()) for x in t.split(',') if x.strip()]
 
-    df_mun = cargar_fraccion("municipios")
-    if df_mun is not None:
-        fraccion = df_mun[df_mun['CLV_ACUI'] == clave_ac]
-        if not fraccion.empty and 'CVE_ENT' in fraccion.columns and 'NOMGEO' in fraccion.columns:
-            lista_totales = normalizar_lista(str_total)
-            lista_parciales = normalizar_lista(str_parcial)
-            st.write("**Municipios del Acuífero:**")
-            agrupados = fraccion.groupby('CVE_ENT')
+    fraccion = cargar_fraccion("municipios", clave_ac) # ⚡ Carga filtrada
+    if fraccion is not None and not fraccion.empty and 'CVE_ENT' in fraccion.columns and 'NOMGEO' in fraccion.columns:
+        lista_totales = normalizar_lista(str_total)
+        lista_parciales = normalizar_lista(str_parcial)
+        st.write("**Municipios del Acuífero:**")
+        agrupados = fraccion.groupby('CVE_ENT')
+        
+        for cve_ent, group in agrupados:
+            try: cve_str = str(int(float(cve_ent))).zfill(2)
+            except: cve_str = str(cve_ent).zfill(2)
+            nombre_estado = DICCIONARIO_ESTADOS.get(cve_str, f"Estado Desconocido ({cve_str})")
+            totales, parciales = [], []
             
-            for cve_ent, group in agrupados:
-                try: cve_str = str(int(float(cve_ent))).zfill(2)
-                except: cve_str = str(cve_ent).zfill(2)
-                nombre_estado = DICCIONARIO_ESTADOS.get(cve_str, f"Estado Desconocido ({cve_str})")
-                totales, parciales = [], []
-                
-                for m in group['NOMGEO'].dropna().unique().tolist():
-                    m_safe = limpiar_acentos(str(m).upper().strip())
-                    if m_safe in lista_totales: totales.append(str(m).title())
-                    elif m_safe in lista_parciales: parciales.append(str(m).title())
-                    else: parciales.append(str(m).title()) 
-                        
-                st.markdown(f"**{nombre_estado} (Clave {cve_str})**")
-                if totales: st.markdown(f"  * *Totalmente contenidos:* {', '.join(totales)}")
-                if parciales: st.markdown(f"  * *Parcialmente dentro:* {', '.join(parciales)}")
-            return
+            for m in group['NOMGEO'].dropna().unique().tolist():
+                m_safe = limpiar_acentos(str(m).upper().strip())
+                if m_safe in lista_totales: totales.append(str(m).title())
+                elif m_safe in lista_parciales: parciales.append(str(m).title())
+                else: parciales.append(str(m).title()) 
+                    
+            st.markdown(f"**{nombre_estado} (Clave {cve_str})**")
+            if totales: st.markdown(f"  * *Totalmente contenidos:* {', '.join(totales)}")
+            if parciales: st.markdown(f"  * *Parcialmente dentro:* {', '.join(parciales)}")
+        return
             
     mostrar_dato("Municipios (Totalmente contenidos)", str_total)
     mostrar_dato("Municipios (Parcialmente dentro)", str_parcial)
@@ -561,10 +555,8 @@ def modal_chat_local(clave_ac, nombre_ac, contexto_global_str):
 # 🧠 CONSTRUCTOR DE CONTEXTO GLOBAL HÍDRICO (RAG ENTERPRISE)
 # =======================================================
 def obtener_resumen_fraccion(id_capa, clave_ac, campo_nombre, campo_fecha=None, prefijo_fecha="DOF: "):
-    df_capa = cargar_fraccion(id_capa)
-    if df_capa is None: return "Sin información."
-    fraccion = df_capa[df_capa['CLV_ACUI'] == clave_ac]
-    if fraccion.empty: return "Sin registros aplicables."
+    fraccion = cargar_fraccion(id_capa, clave_ac) # ⚡ Carga filtrada
+    if fraccion is None or fraccion.empty: return "Sin registros aplicables."
         
     unicos = fraccion.drop_duplicates(subset=[campo_nombre])
     elementos = []
@@ -580,10 +572,8 @@ def obtener_resumen_fraccion(id_capa, clave_ac, campo_nombre, campo_fecha=None, 
 
 def obtener_texto_municipios_ia(clave_ac):
     from core.config import DICCIONARIO_ESTADOS
-    df_mun = cargar_fraccion("municipios")
-    if df_mun is None: return "Sin información de municipios."
-    fraccion = df_mun[df_mun['CLV_ACUI'] == clave_ac]
-    if fraccion.empty or 'CVE_ENT' not in fraccion.columns or 'NOMGEO' not in fraccion.columns:
+    fraccion = cargar_fraccion("municipios", clave_ac) # ⚡ Carga filtrada
+    if fraccion is None or fraccion.empty or 'CVE_ENT' not in fraccion.columns or 'NOMGEO' not in fraccion.columns:
         return "Sin municipios registrados."
     
     resumen_mun = []
@@ -1536,10 +1526,14 @@ if seleccion_final:
                 with st.spinner("Procesando información espacial..."):
                     for capa_visual in capas_seleccionadas:
                         id_archivo, color_hex, campo_nombre = diccionario_capas[capa_visual]
+                        
+                        # ⚡ Carga ultra-rápida desde disco (Predicate Pushdown)
                         frac_local = obtener_capa_exacta_cache(id_archivo, clave_sel_norm)
                         
                         if frac_local is not None and not frac_local.empty:
                             frac_segura = frac_local.copy()
+                            
+                            # Asegurar nombre de columna
                             col_nombre_final = campo_nombre
                             if col_nombre_final not in frac_segura.columns:
                                 cols_upper = [c.upper() for c in frac_segura.columns]
@@ -1547,33 +1541,60 @@ if seleccion_final:
                                     if candidato in cols_upper:
                                         col_nombre_final = frac_segura.columns[cols_upper.index(candidato)]
                                         break
-                    
-                            columnas_mantener = [col_nombre_final, 'geometry']
-                            frac_ligera = frac_segura[columnas_mantener].copy()
-                            frac_ligera[col_nombre_final] = frac_ligera[col_nombre_final].apply(lambda x: limpiar_texto(x) if pd.notna(x) else "").astype(str)
+
+                            cols = [c for c in frac_segura.columns if c not in ['geometry', 'CLV_TEMP', 'CLV_ACUI']]
+                            for c in cols: frac_segura[c] = frac_segura[c].apply(lambda x: limpiar_texto(x) if pd.notna(x) else "")
+                            frac_segura[cols] = frac_segura[cols].astype(str)
                             
                             estilo_tooltip = f"background-color: #ffffff; border: 1px solid #e0e0e0; border-left: 4px solid {color_hex}; border-radius: 6px; color: #2c3e50; font-family: 'Segoe UI', sans-serif; font-size: 13px; max-width: 85vw; padding: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"
                             
-                            if capa_visual == "Localidades":
-                                estilo_actual = {'fill': False, 'fillOpacity': 0.0, 'color': '#000000', 'weight': 2.5, 'dashArray': '8, 6', 'opacity': 1.0}
-                                resaltado_actual = {'color': '#2980b9', 'weight': 3.5, 'dashArray': '8, 6', 'fillOpacity': 0.0}
-                            else:
-                                estilo_actual = {'fillColor': color_hex, 'color': color_hex, 'weight': 2, 'fillOpacity': 0.35}
-                                resaltado_actual = {'fillColor': color_hex, 'color': '#FFD700', 'weight': 3, 'fillOpacity': 0.85}
-            
-                            capa_individual = folium.GeoJson(
-                                frac_ligera, 
-                                name=capa_visual,
-                                show=True,
-                                style_function=lambda feature, est=estilo_actual: est,
-                                highlight_function=lambda x, res=resaltado_actual: res,
-                                tooltip=folium.GeoJsonTooltip(fields=[col_nombre_final], aliases=[f"<b>{capa_visual.upper()}</b><br>"], localize=True, sticky=True, labels=True, style=estilo_tooltip)
-                            ).add_to(m)
+                            hijos_de_esta_capa = []
                             
-                            nodos_capas.append({
-                                "label": f"<span style='color: #691C32; font-weight: bold;'>{capa_visual.upper()}</span>",
-                                "layer": capa_individual
-                            })
+                            # 🚀 OPTIMIZACIÓN EXTREMA 1: Usar groupby en lugar de iterar y filtrar el DataFrame
+                            agrupado = frac_segura.groupby(col_nombre_final)
+                            
+                            for nombre_unico, gdf_individual in agrupado:
+                                nom_mostrar = str(nombre_unico).strip()
+                                
+                                if capa_visual in ["Vedas", "Zonas Reglamentadas", "Zonas de Reserva"]:
+                                    fecha_dof = ""
+                                    if 'FECHA_DOF' in gdf_individual.columns:
+                                        val = gdf_individual.iloc[0]['FECHA_DOF']
+                                        if pd.notna(val) and str(val).strip() != "":
+                                            try: fecha_dof = pd.to_datetime(val).strftime('%d-%m-%Y')
+                                            except: fecha_dof = str(val).strip()[:10] 
+                                    nom_mostrar = f"{fecha_dof}" if fecha_dof else "Sin Fecha"
+                                else:
+                                    if len(nom_mostrar) > 30: nom_mostrar = nom_mostrar[:27] + "..."
+                                
+                                if capa_visual == "Localidades":
+                                    estilo_actual = {'fill': False, 'fillOpacity': 0.0, 'color': '#000000', 'weight': 2.5, 'dashArray': '8, 6', 'opacity': 1.0}
+                                    resaltado_actual = {'color': '#2980b9', 'weight': 3.5, 'dashArray': '8, 6', 'fillOpacity': 0.0}
+                                else:
+                                    estilo_actual = {'fillColor': color_hex, 'color': color_hex, 'weight': 2, 'fillOpacity': 0.35}
+                                    resaltado_actual = {'fillColor': color_hex, 'color': '#FFD700', 'weight': 3, 'fillOpacity': 0.85}
+
+                                # 🚀 OPTIMIZACIÓN EXTREMA 2: Usar __geo_interface__ evita que Folium serialice el DataFrame desde cero
+                                capa_individual = folium.GeoJson(
+                                    data=gdf_individual.__geo_interface__, 
+                                    name=nom_mostrar,
+                                    show=False, # Inician apagadas para no saturar el mapa
+                                    style_function=lambda feature, est=estilo_actual: est,
+                                    highlight_function=lambda x, res=resaltado_actual: res,
+                                    tooltip=folium.GeoJsonTooltip(fields=[col_nombre_final], aliases=[f"<b>{capa_visual.upper()}</b><br>"], localize=True, sticky=True, labels=True, style=estilo_tooltip)
+                                ).add_to(m)
+                                
+                                hijos_de_esta_capa.append({"label": f"{nom_mostrar}", "layer": capa_individual})
+                                
+                            if hijos_de_esta_capa:
+                                # Ordenamos los hijos alfabéticamente para que el árbol se vea perfecto
+                                hijos_de_esta_capa = sorted(hijos_de_esta_capa, key=lambda x: x["label"])
+                                
+                                nodos_capas.append({
+                                    "label": f"<span style='color: #691C32; font-weight: bold;'>{capa_visual.upper()}</span>",
+                                    "select_all_checkbox": "<span style='font-size: 0.9em; color: #2980b9;'>Seleccionar todo</span>", 
+                                    "children": hijos_de_esta_capa
+                                })
 
                 arbol_base = {
                     "label": "<b>MAPAS DE FONDO</b>",
