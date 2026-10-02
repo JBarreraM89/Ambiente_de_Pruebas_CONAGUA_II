@@ -964,7 +964,7 @@ if "datos_reporte_nacional" in st.session_state:
                                 total_archivos = len(datos_maestros)
                                 procesados = 0
                                 
-                                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
                                     futuros = [executor.submit(worker_generar_excel, f_m, anio_procesado, USER_TEMP_DIR) for f_m in datos_maestros]
                                     
                                     for fut in concurrent.futures.as_completed(futuros):
