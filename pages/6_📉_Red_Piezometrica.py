@@ -26,9 +26,6 @@ import branca.colormap as cm
 from branca.element import MacroElement
 from jinja2 import Template
 
-# --- MODO SERGURO PARA MATPLOTLIB EN LA NUBE ---
-import matplotlib
-matplotlib.use('Agg')
 
 try:
     import geopandas as gpd
@@ -204,7 +201,10 @@ poligono_oficial_geom = obtener_poligono_oficial(clave_actual)
 def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None, resolucion=150):
     try:
         from pykrige.ok import OrdinaryKriging
+        PYKRIGE_INSTALADO = True
     except ImportError:
+        PYKRIGE_INSTALADO = False
+    if not PYKRIGE_INSTALADO:
         return None, "Falta instalar 'pykrige' (pip install pykrige)", None, None, None, None, None, None, None, None, None
         
     x = df_puntos['Longitud'].values
@@ -302,18 +302,25 @@ def empaquetar_shapefile_zip(gdf, base_name):
         return zip_buf.getvalue()
 
 def generar_geotiff_bytes(Z_masked, bounds):
+    import rasterio
+    from rasterio.transform import from_bounds
+    from rasterio.io import MemoryFile
     import matplotlib.pyplot as plt
+    try:
+        import rasterio
+        from rasterio.transform import from_bounds
+        from rasterio.io import MemoryFile
+        RASTERIO_INSTALADO = True
+    except ImportError:
+        RASTERIO_INSTALADO = False
+    
     min_y, min_x = bounds[0]
     max_y, max_x = bounds[1]
     height, width = Z_masked.shape
     Z_flipped = np.flipud(Z_masked).astype(np.float32)
     data_write = np.nan_to_num(Z_flipped, nan=-9999.0)
 
-    try:
-        import rasterio
-        from rasterio.transform import from_bounds
-        from rasterio.io import MemoryFile
-        
+    if RASTERIO_INSTALADO:
         transform = from_bounds(min_x, min_y, max_x, max_y, width, height)
         with MemoryFile() as memfile:
             with memfile.open(
@@ -322,7 +329,7 @@ def generar_geotiff_bytes(Z_masked, bounds):
             ) as dst:
                 dst.write(data_write, 1)
             return memfile.read()
-    except ImportError:
+    else:
         buf = io.BytesIO()
         plt.imsave(buf, Z_flipped, cmap='Blues', format='tiff')
         return buf.getvalue()
@@ -331,7 +338,10 @@ def generar_geotiff_bytes(Z_masked, bounds):
 # 🎨 3.1 RENDERIZADO VISUAL REACTIVO (<30 ms)
 # =======================================================
 def render_imagen_kriging(X, Y, Z_masked, bounds):
+    import matplotlib
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    
     fig = plt.figure(figsize=(10, 10), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
@@ -349,7 +359,10 @@ def render_imagen_kriging(X, Y, Z_masked, bounds):
     return buf.getvalue(), vmin, vmax
 
 def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
+    import matplotlib
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    
     fig = plt.figure(figsize=(10, 10), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
@@ -399,6 +412,8 @@ def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
     return buf.getvalue(), geojson_bytes, shp_zip_bytes
 
 def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_flujo, inside_mask):
+    import matplotlib
+    matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     dy, dx = np.gradient(Z, grid_y, grid_x)
     Vx, Vy = (-dx, -dy) if variable == 'Carga_Hidraulica' else (dx, dy)
@@ -608,6 +623,8 @@ with tab_mapa:
                         
                         if modo_delimitacion == "Polígono Oficial del Acuífero" and geom_activa is not None:
                             try:
+                                from scipy.spatial import ConvexHull # <--- AQUÍ
+                                from matplotlib.path import Path
                                 if geom_activa.geom_type == 'Polygon':
                                     path_poly = Path(np.array(geom_activa.exterior.coords))
                                     inside_mask = path_poly.contains_points(pts_grid).reshape(X.shape)
