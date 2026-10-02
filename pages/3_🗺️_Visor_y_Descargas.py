@@ -896,12 +896,12 @@ if estado_seleccionado:
     st.session_state["filtro_acuifero_sel"] = seleccion_final
     if seleccion_final:
         clave_actual = seleccion_final.split(" - ")[0]
-        if st.session_state.get("acuifero_en_pantalla") != clave_actual:
+        if st.session_state.get("acuifero_en_pantalla_sig") != clave_actual:
             if not st.session_state.get("puntos_recien_cargados", False):
                 st.session_state["lista_marcadores"] = []
             st.session_state["puntos_recien_cargados"] = False
             st.session_state["selector_capas_visuales"] = []
-            st.session_state["acuifero_en_pantalla"] = clave_actual
+            st.session_state["acuifero_en_pantalla_sig"] = clave_actual
     
     datos_ac, clave_sel, nombre_ac = None, None, None
     if seleccion_final:
@@ -1234,21 +1234,21 @@ if seleccion_final and datos_ac is not None:
 # =======================================================
 if seleccion_final:
     clave_sel = seleccion_final.split(" - ")[0]
-    if st.session_state.get("acuifero_en_pantalla") != clave_sel:
+    if st.session_state.get("acuifero_en_pantalla_sig") != clave_sel:
         if st.session_state.get("puntos_recien_cargados", False):
             st.session_state["puntos_recien_cargados"] = False
         else:
             st.session_state["lista_marcadores"] = []
             
-        st.session_state["acuifero_en_pantalla"] = clave_sel
+        st.session_state["acuifero_en_pantalla_sig"] = clave_sel
     
-    st.session_state["clave_global"] = clave_sel
-    st.session_state["nombre_global"] = nombre_ac
+    st.session_state["clave_sig"] = clave_sel
+    st.session_state["nombre_sig"] = nombre_ac
     if 'AREA_KM2' in datos_ac:
-        st.session_state["area_total_global"] = round(float(datos_ac['AREA_KM2']), 1)
+        st.session_state["area_total_sig"] = round(float(datos_ac['AREA_KM2']), 1)
     
-    clave_acuifero = st.session_state["clave_global"]
-    nombre_acuifero = st.session_state["nombre_global"]
+    clave_acuifero = st.session_state["clave_sig"]
+    nombre_acuifero = st.session_state["nombre_sig"]
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("⛰️ Mapa Geológico")
@@ -1358,7 +1358,7 @@ if seleccion_final:
         from core.generador_word import (inyectar_tabla_vertices_en_word, inyectar_tabla_flujo_en_word,
                                         inyectar_tabla_almacenamiento_en_word, inyectar_tabla_evapotranspiracion_en_word, 
                                         modificar_censo_y_bombeo)
-        clave_ac = st.session_state["clave_global"]
+        clave_ac = st.session_state["clave_sig"]
         f_id = st.session_state.get(f"file_id_{clave_ac}")
         p_a = st.session_state.get(f"p_aprov_{clave_ac}", "")
         p_v = st.session_state.get(f"p_vol_{clave_ac}", "")
