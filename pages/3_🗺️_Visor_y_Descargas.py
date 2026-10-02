@@ -1,7 +1,5 @@
 # -*- coding: utf-8 -*-
 import streamlit.components.v1 as components
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 from branca.element import MacroElement
 from streamlit_folium import st_folium
 from difflib import SequenceMatcher
@@ -29,11 +27,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # --- IMPORTACIONES CORE (ARQUITECTURA ENTERPRISE) ---
 from core.data_loader import (cargar_datos_maestros, cargar_fraccion, cargar_excel, 
                               cargar_csv, cargar_parquet, DIRECTORIO_RAIZ)
-from core.generador_word import (inyectar_tabla_vertices_en_word, inyectar_tabla_flujo_en_word,
-                                inyectar_tabla_almacenamiento_en_word, inyectar_tabla_evapotranspiracion_en_word, 
-                                modificar_censo_y_bombeo)
 from utils.formatters import limpiar_texto, formatear_fecha, procesar_link_drive
-from core.estandarizador_acuiferos import ejecutar_estandarizacion_v31
 from utils.styles import inyectar_css_oficial, banner_institucional
 from xml.sax.saxutils import escape
 
@@ -466,9 +460,11 @@ def buscar_valor(df, palabra_clave, columna='VOLUMEN_hm3', es_total=False):
 # =======================================================
 @st.cache_resource(show_spinner=False)
 def cargar_modelo_embeddings_local():
+    from sentence_transformers import SentenceTransformer 
     return SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
 
 def responder_busqueda_semantica(prompt_usuario, contexto_completo_str, clave_ac, nombre_ac):
+    from sklearn.metrics.pairwise import cosine_similarity 
     parrafos = [p.strip() for p in contexto_completo_str.split("\n\n") if p.strip()]
     if not parrafos: return "No hay información disponible para este acuífero."
 
@@ -1358,6 +1354,10 @@ if seleccion_final:
     @st.fragment
     def procesador_fluido_estandarizacion():
         import traceback
+        from core.estandarizador_acuiferos import ejecutar_estandarizacion_v31
+        from core.generador_word import (inyectar_tabla_vertices_en_word, inyectar_tabla_flujo_en_word,
+                                        inyectar_tabla_almacenamiento_en_word, inyectar_tabla_evapotranspiracion_en_word, 
+                                        modificar_censo_y_bombeo)
         clave_ac = st.session_state["clave_global"]
         f_id = st.session_state.get(f"file_id_{clave_ac}")
         p_a = st.session_state.get(f"p_aprov_{clave_ac}", "")
