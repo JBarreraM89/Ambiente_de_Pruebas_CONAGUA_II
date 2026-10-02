@@ -17,12 +17,6 @@ import streamlit.components.v1 as components
 import geopandas as gpd
 import pandas as pd
 import numpy as np
-import rasterio
-import rasterio.mask
-from rasterio.transform import from_bounds
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 from shapely.geometry import Point
@@ -165,9 +159,9 @@ def agregar_punto_manual():
         
         acuif = auto_identificar_acuifero_por_coordenadas(lat, lon_final, gdf_m)
         if acuif:
-            st.session_state["clave_global"] = acuif["clave"]
-            st.session_state["nombre_global"] = acuif["nombre"]
-            st.session_state["area_total_global"] = acuif["area"]
+            st.session_state["clave_mc"] = acuif["clave"]
+            st.session_state["nombre_mc"] = acuif["nombre"]
+            st.session_state["area_total_mc"] = acuif["area"]
             st.session_state["mc_sel_edo"] = acuif["estado"]
             
         st.session_state["mc_lat_punto"] = 0.0
@@ -264,9 +258,9 @@ def renderizar_controles_puntos():
                         if nuevos_puntos:
                             st.session_state["lista_marcadores"].extend(nuevos_puntos)
                             if acuifero_detectado:
-                                st.session_state["clave_global"] = acuifero_detectado["clave"]
-                                st.session_state["nombre_global"] = acuifero_detectado["nombre"]
-                                st.session_state["area_total_global"] = acuifero_detectado["area"]
+                                st.session_state["clave_mc"] = acuifero_detectado["clave"]
+                                st.session_state["nombre_mc"] = acuifero_detectado["nombre"]
+                                st.session_state["area_total_mc"] = acuifero_detectado["area"]
                                 st.session_state["mc_sel_edo"] = acuifero_detectado["estado"]
                                 st.success(f"📍 Acuífero autodetectado: **{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}**")
                             else:
@@ -344,9 +338,9 @@ with st.sidebar:
 # =======================================================
 # 🔍 5. SINCRONIZACIÓN Y SELECCIÓN MANUAL DE ACUÍFERO
 # =======================================================
-clave_actual = st.session_state.get("clave_global")
-nombre_actual = st.session_state.get("nombre_global")
-area_actual = st.session_state.get("area_total_global", 0)
+clave_actual = st.session_state.get("clave_mc")
+nombre_actual = st.session_state.get("nombre_mc")
+area_actual = st.session_state.get("area_total_mc", 0)
 
 with st.expander("📍 Búsqueda Manual de Acuífero en Catálogo", expanded=not clave_actual):
     df_cat = cargar_catalogo("Acuiferos_2026.csv")
@@ -365,11 +359,11 @@ with st.expander("📍 Búsqueda Manual de Acuífero en Catálogo", expanded=not
         seleccion = c_clav.selectbox("2. Clave o Nombre del Acuífero:", opciones_acuiferos, key="mc_sel_clv", index=None, placeholder="Elige un acuífero...")
         if seleccion:
             clave_sel = seleccion.split(" - ")[0]
-            if clave_sel != st.session_state.get("clave_global"):
+            if clave_sel != st.session_state.get("clave_mc"):
                 datos_acu = df_est[df_est["CLAVE_SIGM"] == clave_sel].iloc[0]
-                st.session_state["clave_global"] = str(datos_acu["CLAVE_SIGM"])
-                st.session_state["nombre_global"] = str(datos_acu["ACUÍFERO"])
-                st.session_state["area_total_global"] = round(float(datos_acu["AREA_KM2"]), 1)
+                st.session_state["clave_mc"] = str(datos_acu["CLAVE_SIGM"])
+                st.session_state["nombre_mc"] = str(datos_acu["ACUÍFERO"])
+                st.session_state["area_total_mc"] = round(float(datos_acu["AREA_KM2"]), 1)
                 st.rerun()
 
 if not clave_actual or not nombre_actual:
@@ -426,6 +420,9 @@ def descargar_tesela_elevacion(args):
     return (x, y, None)
 
 def obtener_o_generar_dem_acuifero(datos_ac, clave_ac, zoom_level=12):
+    import rasterio
+    import rasterio.mask
+    from rasterio.transform import from_bounds
     carpeta_cache = DIRECTORIO_RAIZ / "data" / "cache_dem"
     carpeta_cache.mkdir(parents=True, exist_ok=True)
     ruta_tif = carpeta_cache / f"DEM_{clave_ac}_z{zoom_level}.tif"
@@ -468,6 +465,10 @@ with st.spinner("Sincronizando topografía de alta resolución (SRTM NASA)..."):
 
 @st.cache_data(show_spinner=False)
 def generar_curvas_nivel_base_geojson(ruta_tif, intervalo_base=25):
+    import rasterio
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
     try:
         with rasterio.open(ruta_tif) as src:
             z = src.read(1)
@@ -790,6 +791,7 @@ if ruta_dem_local and ruta_dem_local.exists():
 # =======================================================
 @st.cache_data(show_spinner=False)
 def preparar_malla_terreno_threejs(ruta_tif):
+    import rasterio
     with rasterio.open(ruta_tif) as src:
         z = src.read(1)
         nodata = src.nodata
