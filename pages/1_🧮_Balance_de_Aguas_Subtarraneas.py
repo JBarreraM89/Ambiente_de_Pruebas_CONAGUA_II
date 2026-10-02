@@ -55,9 +55,9 @@ def listar_balances_json_cache(clave):
 # 1️⃣ INTERFAZ: GESTIÓN DE ENTORNO SINCRO-GEOVISOR
 # ==========================================
 # Obtenemos los valores de sesión (iniciarán en None)
-clave_actual = st.session_state.get("clave_global")
-nombre_actual = st.session_state.get("nombre_global")
-area_actual = st.session_state.get("area_total_global")
+clave_actual = st.session_state.get("clave_bal")
+nombre_actual = st.session_state.get("nombre_bal")
+area_actual = st.session_state.get("area_total_bal")
 
 # Hacemos que el buscador se abra automáticamente si no hay nada seleccionado
 abrir_buscador = True if not clave_actual else False
@@ -83,14 +83,14 @@ with st.expander("📍 Búsqueda Alternativa en Catálogo", expanded=abrir_busca
                 clave_sel = seleccion.split(" - ")[0]
                 
                 # ESTA ES LA CONDICIÓN CLAVE QUE EVITA EL BUCLE INFINITO
-                if clave_sel != st.session_state.get("clave_global"):
+                if clave_sel != st.session_state.get("clave_bal"):
                     
                     datos_acu = df_est[df_est["CLAVE_SIGM"] == clave_sel].iloc[0]
 
                     # Actualizamos la memoria maestra global
-                    st.session_state["clave_global"] = str(datos_acu["CLAVE_SIGM"])
-                    st.session_state["nombre_global"] = str(datos_acu["ACUÍFERO"])
-                    st.session_state["area_total_global"] = round(float(datos_acu["AREA_KM2"]), 1)
+                    st.session_state["clave_bal"] = str(datos_acu["CLAVE_SIGM"])
+                    st.session_state["nombre_bal"] = str(datos_acu["ACUÍFERO"])
+                    st.session_state["area_total_bal"] = round(float(datos_acu["AREA_KM2"]), 1)
                     
                     # Ahora el rerun solo se ejecuta UNA VEZ cuando hay un cambio real
                     st.rerun()
