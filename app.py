@@ -6,6 +6,8 @@ Sistema Integral CONAGUA - Módulo de Navegación y Estilos Globales
 from pathlib import Path
 import base64
 import streamlit as st
+import gc
+
 
 # Importamos los estilos centralizados de la Fase 1
 from utils.styles import inyectar_css_navegacion
@@ -39,6 +41,15 @@ if "nombre_global" not in st.session_state:
     st.session_state["nombre_global"] = None
 if "area_total_global" not in st.session_state:
     st.session_state["area_total_global"] = None
+
+# ==========================================
+# 2.5 WATCHDOG DE MEMORIA (GARBAGE COLLECTOR)
+# ==========================================
+# Limpia DataFrames pesados huérfanos al cambiar de página
+keys_a_borrar = [k for k in st.session_state.keys() if k.startswith("df_") or k.startswith("geojson_")]
+for k in keys_a_borrar:
+    del st.session_state[k]
+gc.collect()
 
 # ==========================================
 # 3. FUNCIONES CON CACHÉ (OPTIMIZACIÓN I/O)
