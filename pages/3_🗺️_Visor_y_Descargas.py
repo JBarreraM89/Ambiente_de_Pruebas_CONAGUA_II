@@ -1839,17 +1839,18 @@ if seleccion_final:
         parrafo_dma_ia=parrafo_dma_ia
     )
     
+    @st.fragment
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
-    if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
-        contexto_global_str = construir_contexto_completo(
-            clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
-            datos_ac=d_ac, parrafo_vol=p_vol, parrafo_aprov=p_aprov,
-            parrafo_dma=p_dma, df_resumen=df_res, conteo_usos=c_usos,
-            df_bal_ent=get_df_bal_ent(), df_bal_sal=get_df_bal_sal(), df_bal_alm=get_df_bal_alm(),
-            df_verts=get_df_vertices(), df_flujo_ent=get_df_flujo_ent(), df_flujo_sal=get_df_flujo_sal(),
-            df_etr=get_df_etr(), df_alm=get_df_almacenamiento(), dato_zona_disp=d_zona
-        )
-        modal_chat_local(c_ac, n_ac, contexto_global_str)
+        if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
+            contexto_global_str = construir_contexto_completo(
+                clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
+                datos_ac=d_ac, parrafo_vol=p_vol, parrafo_aprov=p_aprov,
+                parrafo_dma=p_dma, df_resumen=df_res, conteo_usos=c_usos,
+                df_bal_ent=get_df_bal_ent(), df_bal_sal=get_df_bal_sal(), df_bal_alm=get_df_bal_alm(),
+                df_verts=get_df_vertices(), df_flujo_ent=get_df_flujo_ent(), df_flujo_sal=get_df_flujo_sal(),
+                df_etr=get_df_etr(), df_alm=get_df_almacenamiento(), dato_zona_disp=d_zona
+            )
+            modal_chat_local(c_ac, n_ac, contexto_global_str)
 
     renderizar_boton_ia_flotante(
         clave_acuifero, nombre_acuifero, estado_seleccionado, datos_ac,
