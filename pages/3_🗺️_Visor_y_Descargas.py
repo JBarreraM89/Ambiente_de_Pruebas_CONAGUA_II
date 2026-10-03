@@ -456,94 +456,95 @@ def buscar_valor(df, palabra_clave, columna='VOLUMEN_hm3', es_total=False):
     return 0.0
 
 # =======================================================
-# 🧠 ASISTENTE TÉCNICO CONAGUA (GROQ LLAMA-3.1 ULTRA-LIGERO)
+# 🧠 MOTOR DE BÚSQUEDA SEMÁNTICA LOCAL Y DICCIONARIO
 # =======================================================
-def consultar_asistente_conagua(prompt, clave_ac, nombre_ac, contexto_str, historial):
-    api_key = st.secrets.get("GROQ_API_KEY", None)
+@st.cache_resource(show_spinner=False)
+def cargar_modelo_embeddings_local():
+    from sentence_transformers import SentenceTransformer 
+    return SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+
+def responder_busqueda_semantica(prompt_usuario, contexto_completo_str, clave_ac, nombre_ac):
+    from sklearn.metrics.pairwise import cosine_similarity 
+    parrafos = [p.strip() for p in contexto_completo_str.split("\n\n") if p.strip()]
+    if not parrafos: return "No hay información disponible para este acuífero."
+
+    reglas_busqueda = [
+        (["cota", "cotas", "comite", "comite tecnico"], ["comité técnico de aguas subterráneas"]),
+        (["consejo", "consejos", "consejo de cuenca"], ["consejo de cuenca del acuífero"]),
+        (["organismo", "organismo de cuenca", "region", "region administrativa"], ["región administrativa y organismo de cuenca"]),
+        (["direccion", "direccion local", "unidad administrativa", "dl"], ["dirección local y unidad administrativa"]),
+        (["zona de disponibilidad", "disponibilidad zona", "zona disponibilidad"], ["zona de disponibilidad oficial"]),
+        (["veda", "vedas", "decreto", "decretos"], ["decretos de veda aplicables"]),
+        (["limite", "limites", "limte", "acuerdo de limites", "delimitacion"], ["acuerdo de límites oficiales"]),
+        (["acuerdo", "acuerdos", "acuerdos generales", "facilidades"], ["acuerdos generales de facilidades"]),
+        (["municipio", "municipios", "alcaldia", "alcaldias", "division municipal"], ["municipios ubicados dentro"]),
+        (["balance", "dma", "disponibilidad media anual", "recarga", "entradas", "salidas"], ["disponibilidad media anual (dma)", "tabla de entradas al balance", "tabla de salidas del balance"]),
+        (["vertice", "vertices", "poligonal", "coordenadas"], ["catálogo y poligonal de vértices"]),
+        (["bombeo", "volumen", "volumenes", "concesionado", "extraccion", "repda"], ["volúmenes de extracción concesionados", "tabla de usos y volúmenes concesionados"]),
+        (["aprovechamiento", "aprovechamientos", "pozo", "pozos", "censo"], ["censo de aprovechamientos", "tabla de conteo de aprovechamientos"]),
+        (["riego", "unidades de riego", "unidad de riego", "unidades"], ["unidades de riego dentro"]),
+        (["distritos de riego", "distrito de riego", "distritos"], ["distritos de riego dentro"]),
+        (["uso agricola", "agricola"], ["distritos de riego dentro", "unidades de riego dentro"]),
+        (["ramsar", "humedal", "humedales"], ["sitios ramsar"]),
+        (["estatal", "anp estatal", "anps estatales"], ["áreas naturales protegidas estatales"]),
+        (["federal", "anp federal", "anps federales"], ["áreas naturales protegidas federales"]),
+        (["anp", "areas naturales", "area natural", "protegida", "protegidas", "medio ambiente"], ["áreas naturales protegidas federales", "áreas naturales protegidas estatales"]),
+        (["reglamento", "reglamentos"], ["reglamentos específicos del acuífero"]),
+        (["reglamentada", "reglamentadas"], ["zonas reglamentadas"]),
+        (["reserva", "reservas"], ["zonas de reserva"])
+    ]
+
+    palabras_objetivo = []
+    for lista_kw_usuario, lista_kw_texto in reglas_busqueda:
+        for kw_u in lista_kw_usuario:
+            if es_similitud_difusa(kw_u, prompt_usuario):
+                palabras_objetivo.extend(lista_kw_texto)
+                break
+
+    if palabras_objetivo:
+        bloques_coincidentes = []
+        for p in parrafos:
+            p_norm = normalizar_texto_ia(p)
+            if any(normalizar_texto_ia(obj) in p_norm for obj in palabras_objetivo):
+                bloques_coincidentes.append(p)
+        if bloques_coincidentes:
+            return (f"De acuerdo con los registros oficiales del acuífero **{clave_ac} - {nombre_ac}**:\n\n"
+                    f"{bloques_coincidentes[0]}\n\n"
+                    f"Si necesitas consultar algún otro apartado, dímelo con gusto.")
+
+    modelo_emb = cargar_modelo_embeddings_local()
+    embeddings_parrafos = modelo_emb.encode(parrafos)
+    embedding_pregunta = modelo_emb.encode([prompt_usuario])
+    similitudes = cosine_similarity(embedding_pregunta, embeddings_parrafos)[0]
+    indices_top = np.argsort(similitudes)[::-1]
     
-    if not api_key:
-        return "⚠️ No se encontró la clave GROQ_API_KEY en los secretos de Streamlit Cloud. Por favor agrégala en Settings ➔ Secrets."
-
-    try:
-        from openai import OpenAI
-        cliente = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
-        
-        prompt_sistema = f"""
-        Eres el Asistente Técnico y Geohidrólogo Senior de la Gerencia de Aguas Subterráneas de CONAGUA.
-        Tu misión es responder preguntas técnicas sobre el acuífero: {clave_ac} - {nombre_ac}.
-        
-        DEBES responder con máxima precisión institucional basándote ESTRICTAMENTE en la siguiente información oficial:
-        =====================================================
-        {contexto_str}
-        =====================================================
-        
-        REGLAS DE RESPUESTA:
-        1. Responde de forma concisa, analítica y profesional en español.
-        2. Siempre que menciones volúmenes incluye sus unidades oficiales (hm³/año, l/s, msnm, m).
-        3. Cita fechas publicadas en el DOF cuando hables de Límites, Decretos o Acuerdos.
-        4. Si te preguntan algo que NO está en el texto oficial, di con cortesía que esa variable no se encuentra registrada en el expediente oficial.
-        5. Usa viñetas o negritas para estructurar tu respuesta.
-        """
-
-        mensajes = [{"role": "system", "content": prompt_sistema}]
-        
-        for msg in historial[-4:]:
-            if "content" in msg and msg["content"]:
-                mensajes.append({"role": msg["role"], "content": msg["content"]})
-                
-        mensajes.append({"role": "user", "content": prompt})
-
-        stream = cliente.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=mensajes,
-            temperature=0.1,
-            stream=True
-        )
-        return stream
-
-    except Exception as e:
-        return f"⚠️ Error de conexión con la IA: {str(e)}"
+    bloques_encontrados = [parrafos[idx] for idx in indices_top if similitudes[idx] > 0.35]
+    if bloques_encontrados:
+        return (f"De acuerdo con los registros oficiales del acuífero **{clave_ac} - {nombre_ac}**:\n\n"
+                f"{bloques_encontrados[0]}\n\n"
+                f"Si necesitas consultar algún otro apartado, dímelo con gusto.")
+    return ("No encontré una coincidencia directa para esa consulta. "
+            "Intenta buscar por palabras específicas como: *decretos*, *límites*, *municipios*, *balance*, *bombeo* o *vértices*.")
 
 # =======================================================
-# 💬 MODAL DE CHAT INTERACTIVO (STREAMING)
+# 💬 MODAL DE CHAT LOCAL
 # =======================================================
-@st.dialog("💧 Asistente Técnico CONAGUA (Inteligencia Hídrica)", width="large")
+@st.dialog("⚙️ Asistente Técnico CONAGUA (Local)", width="large")
 def modal_chat_local(clave_ac, nombre_ac, contexto_global_str):
-    st.caption(f"Expediente oficial: **{clave_ac} - {nombre_ac}** | Motor: `Llama-3.1 (Groq Cloud)`")
     chat_key = f"chat_history_{clave_ac}"
-    
-    if chat_key not in st.session_state:
-        st.session_state[chat_key] = [{
-            "role": "assistant", 
-            "content": f"¡Hola! Soy tu Asistente Técnico para el acuífero **{clave_ac} - {nombre_ac}**. He cargado toda la información oficial: Límites DOF, Decretos de Veda, Balance de Aguas (DMA), Aprovechamientos REPDA y Vértices. ¿Qué deseas consultar?"
-        }]
+    if chat_key not in st.session_state: st.session_state[chat_key] = []
         
     for msg in st.session_state[chat_key]:
-        with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "💧"): 
+        with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚙️"): 
             st.markdown(msg["content"])
             
-    if prompt := st.chat_input("Ej: ¿Cuáles son las extracciones del REPDA y qué decretos de veda aplican?"):
+    if prompt := st.chat_input("Ej: ¿Cuáles son los municipios del acuífero y su balance de agua?"):
         st.session_state[chat_key].append({"role": "user", "content": prompt})
-        with st.chat_message("user", avatar="👤"): 
-            st.markdown(prompt)
-            
-        with st.chat_message("assistant", avatar="💧"):
-            resultado = consultar_asistente_conagua(
-                prompt, clave_ac, nombre_ac, contexto_global_str, st.session_state[chat_key]
-            )
-            
-            if isinstance(resultado, str):
-                st.markdown(resultado)
-                st.session_state[chat_key].append({"role": "assistant", "content": resultado})
-            else:
-                def generador_palabras():
-                    for chunk in resultado:
-                        texto = chunk.choices[0].delta.content
-                        if texto:
-                            yield texto
-                            
-                respuesta_completa = st.write_stream(generador_palabras())
-                st.session_state[chat_key].append({"role": "assistant", "content": respuesta_completa})
+        with st.chat_message("user", avatar="👤"): st.markdown(prompt)
+        with st.chat_message("assistant", avatar="⚙️"):
+            respuesta = responder_busqueda_semantica(prompt, contexto_global_str, clave_ac, nombre_ac)
+            st.markdown(respuesta)
+            st.session_state[chat_key].append({"role": "assistant", "content": respuesta})
 
 # =======================================================
 # 🧠 CONSTRUCTOR DE CONTEXTO GLOBAL HÍDRICO (RAG ENTERPRISE)
@@ -1827,7 +1828,7 @@ if seleccion_final:
         parrafo_dma_ia=parrafo_dma_ia
     )
     
-
+    @st.fragment
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
         if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
             contexto_global_str = construir_contexto_completo(
