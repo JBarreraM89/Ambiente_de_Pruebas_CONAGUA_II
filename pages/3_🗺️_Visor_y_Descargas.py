@@ -459,20 +459,10 @@ def buscar_valor(df, palabra_clave, columna='VOLUMEN_hm3', es_total=False):
 # 🧠 ASISTENTE TÉCNICO CONAGUA (GROQ LLAMA-3.1 ULTRA-LIGERO)
 # =======================================================
 def consultar_asistente_conagua(prompt, clave_ac, nombre_ac, contexto_str, historial):
-    """
-    Motor híbrido: Conecta con Groq Llama-3.1 para análisis profundo sin consumir RAM.
-    Si no hay API Key o falla la red, usa un fallback ligero en texto plano.
-    """
     api_key = st.secrets.get("GROQ_API_KEY", None)
     
-    # 🛡️ FALLBACK INTELIGENTE (CERO RAM) SI NO HAY API KEY
     if not api_key:
-        prompt_low = prompt.lower()
-        parrafos = [p.strip() for p in contexto_str.split("\n\n") if p.strip()]
-        coincidentes = [p for p in parrafos if any(palabra in p.lower() for palabra in prompt_low.split() if len(palabra) > 3)]
-        if coincidentes:
-            return f"*(Modo sin conexión)* De acuerdo con el expediente oficial de **{clave_ac} - {nombre_ac}**:\n\n{coincidentes[0]}"
-        return "No tengo configurada la API Key de Groq en los secretos (.streamlit/secrets.toml) y no encontré coincidencias directas en la ficha técnica."
+        return "⚠️ No se encontró la clave GROQ_API_KEY en los secretos de Streamlit Cloud. Por favor agrégala en Settings ➔ Secrets."
 
     try:
         from openai import OpenAI
@@ -490,21 +480,19 @@ def consultar_asistente_conagua(prompt, clave_ac, nombre_ac, contexto_str, histo
         REGLAS DE RESPUESTA:
         1. Responde de forma concisa, analítica y profesional en español.
         2. Siempre que menciones volúmenes incluye sus unidades oficiales (hm³/año, l/s, msnm, m).
-        3. Cita fechas publicadas en el Diario Oficial de la Federación (DOF) cuando hables de Límites, Decretos o Acuerdos.
-        4. Si te preguntan algo que NO está en el texto oficial proporcionado, di con cortesía que esa variable no se encuentra registrada en el expediente oficial actual.
-        5. Usa viñetas o negritas para estructurar tu respuesta cuando sea conveniente.
+        3. Cita fechas publicadas en el DOF cuando hables de Límites, Decretos o Acuerdos.
+        4. Si te preguntan algo que NO está en el texto oficial, di con cortesía que esa variable no se encuentra registrada en el expediente oficial.
+        5. Usa viñetas o negritas para estructurar tu respuesta.
         """
 
         mensajes = [{"role": "system", "content": prompt_sistema}]
         
-        # Inyectar memoria reciente (últimas 3 preguntas/respuestas)
         for msg in historial[-4:]:
             if "content" in msg and msg["content"]:
                 mensajes.append({"role": msg["role"], "content": msg["content"]})
                 
         mensajes.append({"role": "user", "content": prompt})
 
-        # Llamada en streaming con temperatura baja para máxima exactitud técnica
         stream = cliente.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=mensajes,
@@ -514,7 +502,7 @@ def consultar_asistente_conagua(prompt, clave_ac, nombre_ac, contexto_str, histo
         return stream
 
     except Exception as e:
-        return f"⚠️ Error al conectar con el servidor de inteligencia artificial: {str(e)}"
+        return f"⚠️ Error de conexión con la IA: {str(e)}"
 
 # =======================================================
 # 💬 MODAL DE CHAT INTERACTIVO (STREAMING)
@@ -1839,7 +1827,7 @@ if seleccion_final:
         parrafo_dma_ia=parrafo_dma_ia
     )
     
-    @st.fragment
+
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
         if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
             contexto_global_str = construir_contexto_completo(
