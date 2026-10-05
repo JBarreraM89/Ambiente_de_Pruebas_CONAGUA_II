@@ -1845,7 +1845,7 @@ if seleccion_final:
             /* Encontramos la columna de Streamlit que tiene nuestra marca y la hacemos flotar */
             div[data-testid="stColumn"]:has(#marcador-ia-flotante) {
                 position: fixed !important;
-                bottom: 30px !important;
+                bottom: 70px !important;
                 right: 30px !important;
                 width: 60px !important;
                 height: 60px !important;
