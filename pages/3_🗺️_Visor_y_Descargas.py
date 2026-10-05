@@ -1831,46 +1831,10 @@ if seleccion_final:
             )
             modal_chat_local(c_ac, n_ac, contexto_global_str)
 
-        # 2. EL CABALLO DE TROYA (Mueve el botón usando JS sin romper Python)
-        st.markdown(
-            """
-            <img src="dummy" style="display:none;" onerror="
-                let intentos = 0;
-                let intervalo = setInterval(() => {
-                    const botones = window.parent.document.querySelectorAll('button');
-                    botones.forEach(b => {
-                        if(b.innerText.includes('✨')) {
-                            b.style.setProperty('position', 'fixed', 'important');
-                            b.style.setProperty('bottom', '30px', 'important');
-                            b.style.setProperty('right', '30px', 'important');
-                            b.style.setProperty('width', '60px', 'important');
-                            b.style.setProperty('height', '60px', 'important');
-                            b.style.setProperty('min-width', '60px', 'important');
-                            b.style.setProperty('min-height', '60px', 'important');
-                            b.style.setProperty('border-radius', '50%', 'important');
-                            b.style.setProperty('z-index', '999999', 'important');
-                            b.style.setProperty('box-shadow', '0 6px 15px rgba(0,0,0,0.3)', 'important');
-                            
-                            let p = b.querySelector('p');
-                            if(p) {
-                                p.style.setProperty('font-size', '28px', 'important');
-                                p.style.setProperty('margin', '0', 'important');
-                            }
-                            
-                            let contenedor = b.closest('div[data-testid=\\'stElementContainer\\']') || b.closest('.element-container');
-                            if(contenedor) {
-                                contenedor.style.setProperty('position', 'absolute', 'important');
-                            }
-                            clearInterval(intervalo);
-                        }
-                    });
-                    intentos++;
-                    if(intentos > 20) clearInterval(intervalo); 
-                }, 100);
-            ">
-            """,
-            unsafe_allow_html=True
-        )
+        # 2. EL CABALLO DE TROYA (Minificado en una sola línea para evadir Markdown)
+        js_inyectado = """<img src="dummy" style="display:none;" onerror="let intentos=0; let intervalo=setInterval(()=>{const botones=window.parent.document.querySelectorAll('button'); botones.forEach(b=>{if(b.innerText.includes('✨')){b.style.setProperty('position','fixed','important'); b.style.setProperty('bottom','30px','important'); b.style.setProperty('right','30px','important'); b.style.setProperty('width','60px','important'); b.style.setProperty('height','60px','important'); b.style.setProperty('min-width','60px','important'); b.style.setProperty('min-height','60px','important'); b.style.setProperty('border-radius','50%','important'); b.style.setProperty('z-index','999999','important'); b.style.setProperty('box-shadow','0 6px 15px rgba(0,0,0,0.3)','important'); let p=b.querySelector('p'); if(p){p.style.setProperty('font-size','28px','important'); p.style.setProperty('margin','0','important');} let contenedor=b.closest('div[data-testid=\\'stElementContainer\\']') || b.closest('.element-container'); if(contenedor){contenedor.style.setProperty('position','absolute','important');} clearInterval(intervalo);}}); intentos++; if(intentos>20) clearInterval(intervalo);}, 100);">"""
+        
+        st.markdown(js_inyectado, unsafe_allow_html=True)
 
     renderizar_boton_ia_flotante(
         clave_acuifero, nombre_acuifero, estado_seleccionado, datos_ac,
