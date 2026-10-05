@@ -1819,28 +1819,77 @@ if seleccion_final:
     
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
         
-        # 1. El botón normal de Streamlit
-        if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
-            contexto_global_str = construir_contexto_completo(
-                clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
-                datos_ac=d_ac, parrafo_vol=p_vol, parrafo_aprov=p_aprov,
-                parrafo_dma=p_dma, df_resumen=df_res, conteo_usos=c_usos,
-                df_bal_ent=get_df_bal_ent(), df_bal_sal=get_df_bal_sal(), df_bal_alm=get_df_bal_alm(),
-                df_verts=get_df_vertices(), df_flujo_ent=get_df_flujo_ent(), df_flujo_sal=get_df_flujo_sal(),
-                df_etr=get_df_etr(), df_alm=get_df_almacenamiento(), dato_zona_disp=d_zona
-            )
-            modal_chat_local(c_ac, n_ac, contexto_global_str)
-
-        # 2. EL CABALLO DE TROYA (Minificado en una sola línea para evadir Markdown)
-        js_inyectado = """<img src="dummy" style="display:none;" onerror="let intentos=0; let intervalo=setInterval(()=>{const botones=window.parent.document.querySelectorAll('button'); botones.forEach(b=>{if(b.innerText.includes('✨')){b.style.setProperty('position','fixed','important'); b.style.setProperty('bottom','30px','important'); b.style.setProperty('right','30px','important'); b.style.setProperty('width','60px','important'); b.style.setProperty('height','60px','important'); b.style.setProperty('min-width','60px','important'); b.style.setProperty('min-height','60px','important'); b.style.setProperty('border-radius','50%','important'); b.style.setProperty('z-index','999999','important'); b.style.setProperty('box-shadow','0 6px 15px rgba(0,0,0,0.3)','important'); let p=b.querySelector('p'); if(p){p.style.setProperty('font-size','28px','important'); p.style.setProperty('margin','0','important');} let contenedor=b.closest('div[data-testid=\\'stElementContainer\\']') || b.closest('.element-container'); if(contenedor){contenedor.style.setProperty('position','absolute','important');} clearInterval(intervalo);}}); intentos++; if(intentos>20) clearInterval(intervalo);}, 100);">"""
+        # 1. Creamos una columna "fantasma" que Streamlit sí respeta como contenedor
+        col_vacia, col_flotante = st.columns([0.99, 0.01])
         
-        st.markdown(js_inyectado, unsafe_allow_html=True)
+        with col_flotante:
+            # Inyectamos una marca invisible DENTRO de la columna
+            st.markdown('<span id="marcador-ia-flotante"></span>', unsafe_allow_html=True)
+            
+            # El botón de la IA
+            if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
+                contexto_global_str = construir_contexto_completo(
+                    clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
+                    datos_ac=d_ac, parrafo_vol=p_vol, parrafo_aprov=p_aprov,
+                    parrafo_dma=p_dma, df_resumen=df_res, conteo_usos=c_usos,
+                    df_bal_ent=get_df_bal_ent(), df_bal_sal=get_df_bal_sal(), df_bal_alm=get_df_bal_alm(),
+                    df_verts=get_df_vertices(), df_flujo_ent=get_df_flujo_ent(), df_flujo_sal=get_df_flujo_sal(),
+                    df_etr=get_df_etr(), df_alm=get_df_almacenamiento(), dato_zona_disp=d_zona
+                )
+                modal_chat_local(c_ac, n_ac, contexto_global_str)
+
+        # 2. El CSS que manda a volar a la COLUMNA ENTERA
+        st.markdown(
+            """
+            <style>
+            /* Encontramos la columna de Streamlit que tiene nuestra marca y la hacemos flotar */
+            div[data-testid="stColumn"]:has(#marcador-ia-flotante) {
+                position: fixed !important;
+                bottom: 30px !important;
+                right: 30px !important;
+                width: 60px !important;
+                height: 60px !important;
+                z-index: 999999 !important;
+            }
+
+            /* Le damos el estilo redondo y guinda al botón que está dentro de esa columna */
+            div[data-testid="stColumn"]:has(#marcador-ia-flotante) button {
+                width: 60px !important;
+                height: 60px !important;
+                min-width: 60px !important;
+                min-height: 60px !important;
+                border-radius: 50% !important;
+                background-color: #9F2241 !important;
+                color: white !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                border: none !important;
+                box-shadow: 0px 6px 15px rgba(0,0,0,0.3) !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                transition: transform 0.2s ease, background-color 0.2s ease !important;
+            }
+
+            /* Efecto hover */
+            div[data-testid="stColumn"]:has(#marcador-ia-flotante) button:hover {
+                transform: scale(1.15) !important;
+                background-color: #691C32 !important;
+            }
+
+            /* Tamaño del emoji grande */
+            div[data-testid="stColumn"]:has(#marcador-ia-flotante) button p {
+                font-size: 28px !important;
+                line-height: 1 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
     renderizar_boton_ia_flotante(
         clave_acuifero, nombre_acuifero, estado_seleccionado, datos_ac,
         parrafo_vol_ia, parrafo_aprov_ia, parrafo_dma_ia, df_resumen, conteo_usos, dato_zona_disp
     )
-
-else:
-    st.info("👈 Selecciona un Acuífero en el panel lateral para ver su información.")
-
