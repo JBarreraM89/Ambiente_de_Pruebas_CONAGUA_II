@@ -2,7 +2,6 @@
 import streamlit.components.v1 as components
 from branca.element import MacroElement
 from streamlit_folium import st_folium
-from difflib import SequenceMatcher
 from shapely.geometry import Point, box
 from jinja2 import Template
 from folium import plugins
@@ -1638,7 +1637,7 @@ if seleccion_final:
 
                 hash_capas = "_".join([c[:3] for c in capas_seleccionadas])
                 num_pts = len(marcadores)
-                llave_dinamica = f"visor_mapa_{clave_sel_norm}_{hash_capas}_{num_pts}"
+                llave_dinamica = f"visor_mapa_estatico_{clave_sel_norm}"
 
                 st_folium(
                     m, 
