@@ -1819,8 +1819,8 @@ if seleccion_final:
     
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
         
-        # El botón normal de Streamlit, PERO con el título secreto (help)
-        if st.button("✨", type="primary", help="Asistente Virtual IA", key=f"btn_ia_{c_ac}"):
+        # 1. El botón normal de Streamlit
+        if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
             contexto_global_str = construir_contexto_completo(
                 clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
                 datos_ac=d_ac, parrafo_vol=p_vol, parrafo_aprov=p_aprov,
@@ -1831,6 +1831,47 @@ if seleccion_final:
             )
             modal_chat_local(c_ac, n_ac, contexto_global_str)
 
+        # 2. EL CABALLO DE TROYA (Mueve el botón usando JS sin romper Python)
+        st.markdown(
+            """
+            <img src="dummy" style="display:none;" onerror="
+                let intentos = 0;
+                let intervalo = setInterval(() => {
+                    const botones = window.parent.document.querySelectorAll('button');
+                    botones.forEach(b => {
+                        if(b.innerText.includes('✨')) {
+                            b.style.setProperty('position', 'fixed', 'important');
+                            b.style.setProperty('bottom', '30px', 'important');
+                            b.style.setProperty('right', '30px', 'important');
+                            b.style.setProperty('width', '60px', 'important');
+                            b.style.setProperty('height', '60px', 'important');
+                            b.style.setProperty('min-width', '60px', 'important');
+                            b.style.setProperty('min-height', '60px', 'important');
+                            b.style.setProperty('border-radius', '50%', 'important');
+                            b.style.setProperty('z-index', '999999', 'important');
+                            b.style.setProperty('box-shadow', '0 6px 15px rgba(0,0,0,0.3)', 'important');
+                            
+                            let p = b.querySelector('p');
+                            if(p) {
+                                p.style.setProperty('font-size', '28px', 'important');
+                                p.style.setProperty('margin', '0', 'important');
+                            }
+                            
+                            let contenedor = b.closest('div[data-testid=\\'stElementContainer\\']') || b.closest('.element-container');
+                            if(contenedor) {
+                                contenedor.style.setProperty('position', 'absolute', 'important');
+                            }
+                            clearInterval(intervalo);
+                        }
+                    });
+                    intentos++;
+                    if(intentos > 20) clearInterval(intervalo); 
+                }, 100);
+            ">
+            """,
+            unsafe_allow_html=True
+        )
+
     renderizar_boton_ia_flotante(
         clave_acuifero, nombre_acuifero, estado_seleccionado, datos_ac,
         parrafo_vol_ia, parrafo_aprov_ia, parrafo_dma_ia, df_resumen, conteo_usos, dato_zona_disp
@@ -1838,65 +1879,4 @@ if seleccion_final:
 
 else:
     st.info("👈 Selecciona un Acuífero en el panel lateral para ver su información.")
-
-# =======================================================
-# ⚙️ ESTILOS DEL BOTÓN FLOTANTE (CSS SEGURO Y LIMPIO)
-# =======================================================
-st.markdown(
-    """
-    <style>
-    /* 1. Elevamos el contenedor COMPLETO del botón para que no deje un espacio en blanco abajo */
-    div[data-testid="stVerticalBlock"]:has(button[title="Asistente Virtual IA"]) {
-        position: fixed !important;
-        bottom: 30px !important;
-        right: 30px !important;
-        z-index: 999999 !important;
-        width: 60px !important;
-        height: 60px !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        gap: 0 !important;
-    }
-
-    /* 2. Le damos forma redonda y color al botón real */
-    button[title="Asistente Virtual IA"] {
-        width: 60px !important;
-        height: 60px !important;
-        min-width: 60px !important;
-        min-height: 60px !important;
-        border-radius: 50% !important;
-        background-color: #9F2241 !important;
-        color: white !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        border: none !important;
-        box-shadow: 0px 6px 15px rgba(0,0,0,0.3) !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        transition: transform 0.2s ease, background-color 0.2s ease !important;
-    }
-
-    /* 3. Efecto al pasar el ratón */
-    button[title="Asistente Virtual IA"]:hover {
-        transform: scale(1.15) !important;
-        background-color: #691C32 !important;
-    }
-
-    /* 4. Ajustar el emoji */
-    button[title="Asistente Virtual IA"] p {
-        font-size: 28px !important;
-        line-height: 1 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    
-    /* 5. Ocultar el texto de ayuda por defecto de Streamlit para que no estorbe */
-    div[data-testid="stTooltipContent"] {
-        display: none !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
