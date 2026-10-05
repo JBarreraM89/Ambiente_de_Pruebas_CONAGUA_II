@@ -25,3 +25,4 @@ pydeck
 rasterio
 matplotlib
 pykrige
+tabulate
