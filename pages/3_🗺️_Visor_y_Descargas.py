@@ -1819,6 +1819,11 @@ if seleccion_final:
     
     @st.fragment
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
+        
+        # Una simple marca invisible
+        st.markdown('<span id="botoncito-ia-magico"></span>', unsafe_allow_html=True)
+        
+        # El botón de Python normal
         if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
             contexto_global_str = construir_contexto_completo(
                 clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
@@ -1839,66 +1844,60 @@ else:
     st.info("👈 Selecciona un Acuífero en el panel lateral para ver su información.")
 
 # =======================================================
-# ⚙️ INYECCIÓN JAVASCRIPT (BOTÓN FLOTANTE CÍRCULO PERFECTO)
+# ⚙️ ESTILOS DEL BOTÓN FLOTANTE (CSS GLOBAL SEGURO)
 # =======================================================
-components.html(
+st.markdown(
     """
-    <script>
-    const doc = window.parent.document;
-    function aplicarEstilosCirculares() {
-        const botones = doc.querySelectorAll('button');
-        let btnIA = null;
-        botones.forEach(b => { if(b.innerText.includes('✨')) { btnIA = b; } });
-        if(!btnIA) return;
-        btnIA.removeAttribute('title');
-        btnIA.style.setProperty('width', '60px', 'important');
-        btnIA.style.setProperty('height', '60px', 'important');
-        btnIA.style.setProperty('min-width', '60px', 'important');
-        btnIA.style.setProperty('min-height', '60px', 'important');
-        btnIA.style.setProperty('border-radius', '50%', 'important');
-        btnIA.style.setProperty('background-color', '#9F2241', 'important');
-        btnIA.style.setProperty('color', 'white', 'important');
-        btnIA.style.setProperty('padding', '0', 'important');
-        btnIA.style.setProperty('margin', '0', 'important');
-        btnIA.style.setProperty('border', 'none', 'important');
-        btnIA.style.setProperty('box-shadow', '0px 6px 15px rgba(0,0,0,0.3)', 'important');
-        btnIA.style.setProperty('display', 'flex', 'important');
-        btnIA.style.setProperty('align-items', 'center', 'important');
-        btnIA.style.setProperty('justify-content', 'center', 'important');
-        btnIA.style.setProperty('transition', 'transform 0.2s ease, background-color 0.2s ease', 'important');
-        
-        const hijos = btnIA.querySelectorAll('*');
-        hijos.forEach(hijo => {
-            hijo.style.setProperty('background-color', 'transparent', 'important');
-            hijo.style.setProperty('padding', '0', 'important');
-            hijo.style.setProperty('margin', '0', 'important');
-            hijo.style.setProperty('min-width', '0', 'important');
-        });
-        
-        const p = btnIA.querySelector('p');
-        if(p) {
-            p.style.setProperty('font-size', '28px', 'important');
-            p.style.setProperty('line-height', '1', 'important');
-        }
-        btnIA.onmouseover = function() { this.style.setProperty('transform', 'scale(1.15)', 'important'); this.style.setProperty('background-color', '#691C32', 'important'); };
-        btnIA.onmouseout = function() { this.style.setProperty('transform', 'scale(1)', 'important'); this.style.setProperty('background-color', '#9F2241', 'important'); };
-
-        let contenedor = btnIA.closest('.element-container');
-        if(!contenedor) {
-            const wrapper = btnIA.closest('div[data-testid="stButton"]');
-            if(wrapper) contenedor = wrapper.parentElement;
-        }
-        if(contenedor) {
-            contenedor.style.setProperty('position', 'fixed', 'important');
-            contenedor.style.setProperty('bottom', '30px', 'important');
-            contenedor.style.setProperty('right', '30px', 'important');
-            contenedor.style.setProperty('width', '60px', 'important');
-            contenedor.style.setProperty('height', '60px', 'important');
-            contenedor.style.setProperty('z-index', '999999', 'important');
-        }
+    <style>
+    /* Ocultamos el contenedor que tiene la marca invisible para que no haga estorbo */
+    div.element-container:has(#botoncito-ia-magico) {
+        display: none !important;
     }
-    const observer = new MutationObserver(() => { aplicarEstilosCirculares(); });
-    observer.observe(doc.body, { childList: true, subtree: true });
-    setTimeout(aplicarEstilosCirculares, 50);
-    </script>
-    """, height=0, width=0)
+
+    /* Buscamos el contenedor que sigue INMEDIATAMENTE después de la marca (el botón) y lo hacemos flotar */
+    div.element-container:has(#botoncito-ia-magico) + div.element-container {
+        position: fixed !important;
+        bottom: 30px !important;
+        right: 30px !important;
+        width: 60px !important;
+        height: 60px !important;
+        z-index: 999999 !important;
+    }
+
+    /* Le damos la forma redonda y el color al botón */
+    div.element-container:has(#botoncito-ia-magico) + div.element-container button {
+        width: 60px !important;
+        height: 60px !important;
+        min-width: 60px !important;
+        min-height: 60px !important;
+        border-radius: 50% !important;
+        background-color: #9F2241 !important;
+        color: white !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+        box-shadow: 0px 6px 15px rgba(0,0,0,0.3) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        transition: transform 0.2s ease, background-color 0.2s ease !important;
+    }
+
+    /* Efecto al pasar el mouse */
+    div.element-container:has(#botoncito-ia-magico) + div.element-container button:hover {
+        transform: scale(1.15) !important;
+        background-color: #691C32 !important;
+    }
+
+    /* Tamaño de las estrellitas */
+    div.element-container:has(#botoncito-ia-magico) + div.element-container button p {
+        font-size: 28px !important;
+        line-height: 1 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
