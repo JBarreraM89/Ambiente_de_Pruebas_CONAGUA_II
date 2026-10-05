@@ -455,96 +455,100 @@ def buscar_valor(df, palabra_clave, columna='VOLUMEN_hm3', es_total=False):
             except: return 0.0            
     return 0.0
 
+
 # =======================================================
-# 🧠 MOTOR DE BÚSQUEDA SEMÁNTICA LOCAL Y DICCIONARIO
+# 💬 MODAL DE CHAT EN LA NUBE (LÓGICA EXACTA DE LA PÁG. 4)
 # =======================================================
 @st.cache_resource(show_spinner=False)
-def cargar_modelo_embeddings_local():
-    from sentence_transformers import SentenceTransformer 
-    return SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2')
+def obtener_modelo_activo_visor(api_key):
+    from openai import OpenAI
+    cliente_ia = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+    try:
+        lista_cruda = cliente_ia.models.list().data
+        candidatos = [
+            m.id for m in lista_cruda 
+            if "whisper" not in m.id.lower() 
+            and "guard" not in m.id.lower() 
+            and "vision" not in m.id.lower()
+            and "qwen" not in m.id.lower()
+            and "deepseek" not in m.id.lower()
+            and "r1" not in m.id.lower()
+            and "reasoning" not in m.id.lower()
+            and "allam" not in m.id.lower()
+        ]
+        candidatos.sort(key=lambda x: (
+            0 if "llama-3" in x.lower() and "8b" in x.lower() else 
+            1 if "llama-3" in x.lower() else 
+            2 if "mixtral" in x.lower() else 3
+        ))
+        for modelo_test in candidatos:
+            try:
+                # 🚀 ESTE ES EL PING TEST QUE HABÍAMOS OMITIDO
+                cliente_ia.chat.completions.create(model=modelo_test, messages=[{"role": "user", "content": "1"}], max_tokens=1)
+                return modelo_test
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return "llama3-8b-8192"
 
-def responder_busqueda_semantica(prompt_usuario, contexto_completo_str, clave_ac, nombre_ac):
-    from sklearn.metrics.pairwise import cosine_similarity 
-    parrafos = [p.strip() for p in contexto_completo_str.split("\n\n") if p.strip()]
-    if not parrafos: return "No hay información disponible para este acuífero."
-
-    reglas_busqueda = [
-        (["cota", "cotas", "comite", "comite tecnico"], ["comité técnico de aguas subterráneas"]),
-        (["consejo", "consejos", "consejo de cuenca"], ["consejo de cuenca del acuífero"]),
-        (["organismo", "organismo de cuenca", "region", "region administrativa"], ["región administrativa y organismo de cuenca"]),
-        (["direccion", "direccion local", "unidad administrativa", "dl"], ["dirección local y unidad administrativa"]),
-        (["zona de disponibilidad", "disponibilidad zona", "zona disponibilidad"], ["zona de disponibilidad oficial"]),
-        (["veda", "vedas", "decreto", "decretos"], ["decretos de veda aplicables"]),
-        (["limite", "limites", "limte", "acuerdo de limites", "delimitacion"], ["acuerdo de límites oficiales"]),
-        (["acuerdo", "acuerdos", "acuerdos generales", "facilidades"], ["acuerdos generales de facilidades"]),
-        (["municipio", "municipios", "alcaldia", "alcaldias", "division municipal"], ["municipios ubicados dentro"]),
-        (["balance", "dma", "disponibilidad media anual", "recarga", "entradas", "salidas"], ["disponibilidad media anual (dma)", "tabla de entradas al balance", "tabla de salidas del balance"]),
-        (["vertice", "vertices", "poligonal", "coordenadas"], ["catálogo y poligonal de vértices"]),
-        (["bombeo", "volumen", "volumenes", "concesionado", "extraccion", "repda"], ["volúmenes de extracción concesionados", "tabla de usos y volúmenes concesionados"]),
-        (["aprovechamiento", "aprovechamientos", "pozo", "pozos", "censo"], ["censo de aprovechamientos", "tabla de conteo de aprovechamientos"]),
-        (["riego", "unidades de riego", "unidad de riego", "unidades"], ["unidades de riego dentro"]),
-        (["distritos de riego", "distrito de riego", "distritos"], ["distritos de riego dentro"]),
-        (["uso agricola", "agricola"], ["distritos de riego dentro", "unidades de riego dentro"]),
-        (["ramsar", "humedal", "humedales"], ["sitios ramsar"]),
-        (["estatal", "anp estatal", "anps estatales"], ["áreas naturales protegidas estatales"]),
-        (["federal", "anp federal", "anps federales"], ["áreas naturales protegidas federales"]),
-        (["anp", "areas naturales", "area natural", "protegida", "protegidas", "medio ambiente"], ["áreas naturales protegidas federales", "áreas naturales protegidas estatales"]),
-        (["reglamento", "reglamentos"], ["reglamentos específicos del acuífero"]),
-        (["reglamentada", "reglamentadas"], ["zonas reglamentadas"]),
-        (["reserva", "reservas"], ["zonas de reserva"])
-    ]
-
-    palabras_objetivo = []
-    for lista_kw_usuario, lista_kw_texto in reglas_busqueda:
-        for kw_u in lista_kw_usuario:
-            if es_similitud_difusa(kw_u, prompt_usuario):
-                palabras_objetivo.extend(lista_kw_texto)
-                break
-
-    if palabras_objetivo:
-        bloques_coincidentes = []
-        for p in parrafos:
-            p_norm = normalizar_texto_ia(p)
-            if any(normalizar_texto_ia(obj) in p_norm for obj in palabras_objetivo):
-                bloques_coincidentes.append(p)
-        if bloques_coincidentes:
-            return (f"De acuerdo con los registros oficiales del acuífero **{clave_ac} - {nombre_ac}**:\n\n"
-                    f"{bloques_coincidentes[0]}\n\n"
-                    f"Si necesitas consultar algún otro apartado, dímelo con gusto.")
-
-    modelo_emb = cargar_modelo_embeddings_local()
-    embeddings_parrafos = modelo_emb.encode(parrafos)
-    embedding_pregunta = modelo_emb.encode([prompt_usuario])
-    similitudes = cosine_similarity(embedding_pregunta, embeddings_parrafos)[0]
-    indices_top = np.argsort(similitudes)[::-1]
-    
-    bloques_encontrados = [parrafos[idx] for idx in indices_top if similitudes[idx] > 0.35]
-    if bloques_encontrados:
-        return (f"De acuerdo con los registros oficiales del acuífero **{clave_ac} - {nombre_ac}**:\n\n"
-                f"{bloques_encontrados[0]}\n\n"
-                f"Si necesitas consultar algún otro apartado, dímelo con gusto.")
-    return ("No encontré una coincidencia directa para esa consulta. "
-            "Intenta buscar por palabras específicas como: *decretos*, *límites*, *municipios*, *balance*, *bombeo* o *vértices*.")
-
-# =======================================================
-# 💬 MODAL DE CHAT LOCAL
-# =======================================================
-@st.dialog("⚙️ Asistente Técnico CONAGUA (Local)", width="large")
+@st.dialog("⚙️ Asistente Técnico CONAGUA", width="large")
 def modal_chat_local(clave_ac, nombre_ac, contexto_global_str):
+    from openai import OpenAI
+    
     chat_key = f"chat_history_{clave_ac}"
-    if chat_key not in st.session_state: st.session_state[chat_key] = []
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = [{"role": "assistant", "content": f"Hola. Soy el asistente de IA. Tengo el expediente técnico del acuífero **{clave_ac} - {nombre_ac}** cargado en mi memoria temporal. ¿Qué dato necesitas?"}]
         
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg["role"], avatar="👤" if msg["role"] == "user" else "⚙️"): 
             st.markdown(msg["content"])
             
-    if prompt := st.chat_input("Ej: ¿Cuáles son los municipios del acuífero y su balance de agua?"):
+    if prompt := st.chat_input(f"Ej: ¿Cuáles son los decretos de veda de {nombre_ac}?"):
         st.session_state[chat_key].append({"role": "user", "content": prompt})
-        with st.chat_message("user", avatar="👤"): st.markdown(prompt)
+        with st.chat_message("user", avatar="👤"): 
+            st.markdown(prompt)
+            
         with st.chat_message("assistant", avatar="⚙️"):
-            respuesta = responder_busqueda_semantica(prompt, contexto_global_str, clave_ac, nombre_ac)
-            st.markdown(respuesta)
-            st.session_state[chat_key].append({"role": "assistant", "content": respuesta})
+            with st.spinner("Analizando expediente..."):
+                try:
+                    api_key = st.secrets.get("GROQ_API_KEY")
+                    if not api_key:
+                        st.error("❌ Falta la GROQ_API_KEY en los secretos.")
+                        return
+                        
+                    cliente_ia = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+                    
+                    # Usamos tu función testeada y probada
+                    modelo_activo = obtener_modelo_activo_visor(api_key)
+                    
+                    instrucciones = (
+                        f"Eres un ingeniero experto de CONAGUA respondiendo dudas sobre el acuífero {clave_ac} - {nombre_ac}. "
+                        f"Responde ÚNICAMENTE basándote en este contexto técnico oficial:\n\n{contexto_global_str}\n\n"
+                        f"Si la respuesta no está en el contexto, di cordialmente que no tienes esa información."
+                    )
+                    
+                    mensajes_ia = [{"role": "system", "content": instrucciones}]
+                    
+                    # Memoria reciente
+                    for m in st.session_state[chat_key][-4:]: 
+                        mensajes_ia.append({"role": m["role"], "content": m["content"]})
+                    
+                    response = cliente_ia.chat.completions.create(
+                        model=modelo_activo,
+                        messages=mensajes_ia,
+                        temperature=0.2 
+                    )
+                    
+                    respuesta = response.choices[0].message.content
+                    st.markdown(respuesta)
+                    st.session_state[chat_key].append({"role": "assistant", "content": respuesta})
+                    
+                except Exception as e:
+                    import traceback
+                    st.error(f"❌ Error de conexión con IA: {str(e)}")
+                    with st.expander("Ver detalle técnico"):
+                        st.code(traceback.format_exc())
 
 # =======================================================
 # 🧠 CONSTRUCTOR DE CONTEXTO GLOBAL HÍDRICO (RAG ENTERPRISE)
@@ -582,21 +586,6 @@ def obtener_texto_municipios_ia(clave_ac):
             
     return "\n".join(resumen_mun) if resumen_mun else "Sin información detallada."
 
-def normalizar_texto_ia(texto):
-    if not texto: return ""
-    texto = str(texto).lower()
-    texto = ''.join(c for c in unicodedata.normalize('NFD', texto) if unicodedata.category(c) != 'Mn')
-    texto = re.sub(r'[^a-z0-9\s]', '', texto)
-    return texto.strip()
-
-def es_similitud_difusa(palabra_buscada, texto_usuario, umbral=0.82):
-    palabra_norm = normalizar_texto_ia(palabra_buscada)
-    prompt_norm = normalizar_texto_ia(texto_usuario)
-    if palabra_norm in prompt_norm: return True
-    for p in prompt_norm.split():
-        if len(p) >= 4 and len(palabra_norm) >= 4:
-            if SequenceMatcher(None, palabra_norm, p).ratio() >= umbral: return True
-    return False
 
 def construir_contexto_completo(clave_ac, nombre_ac, estado, datos_ac, 
                                  parrafo_vol, parrafo_aprov, parrafo_dma,
