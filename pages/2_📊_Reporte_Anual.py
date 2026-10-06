@@ -848,53 +848,103 @@ if "datos_reporte_nacional" in st.session_state:
             # 2. Los que ya estaban en rojo y perdieron AÚN MÁS agua
             cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < df_sim['Disponibilidad (DMA)'])
             
-            df_sim['Categoria_Alerta'] = "Sin peligro crítico"
-            df_sim.loc[cond_nuevos, 'Categoria_Alerta'] = "🚨 Nuevo Déficit"
-            df_sim.loc[cond_agravados, 'Categoria_Alerta'] = "📉 Déficit Agravado"
-            
-            df_alertas = df_sim[df_sim['Categoria_Alerta'] != "Sin peligro crítico"].copy()
-            
-            # ==========================================
-            # VISUALIZACIÓN DEL IMPACTO
-            # ==========================================
-            st.markdown("#### 📉 Resultados de la Simulación")
-            
-            col_res1, col_res2, col_res3 = st.columns(3)
-            col_res1.metric("Nuevo Balance Neto (DMA)", f"{dma_tot_sim:,.1f} hm³", f"{diferencia_neta:,.1f} hm³", delta_color="normal")
-            
-            total_deficit_sim = len(df_sim[df_sim['Estado_Simulado'] == 'Déficit'])
-            nuevos_count = len(df_sim[cond_nuevos])
-            agravados_count = len(df_sim[cond_agravados])
-            
-            col_res2.metric("Total Acuíferos en Déficit", f"{total_deficit_sim}", f"+{nuevos_count} nuevos | {agravados_count} agravados", delta_color="inverse")
-            
-            diferencia_recarga = r_tot_sim - df_filtrado['Recarga (R)'].sum()
-            col_res3.metric("Impacto en Recarga", f"{r_tot_sim:,.1f} hm³", f"{diferencia_recarga:,.1f} hm³", delta_color="normal")
-
-            st.divider()
-            
-            col_chart1, col_chart2 = st.columns(2)
-            
-            with col_chart1:
-                # Waterfall Simulado (COLORES INSTITUCIONALES)
-                fig_sim_macro = go.Figure(go.Waterfall(
-                    orientation="v",
-                    measure=["relative", "relative", "relative", "total"],
-                    x=["1. Recarga Simulada", "2. DNC", "3. Concesiones Simuladas", "4. DMA Proyectada"],
-                    textposition="outside",
-                    text=[f"+{r_tot_sim:,.1f}", f"-{dnc_tot:,.1f}", f"-{veas_tot_sim:,.1f}", f"{dma_tot_sim:,.1f}"],
-                    y=[r_tot_sim, -dnc_tot, -veas_tot_sim, dma_tot_sim],
-                    connector={"line": {"color": "rgb(63, 63, 63)"}},
-                    decreasing={"marker": {"color": "#9f2241"}}, # Rojo Inst
-                    increasing={"marker": {"color": "#285c4d"}}, # Verde Inst
-                    totals={"marker": {"color": "#b38e5d" if dma_tot_sim >= 0 else "#691c32"}} # Dorado o Guinda Oscuro
-                ))
-                fig_sim_macro.update_layout(title="Contabilidad Hídrica en Escenario Proyectado", height=450, margin=dict(t=50, b=50))
-                st.plotly_chart(fig_sim_macro, use_container_width=True)
+            df_sim['Categoria_Alerta'] = "Sin peligro crítico"# --- TAB 7: GEMELO DIGITAL (SIMULADOR WHAT-IF) ---
+            with tab_gemelo:
+                st.write("### 🔮 Simulador de Escenarios (What-If)")
+                st.caption("Ajusta las variables climáticas y de demanda para predecir el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
                 
-            with col_chart2:
+                with st.container(border=True):
+                    col_sim1, col_sim2 = st.columns(2)
+                    var_clima = col_sim1.slider(
+                        "🌧️ Efecto Cambio Climático en Recarga (%)", 
+                        min_value=-50, max_value=50, value=0, step=1, 
+                        help="Simula periodos de sequía prolongada (valores negativos) o años atípicamente húmedos (valores positivos)."
+                    )
+                    var_demanda = col_sim2.slider(
+                        "🏭 Crecimiento de Concesiones / Bombeo (%)", 
+                        min_value=-50, max_value=100, value=0, step=1, 
+                        help="Simula el impacto del crecimiento industrial, agrícola o poblacional aumentando las extracciones (VEAS)."
+                    )
+
+                # ==========================================
+                # MOTOR MATEMÁTICO DEL GEMELO DIGITAL
+                # ==========================================
+                df_sim = df_filtrado.copy()
+                
+                # 1. Calculamos el volumen diferencial (Delta) exacto generado por los sliders
+                delta_recarga = df_sim['Recarga (R)'] * (var_clima / 100.0)
+                delta_veas = df_sim['VEAS'] * (var_demanda / 100.0)
+                
+                # 2. Aplicamos el Delta a los totales para visualización
+                df_sim['Recarga_Simulada'] = df_sim['Recarga (R)'] + delta_recarga
+                df_sim['VEAS_Simulado'] = df_sim['VEAS'] + delta_veas
+                
+                # 3. Sumamos/Restamos el Delta directamente a la DMA original (Evita errores de redondeo)
+                df_sim['DMA_Simulada'] = (df_sim['Disponibilidad (DMA)'] + delta_recarga - delta_veas).round(6)
+                
+                # Calcular Impactos Macro
+                r_tot_sim = df_sim['Recarga_Simulada'].sum()
+                dnc_tot = df_sim['DNC'].sum() 
+                veas_tot_sim = df_sim['VEAS_Simulado'].sum()
+                dma_tot_sim = df_sim['DMA_Simulada'].sum()
+                dma_tot_original = df_filtrado['Disponibilidad (DMA)'].sum()
+                
+                diferencia_neta = dma_tot_sim - dma_tot_original
+
+                # Encontrar acuíferos críticos (Nuevos) y Agravados (Peores)
+                df_sim['Estado_Original'] = np.where(df_sim['Disponibilidad (DMA)'] < 0, 'Déficit', 'Superávit')
+                df_sim['Estado_Simulado'] = np.where(df_sim['DMA_Simulada'] < 0, 'Déficit', 'Superávit')
+                
+                # 1. Los que acaban de pasar a números rojos
+                cond_nuevos = (df_sim['Estado_Original'] == 'Superávit') & (df_sim['Estado_Simulado'] == 'Déficit')
+                # 2. Los que ya estaban en rojo y perdieron AÚN MÁS agua
+                cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < df_sim['Disponibilidad (DMA)'])
+                
+                df_sim['Categoria_Alerta'] = "Sin peligro crítico"
+                df_sim.loc[cond_nuevos, 'Categoria_Alerta'] = "🚨 Nuevo Déficit"
+                df_sim.loc[cond_agravados, 'Categoria_Alerta'] = "📉 Déficit Agravado"
+                
+                df_alertas = df_sim[df_sim['Categoria_Alerta'] != "Sin peligro crítico"].copy()
+                
+                # ==========================================
+                # VISUALIZACIÓN DEL IMPACTO
+                # ==========================================
+                st.markdown("#### 📉 Resultados de la Simulación")
+                
+                col_res1, col_res2, col_res3 = st.columns(3)
+                col_res1.metric("Nuevo Balance Neto (DMA)", f"{dma_tot_sim:,.1f} hm³", f"{diferencia_neta:,.1f} hm³", delta_color="normal")
+                
+                total_deficit_sim = len(df_sim[df_sim['Estado_Simulado'] == 'Déficit'])
+                nuevos_count = len(df_sim[cond_nuevos])
+                agravados_count = len(df_sim[cond_agravados])
+                
+                col_res2.metric("Total Acuíferos en Déficit", f"{total_deficit_sim}", f"+{nuevos_count} nuevos | {agravados_count} agravados", delta_color="inverse")
+                
+                diferencia_recarga = r_tot_sim - df_filtrado['Recarga (R)'].sum()
+                col_res3.metric("Impacto en Recarga", f"{r_tot_sim:,.1f} hm³", f"{diferencia_recarga:,.1f} hm³", delta_color="normal")
+
+                st.divider()
+                
+                col_chart1, col_chart2 = st.columns(2)
+                
+                with col_chart1:
+                    fig_sim_macro = go.Figure(go.Waterfall(
+                        orientation="v",
+                        measure=["relative", "relative", "relative", "total"],
+                        x=["1. Recarga Simulada", "2. DNC", "3. Concesiones Simuladas", "4. DMA Proyectada"],
+                        textposition="outside",
+                        text=[f"+{r_tot_sim:,.1f}", f"-{dnc_tot:,.1f}", f"-{veas_tot_sim:,.1f}", f"{dma_tot_sim:,.1f}"],
+                        y=[r_tot_sim, -dnc_tot, -veas_tot_sim, dma_tot_sim],
+                        connector={"line": {"color": "rgb(63, 63, 63)"}},
+                        decreasing={"marker": {"color": "#9f2241"}},
+                        increasing={"marker": {"color": "#285c4d"}},
+                        totals={"marker": {"color": "#b38e5d" if dma_tot_sim >= 0 else "#691c32"}}
+                    ))
+                    fig_sim_macro.update_layout(title="Contabilidad Hídrica en Escenario Proyectado", height=450, margin=dict(t=50, b=50))
+                    st.plotly_chart(fig_sim_macro, use_container_width=True)
+                    
+                with col_chart2:
                     if not df_alertas.empty:
-                        # Redacción Dinámica e Inteligente de la Alerta
                         frases_alerta = []
                         if nuevos_count > 0:
                             frases_alerta.append(f"**{nuevos_count}** acuíferos sanos entrarían en déficit")
@@ -902,13 +952,10 @@ if "datos_reporte_nacional" in st.session_state:
                             frases_alerta.append(f"**{agravados_count}** acuíferos sobreexplotados empeorarían su situación")
                             
                         texto_unido = " y ".join(frases_alerta)
-                        
                         st.error(f"🚨 **ALERTA HÍDRICA:** Bajo este escenario, {texto_unido}.")
                         
-                        # Calculamos cuántos millones de m3 exactos perdieron
                         df_alertas['Impacto (Pérdida)'] = df_alertas['DMA_Simulada'] - df_alertas['Disponibilidad (DMA)']
                         
-                        # Mostramos la tabla ordenada de los más afectados a los menos afectados
                         st.dataframe(
                             df_alertas[['Acuífero', 'Categoria_Alerta', 'Disponibilidad (DMA)', 'DMA_Simulada', 'Impacto (Pérdida)']].rename(columns={'Disponibilidad (DMA)': 'DMA Actual'}),
                             use_container_width=True, hide_index=True
