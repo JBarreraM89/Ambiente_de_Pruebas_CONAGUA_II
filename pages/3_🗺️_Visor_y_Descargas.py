@@ -1,15 +1,12 @@
 # -*- coding: utf-8 -*-
-import streamlit.components.v1 as components
 from branca.element import MacroElement
 from streamlit_folium import st_folium
-from shapely.geometry import Point, box
+from shapely.geometry import Point
 from jinja2 import Template
 from folium import plugins
 import geopandas as gpd
 import streamlit as st
 import pandas as pd
-import numpy as np
-import unicodedata
 import requests
 import tempfile
 import zipfile
@@ -17,23 +14,29 @@ import folium
 import time
 import io
 import re
-import math
+import ast
+import html as _html
 import os
 from pathlib import Path
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- IMPORTACIONES CORE (ARQUITECTURA ENTERPRISE) ---
-from core.data_loader import (cargar_datos_maestros, cargar_fraccion, cargar_excel, 
+from core.data_loader import (obtener_datos_maestros_compartidos, cargar_fraccion, cargar_excel, 
                               cargar_csv, cargar_parquet, DIRECTORIO_RAIZ)
 from utils.formatters import limpiar_texto, formatear_fecha, procesar_link_drive
 from utils.styles import inyectar_css_oficial, banner_institucional
 from xml.sax.saxutils import escape
+from core.drive_api import descargar_imagen_drive_bytes
 
 # =======================================================
 # 🚀 1. CARGA DE DATOS MAESTROS Y ACCESO BAJO DEMANDA (LAZY)
 # =======================================================
-gdf_maestro = cargar_datos_maestros()
+# Objeto compartido entre sesiones y SIN copia por interacción. Solo lectura:
+# si hay que modificarlo, usar .copy() (esta página nunca lo modifica).
+gdf_maestro = obtener_datos_maestros_compartidos()
+if gdf_maestro is None:
+    st.stop()  # el cargador ya mostró el mensaje de error
 
 @st.cache_data(show_spinner=False)
 def get_df_repda(): return cargar_excel("REPDA.xlsx", "Clave de acuífero")
@@ -102,7 +105,7 @@ def obtener_capa_exacta_cache(id_archivo, clave_ac):
             return gdf_frac[gdf_frac['CLV_ACUI'].astype(str).str.zfill(4) == cve_norm].copy()
             
         # Intersección espacial SOLO para localidades sin clave
-        gdf_m = cargar_datos_maestros()
+        gdf_m = obtener_datos_maestros_compartidos()
         geom_acuifero = gdf_m[gdf_m['CLV_ACUI'].astype(str).str.zfill(4) == cve_norm].iloc[0].geometry
         minx, miny, maxx, maxy = geom_acuifero.bounds
         candidatos = gdf_frac.cx[minx:maxx, miny:maxy]
@@ -307,7 +310,10 @@ def exportar_acuifero_a_kmz(clave_ac, nom_ac, datos_ac, capas_seleccionadas, dic
 
 @st.cache_data(show_spinner="Empaquetando KMZ con geometrías exactas...")
 def obtener_kmz_cacheado(clave_ac, nom_ac, _datos_ac, capas_seleccionadas_tuple, marcadores_str, _diccionario_capas):
-    marcadores_lista = eval(marcadores_str) if marcadores_str else []
+    try:
+        marcadores_lista = ast.literal_eval(marcadores_str) if marcadores_str else []
+    except (ValueError, SyntaxError):
+        marcadores_lista = []
     return exportar_acuifero_a_kmz(clave_ac, nom_ac, _datos_ac, list(capas_seleccionadas_tuple), _diccionario_capas, marcadores_lista)
 
 def mostrar_dato(titulo, valor):
@@ -692,7 +698,7 @@ def modal_vertices(clave_ac):
             for _, row in df_verts_filtrado.iterrows():
                 seg_long = f"{a_float(row.get('LONG_S', 0)):.1f}".replace("-0.0", "0.0")
                 seg_lat  = f"{a_float(row.get('LAT_S', 0)):.1f}".replace("-0.0", "0.0")
-                html += f"<tr><td>{row.get('VERTICE','')}</td><td>{row.get('LONG_G','')}</td><td>{row.get('LONG_M','')}</td><td>{seg_long}</td><td>{row.get('LAT_G','')}</td><td>{row.get('LAT_M','')}</td><td>{seg_lat}</td><td>{row.get('OBSERVACIONES','')}</td></tr>"
+                html += f"<tr><td>{_html.escape(str(row.get('VERTICE','')))}</td><td>{_html.escape(str(row.get('LONG_G','')))}</td><td>{_html.escape(str(row.get('LONG_M','')))}</td><td>{seg_long}</td><td>{_html.escape(str(row.get('LAT_G','')))}</td><td>{_html.escape(str(row.get('LAT_M','')))}</td><td>{seg_lat}</td><td>{_html.escape(str(row.get('OBSERVACIONES','')))}</td></tr>"
             
             html += "</tbody></table>"
             st.markdown("\n".join([line.strip() for line in html.split('\n')]), unsafe_allow_html=True)
@@ -1202,20 +1208,29 @@ with st.sidebar:
     renderizar_controles_puntos()
 
 if seleccion_final and datos_ac is not None:
-    st.sidebar.download_button(
-        label="🌍 Descargar KMZ (Acuífero y Capas)",
-        data=obtener_kmz_cacheado(
-            clave_sel, 
-            nombre_ac, 
-            datos_ac, 
-            tuple(capas_seleccionadas), 
-            str(st.session_state.get("lista_marcadores", [])),
-            diccionario_capas
-        ),
-        file_name=f"{clave_sel}_{nombre_ac.replace(' ', '_')}.kmz",
-        mime="application/vnd.google-earth.kmz",
-        use_container_width=True
-    )
+    # El KMZ se genera SOLO cuando el usuario lo pide (antes se construía en cada interacción).
+    _firma_kmz = (clave_sel, tuple(capas_seleccionadas), str(st.session_state.get("lista_marcadores", [])))
+    if st.session_state.get("kmz_firma") != _firma_kmz:
+        st.session_state.pop("kmz_bytes", None)  # cambió el acuífero, las capas o los puntos
+        st.session_state["kmz_firma"] = None
+    if st.session_state.get("kmz_bytes") is None:
+        if st.sidebar.button("🌍 Preparar KMZ (Acuífero y Capas)", use_container_width=True, key="btn_preparar_kmz"):
+            st.session_state["kmz_bytes"] = obtener_kmz_cacheado(
+                clave_sel, nombre_ac, datos_ac, tuple(capas_seleccionadas),
+                str(st.session_state.get("lista_marcadores", [])), diccionario_capas
+            )
+            st.session_state["kmz_firma"] = _firma_kmz
+            st.rerun()
+    else:
+        st.sidebar.download_button(
+            label="⬇️ Descargar KMZ (Acuífero y Capas)",
+            data=st.session_state["kmz_bytes"],
+            file_name=f"{clave_sel}_{(nombre_ac or clave_sel).replace(' ', '_')}.kmz",
+            mime="application/vnd.google-earth.kmz",
+            use_container_width=True,
+            key="btn_descargar_kmz"
+        )
+
 
 # =======================================================
 # 🟢 SINCRONIZACIÓN Y PROCESAMIENTO BAJO DEMANDA (LAZY)
@@ -1247,8 +1262,18 @@ if seleccion_final:
         if not link_row.empty:
             file_id_geo = procesar_link_drive(link_row.iloc[0].get('link'))
             if file_id_geo:
-                st.sidebar.link_button("⬇️ Descargar Mapa (PNG)", url=f"https://drive.google.com/uc?export=download&id={file_id_geo}", use_container_width=True)
-            else: st.sidebar.info("📂 Mapa geológico próximamente disponible.")
+                bytes_mapa_geo = descargar_imagen_drive_bytes(file_id_geo)
+                if bytes_mapa_geo:
+                    st.sidebar.download_button(
+                        label="⬇️ Descargar Mapa (PNG)",
+                        data=bytes_mapa_geo,
+                        file_name=f"Mapa_Geologico_{clave_sel}.png",
+                        mime="image/png",
+                        type="secondary",
+                        use_container_width=True,
+                    )
+                else:
+                    st.sidebar.warning("⚠️ No se pudo descargar el archivo de Drive.")
         else: st.sidebar.info("📂 Mapa geológico próximamente disponible.")
     
     parrafo_vol_ia, vol_total, df_resumen = "No hay información de volúmenes REPDA disponible.", 0.0, pd.DataFrame()
@@ -1374,6 +1399,7 @@ if seleccion_final:
                             marcador = st.empty()
                             barra = st.progress(0)
                             exito = False
+                            ruta_origen = ruta_salida = None
         
                             try:
                                 def alerta_mini(icono, texto, tipo="info"):
@@ -1413,6 +1439,11 @@ if seleccion_final:
                             except Exception as e:
                                 marcador.markdown(alerta_mini("❌", f"Error técnico: {str(e)}", "error"), unsafe_allow_html=True)
                                 with st.expander("Ver detalle técnico (Traceback)", expanded=True): st.code(traceback.format_exc(), language="python")
+                            finally:
+                                for _ruta_tmp in (ruta_origen, ruta_salida):
+                                    if _ruta_tmp:
+                                        try: os.unlink(_ruta_tmp)
+                                        except OSError: pass
         
                         if exito:
                             espacio_interactivo.empty()
@@ -1627,11 +1658,12 @@ if seleccion_final:
                     for pt in marcadores:
                         nom_pt = pt.get('nombre', 'Punto')
                         tipo_pt = pt.get('tipo', nom_pt)
-                        html_texto = f"""<div style="font-family: 'Segoe UI', sans-serif; min-width: 140px;"><h4 style="margin: 0 0 4px 0; color: #691C32; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 2px;">{nom_pt}</h4><div style="font-size: 11px; color: #333; line-height: 1.4;"><b>Tipo:</b> {tipo_pt}<br><b>Lat:</b> {pt['lat']:.5f}<br><b>Lon:</b> {pt['lon']:.5f}</div></div>"""
+                        nom_pt_h, tipo_pt_h = _html.escape(str(nom_pt)), _html.escape(str(tipo_pt))  # HTML seguro
+                        html_texto = f"""<div style="font-family: 'Segoe UI', sans-serif; min-width: 140px;"><h4 style="margin: 0 0 4px 0; color: #691C32; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 2px;">{nom_pt_h}</h4><div style="font-size: 11px; color: #333; line-height: 1.4;"><b>Tipo:</b> {tipo_pt_h}<br><b>Lat:</b> {pt['lat']:.5f}<br><b>Lon:</b> {pt['lon']:.5f}</div></div>"""
                         marcador = folium.Marker([pt['lat'], pt['lon']], icon=obtener_icono_infraestructura(tipo_pt, pt.get('color_hex')))
                         marcador.add_child(folium.Popup(html_texto, max_width=300, auto_close=False, close_on_click=False))
                         if mostrar_todos_los_nombres:
-                            marcador.add_child(folium.Tooltip(f"<span style='font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; color: #000000;'>{nom_pt}</span>", permanent=True, direction="top", offset=(0, -10), class_name="etiqueta-sin-fondo", style="background: transparent; border: none; box-shadow: none;"))
+                            marcador.add_child(folium.Tooltip(f"<span style='font-family: Arial, sans-serif; font-size: 13px; font-weight: bold; color: #000000;'>{nom_pt_h}</span>", permanent=True, direction="top", offset=(0, -10), class_name="etiqueta-sin-fondo", style="background: transparent; border: none; box-shadow: none;"))
                         marcador.add_to(m)
                     m.add_child(ElementoControlLeyenda(marcadores))
 
@@ -1654,7 +1686,22 @@ if seleccion_final:
 
         with tab_geo:
             if file_id_geo:
-                st.markdown(f'<div style="text-align: center; margin-top: 10px;"><img src="https://drive.google.com/uc?export=view&id={file_id_geo}" style="max-width:100%; border-radius:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);" /></div>', unsafe_allow_html=True)
+                bytes_img = descargar_imagen_drive_bytes(file_id_geo)
+                if bytes_img:
+                    st.image(
+                        bytes_img,
+                        caption=f"Mapa Geológico Oficial - Acuífero {clave_sel} ({nombre_acuifero})",
+                        use_container_width=True,
+                    )
+                else:
+                    # Fallback 1: enlace con formato de visualización moderno de Drive
+                    url_vista = f"https://drive.google.com/file/d/{file_id_geo}/view"
+                    st.warning(
+                        "No fue posible renderizar la previsualización directa debido a las directivas de seguridad de Google Drive."
+                    )
+                    st.link_button(
+                        "🔗 Abrir Mapa en Google Drive", url=url_vista, use_container_width=True
+                    )
             else:
                 st.info("📂 Mapa geológico estático próximamente disponible para este acuífero.")
 
