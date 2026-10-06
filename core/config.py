@@ -6,6 +6,15 @@ Created on Wed Aug 12 12:12:54 2026
 """
 import re
 
+# NOTAS DE MANTENIMIENTO
+# - ADN_NORMALIZADO se construye con t.upper(): si dos títulos solo difieren en
+#   mayúsculas ("Situación administrativa…" / "Situación Administrativa…") gana el ÚLTIMO.
+# - TEXTOS_REEMPLAZO contiene cifras fijas (corte 30-sep-2025, VEAS 19.116755 hm3/año,
+#   conteos REPDA). VERIFICAR en estandarizador_acuiferos.py / generador_word.py que se
+#   sustituyan por los valores de cada acuífero y no se inserten tal cual en todos.
+# - Se mezclan "∆" (U+2206) y "Δ" (U+0394) en los títulos; no unificar sin revisar el
+#   estandarizador, que compara ambas variantes.
+
 # =======================================================
 # 🗺️ 1. DICCIONARIOS GEOESPACIALES
 # =======================================================
@@ -123,7 +132,9 @@ DICCIONARIO_UNIDADES = {
     "g/cm3": "g/cm³", "kg/m3": "kg/m³",
     "SO4": "SO₄", "NO3": "NO₃", "CO3": "CO₃", "HCO3": "HCO₃", 
     "CaCO3": "CaCO₃", "PO4": "PO₄",
-    "m.s.n.m.":"msnm","m/día":"m/día", "hm³/ año":"hm³/año", "V":"∆V","V":"∆V", "hm³ /año":"hm³/año"
+    "m.s.n.m.":"msnm","m/día":"m/día", "hm³/ año":"hm³/año", "\uf044\uf044V":"∆V", "\uf044V":"∆V",
+    # ^ \uf044 = delta de la fuente Symbol de Word (carácter privado, no es una "V" suelta)
+    "hm³ /año":"hm³/año"
 }
 
 UNIDADES_LISTA = '|'.join(re.escape(k) for k in sorted(DICCIONARIO_UNIDADES.keys(), key=len, reverse=True))
