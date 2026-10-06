@@ -797,58 +797,6 @@ if "datos_reporte_nacional" in st.session_state:
                     else:
                         st.success("✨ Excelente noticia: No hay déficit hídrico en la región seleccionada para generar la Curva de Pareto.")
         # --- TAB 7: GEMELO DIGITAL (SIMULADOR WHAT-IF) ---
-        with tab_gemelo:
-            st.write("### 🔮 Simulador de Escenarios (What-If)")
-            st.caption("Ajusta las variables climáticas y de demanda para predecir el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
-            
-            with st.container(border=True):
-                col_sim1, col_sim2 = st.columns(2)
-                var_clima = col_sim1.slider(
-                    "🌧️ Efecto Cambio Climático en Recarga (%)", 
-                    min_value=-50, max_value=50, value=0, step=1, 
-                    help="Simula periodos de sequía prolongada (valores negativos) o años atípicamente húmedos (valores positivos)."
-                )
-                var_demanda = col_sim2.slider(
-                    "🏭 Crecimiento de Concesiones / Bombeo (%)", 
-                    min_value=-50, max_value=100, value=0, step=1, 
-                    help="Simula el impacto del crecimiento industrial, agrícola o poblacional aumentando las extracciones (VEAS)."
-                )
-
-            # ==========================================
-            # MOTOR MATEMÁTICO DEL GEMELO DIGITAL
-            # ==========================================
-            df_sim = df_filtrado.copy()
-            
-            # 1. Calculamos el volumen diferencial (Delta) exacto generado por los sliders
-            delta_recarga = df_sim['Recarga (R)'] * (var_clima / 100.0)
-            delta_veas = df_sim['VEAS'] * (var_demanda / 100.0)
-            
-            # 2. Aplicamos el Delta a los totales para visualización
-            df_sim['Recarga_Simulada'] = df_sim['Recarga (R)'] + delta_recarga
-            df_sim['VEAS_Simulado'] = df_sim['VEAS'] + delta_veas
-            
-            # 3. Sumamos/Restamos el Delta directamente a la DMA original (Evita errores de redondeo)
-            df_sim['DMA_Simulada'] = (df_sim['Disponibilidad (DMA)'] + delta_recarga - delta_veas).round(6)
-            
-            # Calcular Impactos Macro
-            r_tot_sim = df_sim['Recarga_Simulada'].sum()
-            dnc_tot = df_sim['DNC'].sum() 
-            veas_tot_sim = df_sim['VEAS_Simulado'].sum()
-            dma_tot_sim = df_sim['DMA_Simulada'].sum()
-            dma_tot_original = df_filtrado['Disponibilidad (DMA)'].sum()
-            
-            diferencia_neta = dma_tot_sim - dma_tot_original
-
-            # Encontrar acuíferos críticos (Nuevos) y Agravados (Peores)
-            df_sim['Estado_Original'] = np.where(df_sim['Disponibilidad (DMA)'] < 0, 'Déficit', 'Superávit')
-            df_sim['Estado_Simulado'] = np.where(df_sim['DMA_Simulada'] < 0, 'Déficit', 'Superávit')
-            
-            # 1. Los que acaban de pasar a números rojos
-            cond_nuevos = (df_sim['Estado_Original'] == 'Superávit') & (df_sim['Estado_Simulado'] == 'Déficit')
-            # 2. Los que ya estaban en rojo y perdieron AÚN MÁS agua
-            cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < df_sim['Disponibilidad (DMA)'])
-            
-            df_sim['Categoria_Alerta'] = "Sin peligro crítico"# --- TAB 7: GEMELO DIGITAL (SIMULADOR WHAT-IF) ---
             with tab_gemelo:
                 st.write("### 🔮 Simulador de Escenarios (What-If)")
                 st.caption("Ajusta las variables climáticas y de demanda para predecir el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
