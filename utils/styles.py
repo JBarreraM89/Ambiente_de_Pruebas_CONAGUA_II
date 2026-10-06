@@ -1,4 +1,16 @@
 # -*- coding: utf-8 -*-
+"""
+utils/styles.py
+CSS institucional (barra lateral y páginas internas).
+
+Cambios respecto a la versión anterior:
+- Se eliminó la regla `[data-testid="stSidebarNavItems"] a:hover` que estaba duplicada
+  (el aspecto visual no cambia).
+- `banner_institucional()` se conserva solo por compatibilidad: ya no hace nada y
+  puede dejar de importarse en las páginas.
+- Nota: los selectores data-testid dependen de la versión de Streamlit; conviene fijar
+  la versión en requirements.txt y revisar este archivo al actualizarla.
+"""
 import streamlit as st
 
 def inyectar_css_navegacion(imagen_b64=""):
@@ -10,10 +22,6 @@ def inyectar_css_navegacion(imagen_b64=""):
         [data-testid="stSidebar"] {{
             background-color: #F8FAFC !important;
             border-right: 1px solid #E2E8F0 !important;
-        }}
-        [data-testid="stSidebarNavItems"] a:hover {{ 
-            background-color: #FFFFFF !important; 
-            color: #0F172A !important; 
         }}
         [data-testid="stSidebar"] ::-webkit-scrollbar {{ width: 5px; height: 5px; }}
         [data-testid="stSidebar"] ::-webkit-scrollbar-thumb {{ background: transparent; border-radius: 10px; }}
@@ -285,5 +293,5 @@ def inyectar_css_oficial():
     st.markdown(css_oficial, unsafe_allow_html=True)
     
 def banner_institucional():
-    """El banner estático ha sido desactivado. Ahora todas las páginas usan el encabezado flotante nativo."""
-    pass
+    """Obsoleta: el banner estático fue reemplazado por el encabezado flotante nativo (no hace nada)."""
+    return None
