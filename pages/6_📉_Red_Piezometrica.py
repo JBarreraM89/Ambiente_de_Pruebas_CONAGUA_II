@@ -1,3 +1,4 @@
+# filepath: pages/6_📉_Red_Piezometrica.py
 # -*- coding: utf-8 -*-
 """
 Módulo de Evaluación y Monitoreo Geohidrológico (Nivel Enterprise)
@@ -12,6 +13,7 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import folium
+from folium import plugins
 from folium.plugins import HeatMap, Fullscreen
 from streamlit_folium import st_folium
 import unicodedata
@@ -22,10 +24,12 @@ import json
 import zipfile
 import tempfile
 import base64
+import time
+import math
 import branca.colormap as cm
 from branca.element import MacroElement
 from jinja2 import Template
-
+from pathlib import Path
 
 try:
     import geopandas as gpd
@@ -36,7 +40,7 @@ except ImportError:
 
 # Importaciones del Core
 from utils.styles import inyectar_css_oficial, banner_institucional
-from core.data_loader import CARPETA_DATOS, cargar_catalogo, cargar_datos_maestros
+from core.data_loader import CARPETA_DATOS, cargar_catalogo, cargar_datos_maestros, DIRECTORIO_RAIZ
 
 # =======================================================
 # 🎨 0. CONFIGURACIÓN E INYECCIÓN DE ESTILOS
@@ -80,6 +84,11 @@ with st.expander("📍 Búsqueda de Acuífero en Catálogo Oficial", expanded=ab
                     st.session_state["clave_piezo"] = str(datos_acu["CLAVE_SIGM"])
                     st.session_state["nombre_piezo"] = str(datos_acu["ACUÍFERO"])
                     st.session_state["area_total_piezo"] = round(float(datos_acu["AREA_KM2"]), 1)
+                    
+                    # Limpiar puntos al cambiar de acuífero
+                    st.session_state["marcadores_piezo"] = []
+                    st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+                    
                     st.rerun()
         except Exception as e:
             st.error(f"Error cargando catálogo: {e}")
@@ -176,7 +185,7 @@ if df_ac.empty:
 pozos_disponibles = sorted(df_ac['Pozo'].astype(str).unique().tolist())
 
 # =======================================================
-# 🗺️ 2.1 POLÍGONO OFICIAL (DESDE Acuiferos_Dashboard_V4)
+# 🗺️ 2.1 POLÍGONO OFICIAL Y GEOLOGÍA
 # =======================================================
 @st.cache_resource(show_spinner=False)
 def obtener_poligono_oficial(clave):
@@ -193,6 +202,269 @@ def obtener_poligono_oficial(clave):
     return None
 
 poligono_oficial_geom = obtener_poligono_oficial(clave_actual)
+
+@st.cache_data(show_spinner=False)
+def preparar_geologia_vectorial(clave_ac, _geom_acuifero):
+    if _geom_acuifero is None: return None, "Ninguna"
+    carpeta_cache = DIRECTORIO_RAIZ / "data" / "cache_geologia"
+    carpeta_cache.mkdir(parents=True, exist_ok=True)
+    ruta_cache_parquet = carpeta_cache / f"GEO_SHP_{clave_ac}.parquet"
+
+    gdf_sgm = None
+    if ruta_cache_parquet.exists() and ruta_cache_parquet.stat().st_size > 2000:
+        try:
+            gdf_cached = gpd.read_parquet(ruta_cache_parquet)
+            if len(gdf_cached.columns) > 3: gdf_sgm = gdf_cached
+            else: ruta_cache_parquet.unlink()
+        except Exception: pass
+
+    if gdf_sgm is None or gdf_sgm.empty:
+        rutas_busqueda = [DIRECTORIO_RAIZ / "data" / "geologia"]
+        for r_dir in rutas_busqueda:
+            if not r_dir.exists(): continue
+            for pq_p in r_dir.glob("*.parquet"):
+                if any(k in pq_p.name.lower() for k in ["lito", "geo", "cnal"]) and "estructura" not in pq_p.name.lower():
+                    try:
+                        gdf_temp = gpd.read_parquet(pq_p)
+                        if gdf_temp.crs is None: gdf_temp = gdf_temp.set_crs(epsg=4326)
+                        else: gdf_temp = gdf_temp.to_crs(epsg=4326)
+                        # AQUÍ USAMOS LA VARIABLE CON GUION BAJO
+                        recorte = gdf_temp.clip(_geom_acuifero)
+                        if not recorte.empty:
+                            gdf_sgm = recorte
+                            break
+                    except Exception: pass
+            if gdf_sgm is not None: break
+
+    if gdf_sgm is not None and not gdf_sgm.empty:
+        def reparar_texto_mojibake(val):
+            if val is None or pd.isna(val): return ""
+            s = str(val).strip()
+            try: s = s.encode('latin1').decode('utf-8')
+            except: pass
+            return s
+
+        for col in gdf_sgm.select_dtypes(include=['object', 'string']).columns:
+            if col != 'geometry': gdf_sgm[col] = gdf_sgm[col].apply(reparar_texto_mojibake)
+
+        cols_upper = [c.upper() for c in gdf_sgm.columns]
+        if "CLAVE_SGM" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE_SGM")]
+        elif "CLAVE" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE")]
+        elif "LITOLOGIA" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("LITOLOGIA")]
+        else: col_sel = gdf_sgm.columns[0]
+
+        def resolver_color(c, l, r):
+            texto_eval = f"{c} {l} {r}".upper()
+            if any(k in texto_eval for k in ["ALUV", "ALUVION", "SUELO"]): return "#FFF5AF"
+            if any(k in texto_eval for k in ["BASALT", "BASÁLT"]): return "#800080"
+            if any(k in texto_eval for k in ["ANDESIT", "ANDESÍT"]): return "#B43264"
+            if any(k in texto_eval for k in ["RIOLIT", "RIOLÍT"]): return "#ED5F7D"
+            if any(k in texto_eval for k in ["CALIZ", "CALÍZ"]): return "#2887CD"
+            if any(k in texto_eval for k in ["LUTIT", "LUTÍT"]): return "#9BB95A"
+            if any(k in texto_eval for k in ["ARENISC", "ARENA"]): return "#BED273"
+            if any(k in texto_eval for k in ["GRANIT", "GRANOD"]): return "#EB3732"
+            if "AGUA" in texto_eval: return "#A6CAE8"
+            return "#B0BEC5"
+
+        colores = []
+        for _, row in gdf_sgm.iterrows():
+            c_val = str(row.get(col_sel, "")).strip()
+            l_val = str(row.get("LITOLOGIA", "")).strip() if "LITOLOGIA" in gdf_sgm.columns else ""
+            r_val = str(row.get("ROCA", "")).strip() if "ROCA" in gdf_sgm.columns else ""
+            colores.append(resolver_color(c_val, l_val, r_val))
+            
+        gdf_sgm["COLOR_HEX"] = colores
+        gdf_sgm["geometry"] = gdf_sgm.geometry.simplify(tolerance=0.0001, preserve_topology=True)
+
+        try: gdf_sgm.to_parquet(ruta_cache_parquet)
+        except Exception: pass
+        return gdf_sgm, col_sel
+        
+    return None, "Ninguna"
+
+# =======================================================
+# 📍 2.2 CONTROL Y CARGA DE PUNTOS ADICIONALES (MANUAL Y CSV)
+# =======================================================
+if "marcadores_piezo" not in st.session_state:
+    st.session_state["marcadores_piezo"] = []
+if "csv_uploader_key_piezo" not in st.session_state:
+    st.session_state["csv_uploader_key_piezo"] = 0
+
+def limpiar_puntos_piezo():
+    st.session_state["marcadores_piezo"] = []
+    st.session_state["csv_uploader_key_piezo"] += 1
+
+def renderizar_controles_puntos_piezo():
+    tab_m, tab_c = st.tabs(["✍️ Manual", "📁 Carga CSV"])
+    
+    with tab_m:
+        # 1. ENCAPSULAMOS EN UN FORMULARIO PARA EVITAR RERUNS AL ESCRIBIR
+        with st.form(key="form_manual_piezo", clear_on_submit=True):
+            nom = st.text_input("Identificador:", placeholder="Ej. Pozo San Bernardo")
+            tipo = st.selectbox("Tipo de Infraestructura:", ["Pozo existente", "Pozo requerido", "PTAR existente", "PTAR requerido", "Tanque existente", "Tanque requerido"])
+            c1, c2 = st.columns(2)
+            lat = c1.number_input("Latitud (N):", value=0.0, format="%.5f")
+            lon = c2.number_input("Longitud (W):", value=0.0, format="%.5f")
+            
+            submit_manual = st.form_submit_button("➕ Agregar", type="primary", use_container_width=True)
+            
+            if submit_manual:
+                if lat != 0.0 and lon != 0.0:
+                    lon_final = -abs(float(lon))
+                    st.session_state["marcadores_piezo"].append({
+                        "lat": float(lat), "lon": lon_final,
+                        "nombre": nom.strip() if nom.strip() else f"Punto Manual {len(st.session_state['marcadores_piezo'])+1}",
+                        "tipo": tipo,
+                        "atributos": {},
+                        "fuente": "manual"
+                    })
+                    st.rerun()
+        
+        # El botón limpiar queda fuera del formulario
+        if st.button("🧹 Limpiar Todos los Puntos", use_container_width=True, key="btn_limpiar_manual_piezo"):
+            limpiar_puntos_piezo()
+            st.rerun()
+        
+    with tab_c:
+        st.markdown("""<div style="background-color: #f8f9fa; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;">Sube tu archivo y mapea las columnas. El mapa no se actualizará hasta que des clic en "Cargar Puntos CSV".</div>""", unsafe_allow_html=True)
+        
+        up_key = f"csv_up_piezo_{st.session_state['csv_uploader_key_piezo']}"
+        archivo_csv = st.file_uploader("Subir CSV", type=['csv'], key=up_key, label_visibility="collapsed")
+        
+        c_csv1, c_csv2 = st.columns(2)
+        if c_csv2.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_csv_piezo"):
+            limpiar_puntos_piezo()
+            st.rerun()
+        
+        if archivo_csv is not None:
+            try:
+                archivo_csv.seek(0)
+                try:
+                    df_pts = pd.read_csv(archivo_csv, sep=None, engine='python', encoding='utf-8-sig')
+                except Exception:
+                    archivo_csv.seek(0)
+                    df_pts = pd.read_csv(archivo_csv, sep=None, engine='python', encoding='latin1')
+                    
+                df_pts.columns = df_pts.columns.astype(str).str.strip()
+                cols = df_pts.columns.tolist()
+                cols_upper = [c.upper() for c in cols]
+                
+                # Autodetección inteligente de columnas
+                idx_lat = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['LATITUD', 'LAT', 'Y', 'NORTE'])), 0)
+                idx_lon = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['LONGITUD', 'LON', 'LONG', 'X', 'OESTE'])), 0)
+                idx_infra = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['INFRAESTRUCTURA', 'INFRA', 'TIPO', 'CATEGORIA'])), None)
+                idx_nom = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['NOMBRE/SITIO', 'NOMBRE', 'SITIO', 'NOM', 'ID', 'ESTACION'])), None)
+                idx_color = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['COLOR', 'HEX'])), None)
+                
+                # 2. ENCAPSULAMOS EL CSV EN UN FORMULARIO PARA EVITAR RERUNS AL SELECCIONAR COLUMNAS
+                with st.form(key="form_csv_piezo"):
+                    col_lat = st.selectbox("Columna Latitud:", cols, index=idx_lat)
+                    col_lon = st.selectbox("Columna Longitud:", cols, index=idx_lon)
+                    
+                    opciones_opt = ["(Ninguna)"] + cols
+                    col_nom = st.selectbox("Columna Nombre (Opcional):", opciones_opt, index=(idx_nom + 1) if idx_nom is not None else 0)
+                    col_infra = st.selectbox("Columna Tipo Infraestructura (Opcional):", opciones_opt, index=(idx_infra + 1) if idx_infra is not None else 0)
+                    col_color = st.selectbox("Columna Color HEX (Opcional):", opciones_opt, index=(idx_color + 1) if idx_color is not None else 0)
+                    
+                    cols_popup = st.multiselect("Columnas para el Popup:", cols)
+                    
+                    submit_csv = st.form_submit_button("🚀 Cargar Puntos CSV", type="primary", use_container_width=True)
+                    
+                    if submit_csv:
+                        nuevos = []
+                        for _, row in df_pts.iterrows():
+                            try:
+                                lat_v = pd.to_numeric(str(row[col_lat]).replace(',', '.').strip(), errors='coerce')
+                                lon_v = pd.to_numeric(str(row[col_lon]).replace(',', '.').strip(), errors='coerce')
+                                if pd.notna(lat_v) and pd.notna(lon_v):
+                                    infra_val = str(row[col_infra]).strip() if col_infra != "(Ninguna)" and pd.notna(row[col_infra]) else "Pozo existente"
+                                    nom_v = str(row[col_nom]).strip() if col_nom != "(Ninguna)" and pd.notna(row[col_nom]) else infra_val
+                                    color_val = str(row[col_color]).strip() if col_color != "(Ninguna)" and pd.notna(row[col_color]) else None
+                                    
+                                    attrs = {c: str(row[c]) for c in cols_popup}
+                                    
+                                    nuevos.append({
+                                        "lat": float(lat_v), "lon": -abs(float(lon_v)),
+                                        "nombre": nom_v, "tipo": infra_val, "color_hex": color_val,
+                                        "atributos": attrs, "fuente": "csv"
+                                    })
+                            except: pass
+                            
+                        if nuevos:
+                            st.session_state["marcadores_piezo"].extend(nuevos)
+                            st.success(f"✅ {len(nuevos)} puntos cargados correctamente.")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error("❌ No se encontraron coordenadas válidas.")
+            except Exception as e:
+                st.error(f"Error procesando CSV: {e}")
+        else:
+            c_csv1.button("🚀 Cargar", use_container_width=True, type="primary", disabled=True, key="btn_cargar_csv_dis_piezo")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📍 Puntos de Referencia / Pozos")
+st.sidebar.markdown("""
+    <div style="font-size: 11px; color: #666; margin-top: -14px; margin-bottom: 8px;">
+        Ingresa coordenadas manuales o carga masiva vía CSV
+    </div>
+""", unsafe_allow_html=True)
+st.sidebar.markdown("""
+    <style>
+        section[data-testid="stSidebar"] button[kind="secondary"],
+        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]),
+        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button,
+        section[data-testid="stSidebar"] div[data-testid="stLinkButton"] a {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 6px !important;
+            color: #333333 !important;
+            font-weight: 600 !important;
+            width: 100% !important;
+            min-height: 38px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            text-decoration: none !important;
+            transition: all 0.2s ease !important;
+            margin-top: 4px !important;
+        }
+
+        section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]):hover,
+        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button:hover,
+        section[data-testid="stSidebar"] div[data-testid="stLinkButton"] a:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+
+        section[data-testid="stSidebar"] button[kind="primary"] {
+            border-radius: 6px !important;
+            min-height: 38px !important;
+            font-weight: 600 !important;
+            margin-top: 4px !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+with st.sidebar:
+    renderizar_controles_puntos_piezo()
+    
+    if len(st.session_state["marcadores_piezo"]) > 0:
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        df_descarga = pd.DataFrame(st.session_state["marcadores_piezo"])
+        if not df_descarga.empty:
+            if 'atributos' in df_descarga.columns:
+                df_attrs = pd.json_normalize(df_descarga['atributos'])
+                df_descarga = pd.concat([df_descarga.drop(columns=['atributos']), df_attrs], axis=1)
+            
+            df_descarga = df_descarga.rename(columns={"tipo": "Infraestructura", "nombre": "Nombre", "lat": "Latitud", "lon": "Longitud"})
+            cols_to_keep = ["Infraestructura", "Nombre", "Latitud", "Longitud"] + [c for c in df_descarga.columns if c not in ["Infraestructura", "Nombre", "Latitud", "Longitud", "fuente", "color_hex"]]
+            csv_data = df_descarga[cols_to_keep].to_csv(index=False).encode('utf-8-sig')
+            st.download_button(label="⬇️ Descargar Puntos (CSV)", data=csv_data, file_name="puntos_piezometria.csv", mime="text/csv", use_container_width=True)
 
 # =======================================================
 # ⚙️ 3. MOTOR GEOSTADÍSTICO MATEMÁTICO (DESACOPLADO)
@@ -597,6 +869,7 @@ with tab_mapa:
                     step=0.5 if rango_estimado < 20 else 1.0
                 )
                 densidad_flujo = st.slider("Densidad de Vectores de Flujo:", 8, 36, 20, 2)
+                ver_geologia = st.checkbox("⛰️ Superponer Geología SGM", value=False)
             
             ph_variograma = st.empty()
 
@@ -623,7 +896,7 @@ with tab_mapa:
                         
                         if modo_delimitacion == "Polígono Oficial del Acuífero" and geom_activa is not None:
                             try:
-                                from scipy.spatial import ConvexHull # <--- AQUÍ
+                                from scipy.spatial import ConvexHull
                                 from matplotlib.path import Path
                                 if geom_activa.geom_type == 'Polygon':
                                     path_poly = Path(np.array(geom_activa.exterior.coords))
@@ -657,12 +930,19 @@ with tab_mapa:
                         img_isolineas, geojson_iso, shp_iso_zip = render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_real)
                         img_flujo, geojson_flujo, shp_flujo_zip = render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, var_real, densidad_flujo, inside_mask)
 
-                        # Preparación de datos de Kriging para exportación
+                        # Preparación de datos de Kriging para exportación y para JS
                         geotiff_bytes = generar_geotiff_bytes(Z_masked, bounds)
                         mask_val = ~np.isnan(Z_masked)
                         df_grid = pd.DataFrame({"LONGITUD": np.round(X[mask_val], 6), "LATITUD": np.round(Y[mask_val], 6), "VALOR": np.round(Z_masked[mask_val], 3)})
                         geojson_krig = json.dumps({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["LONGITUD"], r["LATITUD"]]}, "properties": {"VALOR": r["VALOR"], "VARIABLE": var_real}} for _, r in df_grid.iterrows()]}, indent=2).encode('utf-8')
                         shp_krig_zip = empaquetar_shapefile_zip(gpd.GeoDataFrame(df_grid, geometry=[Point(xy) for xy in zip(df_grid["LONGITUD"], df_grid["LATITUD"])], crs="EPSG:4326"), f"kriging_{clave_actual}") if (GEOPANDAS_INSTALADO and not df_grid.empty) else None
+
+                        # Convertir Z_masked a JSON para el click en el mapa
+                        z_list = []
+                        for row in Z_masked:
+                            z_list.append([None if math.isnan(v) else round(float(v), 2) for v in row])
+                        z_data_json = json.dumps(z_list)
+                        bounds_json = json.dumps(bounds)
 
                         # Semivariograma
                         with ph_variograma.container():
@@ -694,6 +974,9 @@ with tab_mapa:
                         centro_lat, centro_lon = df_ultimo['Latitud'].mean(), df_ultimo['Longitud'].mean()
                         m = folium.Map(location=[centro_lat, centro_lon], zoom_start=10, tiles=None, control_scale=False, zoom_control=True)
                         m.fit_bounds(bounds)
+
+                        # Agregar Regla de Medición
+                        plugins.MeasureControl(position='topleft', primary_length_unit='kilometers', primary_area_unit='sqmeters', active_color='#691C32', completed_color='#9f2241').add_to(m)
 
                         # Estilos Leaflet
                         css_controles = """
@@ -743,6 +1026,23 @@ with tab_mapa:
                                 tooltip=f"<b>Acuífero:</b> {nombre_actual} ({clave_actual})"
                             ).add_to(capa_poligono)
                             capa_poligono.add_to(m)
+
+                        # Geología SGM
+                        if ver_geologia and geom_activa is not None:
+                            gdf_geo, col_sel_geo = preparar_geologia_vectorial(clave_actual, geom_activa)
+                            if gdf_geo is not None and not gdf_geo.empty:
+                                capa_geologia = folium.FeatureGroup(name="⛰️ Geología SGM", show=True)
+                                folium.GeoJson(
+                                    gdf_geo.__geo_interface__,
+                                    style_function=lambda feature: {
+                                        'fillColor': feature['properties'].get('COLOR_HEX', '#B0BEC5'),
+                                        'color': '#555',
+                                        'weight': 0.5,
+                                        'fillOpacity': 0.6
+                                    },
+                                    tooltip=folium.GeoJsonTooltip(fields=[col_sel_geo, 'LITOLOGIA'], aliases=['Clave:', 'Litología:'])
+                                ).add_to(capa_geologia)
+                                capa_geologia.add_to(m)
 
                         # Capa Calor
                         capa_calor = folium.FeatureGroup(name="🔥 Mapa de Calor (Zonas Críticas)", show=False)
@@ -803,8 +1103,58 @@ with tab_mapa:
                                 tooltip=f"<b>Pozo {row['Pozo']}</b><br>Valor Modelo: {row[var_real]:.2f}<br>Año Medición: {row['Año']}"
                             ).add_to(capa_pozos)
                         capa_pozos.add_to(m)
+
+                        # Puntos Adicionales (Manuales / CSV)
+                        if st.session_state.get("marcadores_piezo"):
+                            capa_manual = folium.FeatureGroup(name="📍 Puntos Manuales", show=True)
+                            capa_csv = folium.FeatureGroup(name="🟦 Puntos CSV", show=True)
+                            
+                            hay_manual = False
+                            hay_csv = False
+
+                            for pt in st.session_state["marcadores_piezo"]:
+                                html_popup = f"<div style='font-family: Arial; font-size: 12px; min-width: 150px;'><h4 style='margin: 0 0 5px 0; color: #691C32;'>{pt['nombre']}</h4>"
+                                html_popup += f"<b>Tipo:</b> {pt.get('tipo', 'Desconocido')}<br>"
+                                for k, v in pt.get("atributos", {}).items():
+                                    html_popup += f"<b>{k}:</b> {v}<br>"
+                                html_popup += f"<b>Latitud:</b> {pt['lat']:.5f}<br><b>Longitud:</b> {pt['lon']:.5f}</div>"
+                                
+                                fuente = pt.get("fuente", "manual")
+                                
+                                # Usamos CircleMarker nativo para asegurar que siempre se renderice sobre el Kriging
+                                if fuente == "csv":
+                                    folium.CircleMarker(
+                                        location=[pt["lat"], pt["lon"]],
+                                        radius=6,
+                                        color="#ffffff",
+                                        weight=1.5,
+                                        fill=True,
+                                        fill_color="#2980b9", # Azul para CSV
+                                        fill_opacity=1.0,
+                                        popup=folium.Popup(html_popup, max_width=300),
+                                        tooltip=pt["nombre"]
+                                    ).add_to(capa_csv)
+                                    hay_csv = True
+                                else:
+                                    folium.CircleMarker(
+                                        location=[pt["lat"], pt["lon"]],
+                                        radius=7,
+                                        color="#ffffff",
+                                        weight=2,
+                                        fill=True,
+                                        fill_color="#d35400", # Naranja para Manual
+                                        fill_opacity=1.0,
+                                        popup=folium.Popup(html_popup, max_width=300),
+                                        tooltip=pt["nombre"]
+                                    ).add_to(capa_manual)
+                                    hay_manual = True
+                            
+                            if hay_manual:
+                                capa_manual.add_to(m)
+                            if hay_csv:
+                                capa_csv.add_to(m)
                         
-                        # Gradiente Piezométrico
+                        # Gradiente Piezométrico y Click Event
                         vmid = (vmin + vmax) / 2.0
                         vmin_fmt, vmid_fmt, vmax_fmt = f"{vmin:.1f}", f"{vmid:.1f}", f"{vmax:.1f}"
                         var_titulo_limpio = "Carga Hidráulica (msnm)" if "Carga" in var_interp else "Profundidad del Nivel (m)"
@@ -869,6 +1219,34 @@ with tab_mapa:
                                     return div;
                                 }};
                                 gradControl.addTo({{{{this._parent.get_name()}}}});
+
+                                // Lógica de Clic en el Ráster (Kriging)
+                                var z_data = {z_data_json};
+                                var bounds = {bounds_json};
+                                var min_y = bounds[0][0];
+                                var min_x = bounds[0][1];
+                                var max_y = bounds[1][0];
+                                var max_x = bounds[1][1];
+                                var rows = z_data.length;
+                                var cols = z_data[0].length;
+
+                                {{{{this._parent.get_name()}}}}.on('click', function(e) {{
+                                    var lat = e.latlng.lat;
+                                    var lng = e.latlng.lng;
+                                    if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
+                                        var r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
+                                        var c = Math.floor(((lng - min_x) / (max_x - min_x)) * (cols - 1));
+                                        r = Math.max(0, Math.min(rows - 1, r));
+                                        c = Math.max(0, Math.min(cols - 1, c));
+                                        var val = z_data[r][c];
+                                        if (val !== null) {{
+                                            L.popup()
+                                                .setLatLng(e.latlng)
+                                                .setContent("<div style='font-family: Arial; font-size: 12px; padding: 5px; min-width: 120px;'><b>Valor Interpolado:</b><br><span style='color:#691C32; font-size: 16px; font-weight: bold;'>" + val.toFixed(2) + "</span></div>")
+                                                .openOn({{{{this._parent.get_name()}}}});
+                                        }}
+                                    }}
+                                }});
                                 {{% endmacro %}}
                                 """)
                         m.add_child(ControlesVisualesMapa())
