@@ -1177,14 +1177,14 @@ with tab_mapa:
                             /* ========================================================= */
                             /* ✨ ESTILOS PARA POPUPS TRANSPARENTES (TOOLTIP)            */
                             /* ========================================================= */
-                            .maplibregl-popup-content {{
+                            .transparent-popup .maplibregl-popup-content {{
                                 background: none !important;
                                 box-shadow: none !important;
                                 border: none !important;
                                 padding: 0 !important;
                             }}
-                            .maplibregl-popup-tip {{ display: none !important; }}
-                            .maplibregl-popup-close-button {{ display: none !important; }}
+                            .transparent-popup .maplibregl-popup-tip {{ display: none !important; }}
+                            .transparent-popup .maplibregl-popup-close-button {{ display: none !important; }}
                             
                             .custom-transparent-popup {{
                                 font-family: 'Segoe UI', sans-serif;
@@ -1415,7 +1415,7 @@ with tab_mapa:
                                     <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Kriging: <span id="val-opac">65%</span></label>
                                     <input type="range" class="slider-ctrl" id="slider-opac" min="0" max="1" step="0.05" value="0.65" oninput="cambiarOpacidadKriging(this.value)">
                                 </div>
-                                <div class="dock-section" id="sec-opac-geo" style="display: {'block' if dic_leyenda_rocas else 'none'};">
+                                <div class="dock-section" id="sec-opac-geo" style="display: none;">
                                     <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Geología: <span id="val-opac-geo">50%</span></label>
                                     <input type="range" class="slider-ctrl" id="slider-opac-geo" min="0" max="1" step="0.05" value="0.50" oninput="cambiarOpacidadGeologia(this.value)">
                                 </div>
@@ -1520,6 +1520,21 @@ with tab_mapa:
                         </div>
 
                         <script>
+                            // Iconos SVG para Fullscreen
+                            function cambiarOpacidadKriging(valor) {{
+                                if (map.getLayer('kriging-layer')) {{
+                                    map.setPaintProperty('kriging-layer', 'raster-opacity', parseFloat(valor));
+                                    document.getElementById('val-opac').innerText = Math.round(valor * 100) + '%';
+                                }}
+                            }}
+
+                            function cambiarOpacidadGeologia(valor) {{
+                                if (map.getLayer('geo-fill')) {{
+                                    map.setPaintProperty('geo-fill', 'fill-opacity', parseFloat(valor));
+                                    document.getElementById('val-opac-geo').innerText = Math.round(valor * 100) + '%';
+                                }}
+                            }}
+
                             // Iconos SVG para Fullscreen
                             const iconExpandSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
                             const iconCompressSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
@@ -1983,11 +1998,12 @@ with tab_mapa:
                                         const circlePoly = turf.circle(centroCirculo, radioKm, {{ steps: 64, units: 'kilometers' }});
                                         draw.add(circlePoly);
                                         
-                                        // Mostrar Popup al finalizar el círculo
+                                        // Mostrar Popup al finalizar el círculo (CON CLASE TRANSPARENTE)
                                         if (popupActivo) popupActivo.remove();
-                                        popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10 }})
+                                        popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                             .setLngLat(coords)
                                             .setHTML(`<div class="custom-transparent-popup">
+                                                        <h4>⭕ Círculo Finalizado</h4>
                                                         <b>Radio:</b> ${{(radioKm * 1000).toFixed(1)}} m<br>
                                                         <b>Área:</b> ${{(turf.area(circlePoly) / 10000).toFixed(2)}} ha
                                                       </div>`)
@@ -2025,19 +2041,18 @@ with tab_mapa:
                                 }}
                             }});
 
-                            // 2. POPUP AL FINALIZAR EL DIBUJO
+                            // 2. POPUP AL FINALIZAR EL DIBUJO (CON CLASE TRANSPARENTE)
                             map.on('draw.create', (e) => {{
                                 const feat = e.features[0];
                                 const texto = generarTextoMedicion(feat);
                                 
-                                // Determinar dónde anclar el popup
                                 let coords;
                                 if (feat.geometry.type === 'Point') coords = feat.geometry.coordinates;
                                 else if (feat.geometry.type === 'LineString') coords = feat.geometry.coordinates[feat.geometry.coordinates.length - 1];
-                                else coords = turf.centroid(feat).geometry.coordinates; // Centro del polígono
+                                else coords = turf.centroid(feat).geometry.coordinates;
 
                                 if (popupActivo) popupActivo.remove();
-                                popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10 }})
+                                popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                     .setLngLat(coords)
                                     .setHTML(`<div class="custom-transparent-popup">
                                                 <h4>📏 Medición Finalizada</h4>
@@ -2053,21 +2068,19 @@ with tab_mapa:
                                     const feat = e.features[0];
                                     const texto = generarTextoMedicion(feat);
                                     
-                                    // Actualizar la caja si el panel está abierto
                                     const box = document.getElementById('draw-measure-box');
                                     if (box) box.innerHTML = texto;
 
-                                    // Determinar dónde anclar el popup
                                     let coords;
                                     if (feat.geometry.type === 'Point') coords = feat.geometry.coordinates;
                                     else if (feat.geometry.type === 'LineString') {{
                                         const pts = feat.geometry.coordinates;
-                                        coords = pts[Math.floor(pts.length / 2)]; // Mitad de la línea
+                                        coords = pts[Math.floor(pts.length / 2)];
                                     }}
-                                    else coords = turf.centroid(feat).geometry.coordinates; // Centro del polígono
+                                    else coords = turf.centroid(feat).geometry.coordinates;
 
                                     if (popupActivo) popupActivo.remove();
-                                    popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10 }})
+                                    popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                         .setLngLat(coords)
                                         .setHTML(`<div class="custom-transparent-popup">
                                                     <h4>📏 Medición</h4>
@@ -2078,7 +2091,7 @@ with tab_mapa:
                             }});
 
                             // =========================================================
-                            // 🛡️ PROTECCIÓN DE EVENTOS Y CURSOR DURANTE EL DIBUJO
+                            // 🛡️ RESTAURACIÓN DE POPUPS NORMALES (POZOS Y GEOLOGÍA)
                             // =========================================================
                             function isDrawingMode() {{
                                 try {{
@@ -2088,12 +2101,12 @@ with tab_mapa:
 
                             // Eventos de Clic en Pozos Oficiales
                             map.on('click', 'pozos-layer', (e) => {{
-                                if (isDrawingMode()) return; // Ignorar si estamos dibujando
+                                if (isDrawingMode()) return;
                                 if (popupActivo) popupActivo.remove();
                                 const p = e.features[0].properties;
                                 popupActivo = new maplibregl.Popup().setLngLat(e.lngLat)
-                                    .setHTML(`<div class="custom-transparent-popup">
-                                                <h4>📍 Pozo: ${{p.Pozo}}</h4>
+                                    .setHTML(`<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:150px;">
+                                                <h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">📍 Pozo: ${{p.Pozo}}</h4>
                                                 <b>${{p.Variable}}:</b> ${{p.Valor}}<br>
                                                 <b>Año de Medición:</b> ${{p.Año}}
                                               </div>`)
@@ -2105,10 +2118,10 @@ with tab_mapa:
                             map.on('click', 'add-layer-csv', (e) => showAddPopup(e));
 
                             function showAddPopup(e) {{
-                                if (isDrawingMode()) return; // Ignorar si estamos dibujando
+                                if (isDrawingMode()) return;
                                 if (popupActivo) popupActivo.remove();
                                 const p = e.features[0].properties;
-                                let html = `<div class="custom-transparent-popup"><h4>${{p.nombre}}</h4><b>Tipo:</b> ${{p.tipo}}<br>`;
+                                let html = `<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:150px;"><h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">${{p.nombre}}</h4><b>Tipo:</b> ${{p.tipo}}<br>`;
                                 let attrs = p.atributos;
                                 if (typeof attrs === 'string') {{
                                     try {{ attrs = JSON.parse(attrs); }} catch(err) {{ attrs = {{}}; }}
@@ -2120,7 +2133,7 @@ with tab_mapa:
                             
                             // Eventos de Clic en Geología
                             map.on('click', 'geo-fill', (e) => {{
-                                if (isDrawingMode()) return; // Ignorar si estamos dibujando
+                                if (isDrawingMode()) return;
                                 if (popupActivo) popupActivo.remove();
                                 const p = e.features[0].properties;
                                 const formacion = (p.FORMACION && p.FORMACION !== 'null' && p.FORMACION !== 'NINGUNO') ? p.FORMACION : 'Formación No Asignada';
@@ -2138,19 +2151,24 @@ with tab_mapa:
                                 if (!edadGeo.trim()) edadGeo = p.ERA || 'S/D';
 
                                 let html = `
-                                    <div class="custom-transparent-popup">
-                                        <h4>${{formacion}}</h4>
-                                        <b>Clave:</b> ${{claveSgm}}<br>
-                                        <b>Litología:</b> ${{litologia}}<br>
+                                    <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5; min-width:200px;">
+                                        <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
+                                            <div style="display:flex; align-items:center; gap:6px;">
+                                                <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block;"></span>
+                                                <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{formacion}}</h4>
+                                            </div>
+                                            <span style="background:#F1F5F9; border:1px solid #CBD5E1; color:#334155; font-size:9.5px; font-weight:700; padding:1px 4px; border-radius:3px;">${{claveSgm}}</span>
+                                        </div>
+                                        <b>Litología:</b> <span style="color:#0f172a; font-weight:600;">${{litologia}}</span><br>
                                         <b>Tipo de Roca:</b> ${{roca}}<br>
                                         <b>Edad Geológica:</b> ${{edadGeo}}<br>
-                                        <span style="color:#64748B; font-size:10.5px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
+                                        <span style="color:#64748B; font-size:10px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
                                     </div>
                                 `;
                                 popupActivo = new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
                             }});
 
-                            // Controlar el cursor (Evitar que cambie a manita si estamos dibujando)
+                            // Controlar el cursor
                             const capasInteractivas = ['pozos-layer', 'add-layer-manual', 'add-layer-csv', 'geo-fill'];
                             capasInteractivas.forEach(capa => {{
                                 map.on('mouseenter', capa, () => {{
@@ -2161,7 +2179,7 @@ with tab_mapa:
                                 }});
                             }});
 
-                            // Toggles de Capas y Sincronización con la Leyenda
+                            // Toggles de Capas
                             const toggleLayer = (chkId, layerIds, legId = null) => {{
                                 const chk = document.getElementById(chkId);
                                 if (chk) {{
@@ -2185,8 +2203,19 @@ with tab_mapa:
                             toggleLayer('chk-csv', ['add-layer-csv'], 'leg-csv');
                             toggleLayer('chk-geo', ['geo-fill', 'geo-line'], 'leg-geo');
 
+                            // Ocultar/Mostrar el slider de transparencia de Geología
+                            const chkGeo = document.getElementById('chk-geo');
+                            if (chkGeo) {{
+                                chkGeo.addEventListener('change', (e) => {{
+                                    const secOpacGeo = document.getElementById('sec-opac-geo');
+                                    if (secOpacGeo) {{
+                                        secOpacGeo.style.display = e.target.checked ? 'block' : 'none';
+                                    }}
+                                }});
+                            }}
+
                             // =========================================================
-                            // 🖱️ HACER POPUPS ARRASTRABLES (DRAGGABLE) AUTOMÁTICAMENTE
+                            // 🖱️ HACER POPUPS ARRASTRABLES (SOLO LOS DE DIBUJO)
                             // =========================================================
                             let isDraggingPopup = false;
 
@@ -2207,13 +2236,14 @@ with tab_mapa:
                             const observerPopups = new MutationObserver((mutations) => {{
                                 mutations.forEach((mutation) => {{
                                     mutation.addedNodes.forEach((node) => {{
-                                        if (node.classList && node.classList.contains('maplibregl-popup')) {{
+                                        // ⚡ CONDICIÓN ACTUALIZADA: Solo afecta si tiene la clase 'transparent-popup'
+                                        if (node.classList && node.classList.contains('maplibregl-popup') && node.classList.contains('transparent-popup')) {{
                                             if (popupActivo && !node.dataset.draggable) {{
                                                 node.dataset.draggable = "true";
                                                 node.style.cursor = 'move';
                                                 node.addEventListener('mousedown', (e) => {{
                                                     isDraggingPopup = true;
-                                                    map.dragPan.disable(); // Evita que el mapa se mueva al arrastrar
+                                                    map.dragPan.disable();
                                                     e.stopPropagation();
                                                 }});
                                             }}
