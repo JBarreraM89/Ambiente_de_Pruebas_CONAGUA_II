@@ -2286,35 +2286,39 @@ with tab_mapa:
                             if shp_flujo_zip:
                                 st.download_button("📦 Shapefile Vectores (.zip)", data=shp_flujo_zip, file_name=f"vectores_flujo_{clave_actual}.zip", mime="application/zip", use_container_width=True)
                             st.download_button("📄 GeoJSON Vectores (.geojson)", data=geojson_flujo, file_name=f"vectores_flujo_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                    
+                    # =======================================================
+                    # 🏷️ 3. LEYENDA CARTOGRÁFICA OFICIAL SGM (EN PYTHON)
+                    # =======================================================
+                    if dic_leyenda_rocas:
+                        st.markdown(f"""
+                            <div style='background-color:#F8FAFC; border-left:4px solid #691C32; padding:10px 14px; border-radius:4px; margin-top:10px; margin-bottom:8px;'>
+                                <span style='font-size:12.5px; font-weight:bold; color:#691C32;'>SIMBOLOGÍA LITOLÓGICA OFICIAL (SGM - INEGI)</span>
+                                <span style='font-size:11px; color:#64748B; margin-left:14px;'><b>Origen de Reglas:</b> {ORIGEN_SGM_GLOBAL} | <b>Campo:</b> <code>{col_sel_geo}</code></span>
+                            </div>
+                        """, unsafe_allow_html=True)
+
+                        items_html = [
+                            f"<div style='display:inline-flex; align-items:center; margin-right:18px; margin-bottom:6px;'>"
+                            f"<span style='width:16px; height:16px; background-color:{color}; border-radius:3px; display:inline-block; margin-right:7px; border:1px solid rgba(0,0,0,0.3);'></span>"
+                            f"<span style='font-size:11.5px; font-weight:700; color:#1E293B;'>{roca}</span>"
+                            f"</div>"
+                            for roca, color in dic_leyenda_rocas.items()
+                        ]
+                        st.markdown(f"<div style='background-color:#ffffff; padding:12px; border-radius:6px; border:1px solid #E2E8F0; line-height:1.6;'>{''.join(items_html)}</div>", unsafe_allow_html=True)
+
+                    # Inspección de atributos de la litología
+                    try:
+                        if gdf_geo is not None and not gdf_geo.empty:
+                            with st.expander("🔬 Inspeccionar Tabla de Atributos Vectoriales de la Capa SGM", expanded=False):
+                                st.dataframe(gdf_geo.drop(columns=["geometry"], errors="ignore").head(20), use_container_width=True)
+                    except NameError:
+                        pass
+
         else:
             st.warning("⚠️ Se requieren al menos 4 pozos con coordenadas y elevación de terreno válidas para resolver la matriz matemática de interpolación.")
     renderizar_pestaña_mapa()
-
-# =======================================================
-# 🏷️ 3. LEYENDA CARTOGRÁFICA OFICIAL SGM (EN PYTHON)
-# =======================================================
-if 'dic_leyenda_rocas' in locals() and dic_leyenda_rocas:
-    st.markdown(f"""
-        <div style='background-color:#F8FAFC; border-left:4px solid #691C32; padding:10px 14px; border-radius:4px; margin-top:10px; margin-bottom:8px;'>
-            <span style='font-size:12.5px; font-weight:bold; color:#691C32;'>SIMBOLOGÍA LITOLÓGICA OFICIAL (SGM - INEGI)</span>
-            <span style='font-size:11px; color:#64748B; margin-left:14px;'><b>Origen de Reglas:</b> {ORIGEN_SGM_GLOBAL} | <b>Campo:</b> <code>{col_sel_geo}</code></span>
-        </div>
-    """, unsafe_allow_html=True)
-
-    items_html = [
-        f"<div style='display:inline-flex; align-items:center; margin-right:18px; margin-bottom:6px;'>"
-        f"<span style='width:16px; height:16px; background-color:{color}; border-radius:3px; display:inline-block; margin-right:7px; border:1px solid rgba(0,0,0,0.3);'></span>"
-        f"<span style='font-size:11.5px; font-weight:700; color:#1E293B;'>{roca}</span>"
-        f"</div>"
-        for roca, color in dic_leyenda_rocas.items()
-    ]
-    st.markdown(f"<div style='background-color:#ffffff; padding:12px; border-radius:6px; border:1px solid #E2E8F0; line-height:1.6;'>{''.join(items_html)}</div>", unsafe_allow_html=True)
-
-# Inspección de atributos de la litología
-if 'gdf_geo' in locals() and gdf_geo is not None and not gdf_geo.empty:
-    with st.expander("🔬 Inspeccionar Tabla de Atributos Vectoriales de la Capa SGM", expanded=False):
-        st.dataframe(gdf_geo.drop(columns=["geometry"], errors="ignore").head(20), use_container_width=True)
-
+    
 # --- EJE 2: HIDROGRAMAS INTELIGENTES ---
 with tab_hidrograma:
     @st.fragment
