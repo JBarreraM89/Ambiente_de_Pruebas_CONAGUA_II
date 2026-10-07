@@ -247,7 +247,7 @@ def renderizar_controles_puntos_piezo():
                                         "atributos": attrs, "fuente": "csv"
                                     })
                                     
-                                    # ⚡ AUTODETECCIÓN ESPACIAL (Solo necesita detectar uno para cambiar la página)
+                                    # ⚡ AUTODETECCIÓN ESPACIAL
                                     if not acuifero_detectado:
                                         acuifero_detectado = auto_identificar_acuifero_por_coordenadas(lat_v, lon_final, gdf_m)
                                         
@@ -381,7 +381,7 @@ def cargar_piezometria():
     df.columns = df.columns.str.strip()
     cols_upper = [str(c).upper() for c in df.columns]
     
-    # ⚡ NUEVO: Buscar la columna de la Clave del Acuífero
+    # Buscar la columna de la Clave del Acuífero
     col_cve = next((c for c, u in zip(df.columns, cols_upper) if 'CVE_ACUI' in u or 'CLAVE' in u), None)
     
     col_pozo = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_POZ' in u), next((c for c, u in zip(df.columns, cols_upper) if 'POZO' in u), 'Pozo'))
@@ -401,7 +401,6 @@ def cargar_piezometria():
     df = df.rename(columns=renombre_anios)
     columnas_anios_limpias = list(renombre_anios.values())
     
-    # Asegurarnos de mantener la clave al transformar la tabla
     id_vars_seguras = [c for c in [col_cve, col_pozo, col_edo, col_ac, col_elev, col_lat, col_lon] if c is not None and c in df.columns]
     val_vars_seguras = [c for c in columnas_anios_limpias if c in df.columns]
     
@@ -416,7 +415,6 @@ def cargar_piezometria():
         
     df_largo = df_largo.rename(columns=rename_dict)
     
-    # ⚡ NUEVO: Normalizar la clave a 4 dígitos (ej. 101.0 -> 0101)
     if 'Clave' in df_largo.columns:
         df_largo['Clave'] = df_largo['Clave'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(4)
     
@@ -439,10 +437,8 @@ if df_crudo is None or df_largo is None:
 clave_limpia_global = str(clave_actual).strip().zfill(4)
 
 if 'Clave' in df_largo.columns:
-    # 🚀 Filtrado directo y exacto por la columna CVE_ACUI
     df_ac_completo = df_largo[df_largo['Clave'] == clave_limpia_global].copy()
 else:
-    # Fallback por si el CSV no tuviera la columna clave
     def normalizar(texto):
         if pd.isna(texto) or not texto: return ""
         t = str(texto).upper().strip()
@@ -1133,31 +1129,30 @@ with tab_mapa:
                     img_flujo_b64 = base64.b64encode(img_flujo).decode('utf-8')
                     
                     # 5. Construcción dinámica de la leyenda
-                    leyenda_html = """
+                    hay_manual = any(pt.get("fuente") == "manual" for pt in st.session_state.get("marcadores_piezo", []))
+                    hay_csv = any(pt.get("fuente") == "csv" for pt in st.session_state.get("marcadores_piezo", []))
+                    
+                    leyenda_html = f"""
                     <b style="color:#691C32; font-size: 12px;">Simbología</b><br>
-                    <div style="margin-top:4px;">
+                    <div id="leg-pozos" style="margin-top:4px;">
                         <i style="background:#9f2241;"></i> Pozo Abatiéndose<br>
                         <i style="background:#285c4d;"></i> Pozo Recuperando<br>
                         <i style="background:#b38e5d;"></i> Pozo Estable<br>
                     </div>
                     """
-                    hay_manual = any(pt.get("fuente") == "manual" for pt in st.session_state.get("marcadores_piezo", []))
-                    hay_csv = any(pt.get("fuente") == "csv" for pt in st.session_state.get("marcadores_piezo", []))
                     
-                    if hay_manual or hay_csv:
-                        leyenda_html += '<hr style="margin: 6px 0; border: 0; border-top: 1px solid #eee;"><div>'
-                        if hay_manual:
-                            leyenda_html += '<i style="background:#d35400;"></i> Puntos Manuales<br>'
-                        if hay_csv:
-                            leyenda_html += '<i class="square" style="background:#2980b9;"></i> Puntos CSV<br>'
-                        leyenda_html += '</div>'
+                    leyenda_html += f'<div id="leg-manual" style="display: {"block" if hay_manual else "none"}; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
+                    leyenda_html += '<i style="background:#d35400;"></i> Puntos Manuales<br></div>'
+                        
+                    leyenda_html += f'<div id="leg-csv" style="display: {"block" if hay_csv else "none"}; margin-top:4px;">'
+                    leyenda_html += '<i class="circle" style="background:#2980b9;"></i> Puntos CSV<br></div>'
                         
                     if dic_leyenda_rocas:
-                        leyenda_html += '<hr style="margin: 6px 0; border: 0; border-top: 1px solid #eee;">'
+                        leyenda_html += f'<div id="leg-geo" style="display: {"block" if False else "none"}; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
                         leyenda_html += f'<b style="color:#691C32; font-size:11px;">Geología SGM ({col_sel_geo})</b><div style="max-height: 150px; overflow-y: auto; margin-top:4px;">'
                         for roca, color in dic_leyenda_rocas.items():
                             leyenda_html += f'<i class="square" style="background:{color};"></i> <span style="font-size:9.5px;">{roca}</span><br>'
-                        leyenda_html += '</div>'
+                        leyenda_html += '</div></div>'
 
                     # 6. HTML de MapLibre
                     html_maplibre = f"""
@@ -1169,10 +1164,45 @@ with tab_mapa:
                         <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
                         <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
                         <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+                        
+                        <!-- Librerías Vectoriales para Dibujo y Cálculo Geodésico -->
+                        <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" type="text/css" />
+                        <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
+                        <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+
                         <style>
                             body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
                             #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #e2e8f0; }}
                             
+                            /* ========================================================= */
+                            /* ✨ ESTILOS PARA POPUPS TRANSPARENTES (TOOLTIP)            */
+                            /* ========================================================= */
+                            .maplibregl-popup-content {{
+                                background: none !important;
+                                box-shadow: none !important;
+                                border: none !important;
+                                padding: 0 !important;
+                            }}
+                            .maplibregl-popup-tip {{ display: none !important; }}
+                            .maplibregl-popup-close-button {{ display: none !important; }}
+                            
+                            .custom-transparent-popup {{
+                                font-family: 'Segoe UI', sans-serif;
+                                font-size: 12.5px;
+                                color: #1E293B;
+                                text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 0px 2px 4px rgba(0,0,0,0.5);
+                                font-weight: 600;
+                                pointer-events: none;
+                                line-height: 1.4;
+                            }}
+                            .custom-transparent-popup h4 {{
+                                margin: 0 0 2px 0;
+                                color: #691C32;
+                                font-size: 14px;
+                                font-weight: 800;
+                                text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 0px 2px 4px rgba(0,0,0,0.5);
+                            }}
+
                             /* HUD Coordenadas */
                             .hud-elevation {{
                                 position: absolute; top: 12px; right: 55px; z-index: 1000;
@@ -1198,7 +1228,7 @@ with tab_mapa:
                             
                             /* Dock / Panel Lateral */
                             .workbench-dock {{
-                                position: absolute; top: 12px; left: 12px; z-index: 1000;
+                                position: absolute; top: 12px; left: 12px; z-index: 2000;
                                 background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
                                 width: 280px; border-radius: 10px; overflow: hidden;
                                 box-shadow: 0 6px 20px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
@@ -1221,24 +1251,24 @@ with tab_mapa:
                                 box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 11px; line-height: 1.6;
                                 border: 1px solid #E2E8F0;
                             }}
-                            .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.3);}}
+                            .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #ccc; box-shadow: 0 1px 3px rgba(0,0,0,0.3);}}
                             .legend-panel .square {{ border-radius: 2px; }}
                             
                             /* Botón Gradiente */
                             .leaflet-open-gradient-btn {{
                                 position: absolute; top: 160px; right: 10px; z-index: 1000;
-                                background: #ffffff; color: #691C32; width: 29px; height: 29px;
+                                background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
                                 border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
                                 box-shadow: none;
-                                font-size: 16px; font-weight: bold; cursor: pointer;
+                                cursor: pointer;
                                 display: flex; align-items: center; justify-content: center;
                                 transition: background 0.2s ease;
                             }}
-                            .leaflet-open-gradient-btn:hover {{ background: #f4f4f4; }}
+                            .leaflet-open-gradient-btn:hover {{ background: #88102B !important; }}
 
                             /* Panel Gradiente Desplegable */
                             .gradient-docked-panel {{
-                                position: absolute; top: 160px; right: 50px; z-index: 1000;
+                                position: absolute; top: 160px; right: 50px; z-index: 2000;
                                 background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
                                 width: 220px; border-radius: 8px; overflow: hidden;
                                 box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
@@ -1255,9 +1285,94 @@ with tab_mapa:
                             .docked-gradient-body {{ padding: 10px; }}
                             .gradient-bar {{ height: 10px; border-radius: 4px; background: linear-gradient(to right, #eff3ff, #bdd7e7, #6baed6, #3182bd, #08519c); margin: 6px 0; border: 1px solid #ccc; }}
                             .gradient-labels {{ display: flex; justify-content: space-between; font-weight: bold; color: #333; }}
+
+                            /* ========================================================= */
+                            /* 📐 PANEL Y BOTÓN PROFESIONAL DE DIBUJO Y MEDICIÓN         */
+                            /* ========================================================= */
+                            .leaflet-open-draw-btn {{
+                                position: absolute; top: 196px; right: 10px; z-index: 1000;
+                                background: #ffffff; color: #691C32; width: 29px; height: 29px;
+                                border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                                box-shadow: none; cursor: pointer;
+                                display: flex; align-items: center; justify-content: center;
+                                transition: background 0.2s ease;
+                            }}
+                            .leaflet-open-draw-btn:hover {{ background: #f4f4f4; }}
+
+                            .draw-docked-panel {{
+                                position: absolute; top: 196px; right: 50px; z-index: 2000;
+                                background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                                width: 260px; border-radius: 8px; overflow: hidden;
+                                box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                                border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                                font-size: 11px; color: #1E293B;
+                            }}
+                            .docked-draw-header {{
+                                background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                                font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                                border-bottom: 1px solid #e2e8f0; font-size: 11.5px;
+                            }}
+                            .docked-draw-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; font-weight: bold; }}
+                            .docked-draw-close:hover {{ color: #dc2626; }}
+                            .docked-draw-body {{ padding: 10px; }}
+
+                            .draw-grid {{
+                                display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;
+                            }}
+                            .btn-tool {{
+                                background: #ffffff; border: 1px solid #CBD5E1; border-radius: 5px;
+                                padding: 6px 8px; font-size: 11px; font-weight: 600; color: #334155;
+                                display: flex; align-items: center; gap: 6px; cursor: pointer;
+                                transition: all 0.15s ease;
+                            }}
+                            .btn-tool svg {{ width: 14px; height: 14px; stroke: #691C32; fill: none; stroke-width: 2; flex-shrink: 0; }}
+                            .btn-tool:hover {{ background: #f1f5f9; border-color: #691C32; color: #691C32; }}
+                            .btn-tool.active {{ background: #691C32; border-color: #691C32; color: #ffffff; }}
+                            .btn-tool.active svg {{ stroke: #ffffff; }}
+
+                            .draw-measure-box {{
+                                background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 5px;
+                                padding: 8px 10px; font-size: 11px; line-height: 1.45; color: #14532D;
+                                margin-bottom: 8px; display: none;
+                            }}
+                            .draw-measure-box b {{ color: #166534; }}
+
+                            .draw-actions {{
+                                display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px;
+                            }}
+                            .btn-action-sm {{
+                                flex: 1; padding: 5px 8px; font-size: 10.5px; font-weight: 600;
+                                border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff;
+                                cursor: pointer; display: flex; align-items: center; justify-content: center;
+                                gap: 5px; transition: all 0.15s ease; color: #334155;
+                            }}
+                            .btn-action-sm svg {{ width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }}
+                            .btn-action-sm:hover {{ background: #f8fafc; border-color: #94A3B8; }}
+                            .btn-action-sm.danger {{ color: #dc2626; border-color: #fecaca; }}
+                            .btn-action-sm.danger:hover {{ background: #fef2f2; border-color: #dc2626; }}
                         </style>
                     </head>
                     <body>
+                        <!-- Definiciones de Iconos SVG para Herramientas de Dibujo -->
+                        <svg style="display:none;">
+                            <symbol id="icon-poly" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 2l8 6-3 10H7l-3-10z"/>
+                            </symbol>
+                            <symbol id="icon-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="4 20 12 12 20 4"/>
+                            </symbol>
+                            <symbol id="icon-point" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="3"/>
+                                <path d="M12 2v2m0 16v2m10-10h-2M4 12H2"/>
+                            </symbol>
+                            <symbol id="icon-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M3 6h18 M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                            </symbol>
+                            <symbol id="icon-clear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2z M18 9l-6 6 M12 9l6 6"/>
+                            </symbol>
+                        </svg>
+
                         <div id="map"></div>
                         
                         <!-- HUD COORDENADAS -->
@@ -1311,8 +1426,9 @@ with tab_mapa:
                                     <label><input type="checkbox" id="chk-vec" checked> 🧭 Vectores de Flujo</label>
                                     <label><input type="checkbox" id="chk-heat"> 🔥 Mapa de Calor</label>
                                     <label><input type="checkbox" id="chk-pozos" checked> 📍 Red Piezométrica</label>
-                                    <label><input type="checkbox" id="chk-add" checked> 📌 Puntos Adicionales</label>
-                                    <label style="display: {'flex' if dic_leyenda_rocas else 'none'};"><input type="checkbox" id="chk-geo" checked> ⛰️ Geología SGM</label>
+                                    <label style="display: {'flex' if hay_manual else 'none'};"><input type="checkbox" id="chk-manual" checked> 🟠 Puntos Manuales</label>
+                                    <label style="display: {'flex' if hay_csv else 'none'};"><input type="checkbox" id="chk-csv" checked> 🔵 Puntos CSV</label>
+                                    <label style="display: {'flex' if dic_leyenda_rocas else 'none'};"><input type="checkbox" id="chk-geo"> ⛰️ Geología SGM</label>
                                 </div>
                             </div>
                         </div>
@@ -1324,7 +1440,7 @@ with tab_mapa:
                         
                         <!-- BOTÓN GRADIENTE -->
                         <div id="btn-open-gradient" class="leaflet-open-gradient-btn" onclick="toggleGradient()" title="Mostrar Gradiente">
-                            📊
+                            <div style="width: 14px; height: 14px; background: linear-gradient(to bottom, #eff3ff, #08519c); border: 1px solid #fff; border-radius: 2px;"></div>
                         </div>
 
                         <!-- PANEL GRADIENTE -->
@@ -1340,6 +1456,65 @@ with tab_mapa:
                                     <span>{vmin:.1f}</span>
                                     <span>{vmid:.1f}</span>
                                     <span>{vmax:.1f}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- BOTÓN DIBUJO Y MEDICIÓN (SVG) -->
+                        <div id="btn-open-draw" class="leaflet-open-draw-btn" onclick="toggleDraw()" title="Herramientas de Dibujo y Medición">
+                            <svg viewBox="0 0 24 24" style="width:16px; height:16px; stroke:#691C32; fill:none; stroke-width:2;">
+                                <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+                                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+                                <circle cx="12" cy="12" r="2"/>
+                            </svg>
+                        </div>
+
+                        <!-- PANEL DESPLEGABLE: TRAZADOS Y MEDICIONES -->
+                        <div id="draw-panel-container" class="draw-docked-panel" style="display: none;">
+                            <div class="docked-draw-header">
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; stroke:#691C32; fill:none; stroke-width:2;">
+                                        <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                                        <polyline points="2 17 12 22 22 17"/>
+                                        <polyline points="2 12 12 17 22 12"/>
+                                    </svg>
+                                    <span>Medición y Trazo</span>
+                                </div>
+                                <span class="docked-draw-close" onclick="toggleDraw()" title="Ocultar">&times;</span>
+                            </div>
+                            <div class="docked-draw-body">
+                                <div class="draw-grid">
+                                    <button id="btn-tool-point" class="btn-tool" onclick="activarModoDibujo('point')">
+                                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+                                        Punto
+                                    </button>
+                                    <button id="btn-tool-line" class="btn-tool" onclick="activarModoDibujo('line_string')">
+                                        <svg viewBox="0 0 24 24"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="2.5"/><circle cx="20" cy="4" r="2.5"/></svg>
+                                        Distancia
+                                    </button>
+                                    <button id="btn-tool-poly" class="btn-tool" onclick="activarModoDibujo('polygon')">
+                                        <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 18 20 6 20 2 8.5"/></svg>
+                                        Polígono
+                                    </button>
+                                    <button id="btn-tool-circle" class="btn-tool" onclick="iniciarDibujoCirculo()">
+                                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="18.36" y2="5.64"/></svg>
+                                        Círculo
+                                    </button>
+                                </div>
+
+                                <!-- RESULTADOS MÉTRICOS -->
+                                <div id="draw-measure-box" class="draw-measure-box"></div>
+
+                                <!-- ACCIONES DE EDICIÓN Y EXPORTACIÓN -->
+                                <div class="draw-actions">
+                                    <button class="btn-action-sm danger" onclick="eliminarDibujoSeleccionado()" title="Borrar selección o todos los trazos">
+                                        <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                        Limpiar
+                                    </button>
+                                    <button class="btn-action-sm" onclick="descargarDibujosGeoJSON()" title="Descargar trazos en GeoJSON para QGIS/ArcGIS">
+                                        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                        GeoJSON
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -1430,6 +1605,63 @@ with tab_mapa:
                             map.addControl(new maplibregl.NavigationControl(), 'top-right');
                             map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
 
+                            // =========================================================
+                            // 📐 INICIALIZACIÓN DE MAPBOX DRAW (HERRAMIENTAS DE DIBUJO)
+                            // =========================================================
+                            const draw = new MapboxDraw({{
+                                displayControlsDefault: false,
+                                controls: {{}}, // Desactivamos la UI por defecto para usar nuestros botones SVG
+                                userProperties: true,
+                                styles: [
+                                    {{
+                                        'id': 'gl-draw-line',
+                                        'type': 'line',
+                                        'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+                                        'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                                        'paint': {{ 'line-color': '#9f2241', 'line-width': 3, 'line-dasharray': [0.2, 2] }}
+                                    }},
+                                    {{
+                                        'id': 'gl-draw-polygon-fill',
+                                        'type': 'fill',
+                                        'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                                        'paint': {{ 'fill-color': '#285c4d', 'fill-opacity': 0.25 }}
+                                    }},
+                                    {{
+                                        'id': 'gl-draw-polygon-stroke',
+                                        'type': 'line',
+                                        'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                                        'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                                        'paint': {{ 'line-color': '#285c4d', 'line-width': 2.5 }}
+                                    }},
+                                    {{
+                                        'id': 'gl-draw-point',
+                                        'type': 'circle',
+                                        'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'vertex'], ['!=', 'meta', 'midpoint'], ['!=', 'mode', 'static']],
+                                        'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                                    }},
+                                    // ✨ OCULTAR NODOS / VÉRTICES DE EDICIÓN
+                                    {{
+                                        'id': 'gl-draw-vertex-inactive',
+                                        'type': 'circle',
+                                        'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                                        'paint': {{ 'circle-radius': 0, 'circle-opacity': 0 }}
+                                    }},
+                                    {{
+                                        'id': 'gl-draw-vertex-active',
+                                        'type': 'circle',
+                                        'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                                        'paint': {{ 'circle-radius': 0, 'circle-opacity': 0 }}
+                                    }},
+                                    {{
+                                        'id': 'gl-draw-midpoint',
+                                        'type': 'circle',
+                                        'filter': ['all', ['==', 'meta', 'midpoint'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                                        'paint': {{ 'circle-radius': 0, 'circle-opacity': 0 }}
+                                    }}
+                                ]
+                            }});
+                            map.addControl(draw); // Se agrega sin posición porque usamos botones externos
+
                             // Lógica del Dock (Hamburguesa)
                             let dockAbierto = true;
                             function aplicarEstadoVisualDock() {{
@@ -1455,18 +1687,134 @@ with tab_mapa:
                                 if (gradientAbierto) {{
                                     panel.style.display = 'block';
                                     btn.style.display = 'none';
+                                    if (drawAbierto) toggleDraw(); // Cierra el panel de dibujo si estaba abierto
                                 }} else {{
                                     panel.style.display = 'none';
                                     btn.style.display = 'flex';
                                 }}
                             }}
 
-                            // Selector de Mapas Base
+                            // Lógica del Panel de Dibujo
+                            let drawAbierto = false;
+                            function toggleDraw() {{
+                                drawAbierto = !drawAbierto;
+                                const panel = document.getElementById('draw-panel-container');
+                                const btn = document.getElementById('btn-open-draw');
+                                if (drawAbierto) {{
+                                    panel.style.display = 'block';
+                                    btn.style.display = 'none';
+                                    if (gradientAbierto) toggleGradient(); // Cierra el gradiente si estaba abierto
+                                }} else {{
+                                    panel.style.display = 'none';
+                                    btn.style.display = 'flex';
+                                    detenerModoCirculo();
+                                    limpiarHerramientasActivas();
+                                }}
+                            }}
+
+                            // Funciones de Botones de Dibujo
+                            function activarModoDibujo(mode) {{
+                                detenerModoCirculo();
+                                limpiarHerramientasActivas();
+                                
+                                // Forzar el cursor de cruz para todas las herramientas
+                                map.getCanvas().style.cursor = 'crosshair'; 
+                                
+                                if (mode === 'point') {{
+                                    document.getElementById('btn-tool-point').classList.add('active');
+                                    draw.changeMode('draw_point');
+                                }} else if (mode === 'line_string') {{
+                                    document.getElementById('btn-tool-line').classList.add('active');
+                                    draw.changeMode('draw_line_string');
+                                }} else if (mode === 'polygon') {{
+                                    document.getElementById('btn-tool-poly').classList.add('active');
+                                    draw.changeMode('draw_polygon');
+                                }}
+                            }}
+
+                            function limpiarHerramientasActivas() {{
+                                ['btn-tool-point', 'btn-tool-line', 'btn-tool-poly', 'btn-tool-circle'].forEach(id => {{
+                                    const el = document.getElementById(id);
+                                    if (el) el.classList.remove('active');
+                                }});
+                                
+                                // Restaurar el cursor normal al terminar de dibujar
+                                map.getCanvas().style.cursor = ''; 
+                            }}
+
+                            function eliminarDibujoSeleccionado() {{
+                                const sel = draw.getSelectedIds();
+                                if (sel && sel.length > 0) {{
+                                    draw.delete(sel);
+                                }} else {{
+                                    draw.deleteAll();
+                                }}
+                                document.getElementById('draw-measure-box').style.display = 'none';
+                                if (popupActivo) popupActivo.remove(); // Elimina la etiqueta flotante
+                            }}
+
+                            function descargarDibujosGeoJSON() {{
+                                const data = draw.getAll();
+                                if (!data || !data.features || data.features.length === 0) {{
+                                    alert("No hay geometrías trazadas en el mapa para exportar.");
+                                    return;
+                                }}
+                                const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: 'application/geo+json' }});
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = 'mediciones_piezometria.geojson';
+                                a.click();
+                                URL.revokeObjectURL(url);
+                            }}
+
+                            // Modo Circunferencia / Radio Geodésico
+                            let modoCirculoActivo = false;
+                            let centroCirculo = null;
+
+                            function iniciarDibujoCirculo() {{
+                                limpiarHerramientasActivas();
+                                draw.changeMode('simple_select');
+                                modoCirculoActivo = true;
+                                centroCirculo = null;
+                                document.getElementById('btn-tool-circle').classList.add('active');
+                                map.getCanvas().style.cursor = 'crosshair';
+                                
+                                const box = document.getElementById('draw-measure-box');
+                                box.style.display = 'block';
+                                box.innerHTML = '<b>Paso 1:</b> Clic en el mapa para fijar el <b>CENTRO</b>.';
+                            }}
+
+                            function detenerModoCirculo() {{
+                                modoCirculoActivo = false;
+                                centroCirculo = null;
+                                map.getCanvas().style.cursor = '';
+                                const btn = document.getElementById('btn-tool-circle');
+                                if (btn) btn.classList.remove('active');
+                                if (map.getSource('temp-circle-src')) {{
+                                    map.getSource('temp-circle-src').setData({{ "type": "FeatureCollection", "features": [] }});
+                                }}
+                            }}
+
+                            // Selector de Mapas Base (Con Google Satelital 35%)
                             document.getElementById('sel-basemap').addEventListener('change', (e) => {{
                                 const selected = e.target.value;
-                                ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'].forEach(id => {{
+                                const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
+                                
+                                basemaps.forEach(id => {{
                                     if (map.getLayer(id)) {{
-                                        map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
+                                        if (selected === 'base-google-layer') {{
+                                            if (id === 'base-light-layer') map.setLayoutProperty(id, 'visibility', 'visible');
+                                            else if (id === 'base-google-layer') {{
+                                                map.setLayoutProperty(id, 'visibility', 'visible');
+                                                map.setPaintProperty(id, 'raster-opacity', 0.35);
+                                            }} else {{
+                                                map.setLayoutProperty(id, 'visibility', 'none');
+                                            }}
+                                        }} else {{
+                                            map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
+                                            if (id === selected) map.setPaintProperty(id, 'raster-opacity', 1.0);
+                                        }}
                                     }}
                                 }});
                             }});
@@ -1481,6 +1829,24 @@ with tab_mapa:
                             let popupActivo = null;
 
                             map.on('load', () => {{
+                                // Capa auxiliar para preview elástico del círculo
+                                map.addSource('temp-circle-src', {{
+                                    type: 'geojson',
+                                    data: {{ "type": "FeatureCollection", "features": [] }}
+                                }});
+                                map.addLayer({{
+                                    id: 'temp-circle-fill',
+                                    type: 'fill',
+                                    source: 'temp-circle-src',
+                                    paint: {{ 'fill-color': '#008a3b', 'fill-opacity': 0.2 }}
+                                }});
+                                map.addLayer({{
+                                    id: 'temp-circle-line',
+                                    type: 'line',
+                                    source: 'temp-circle-src',
+                                    paint: {{ 'line-color': '#008a3b', 'line-width': 2, 'line-dasharray': [2, 2] }}
+                                }});
+
                                 // 1. Geología SGM
                                 const geoData = {geojson_geo_str};
                                 if (geoData.features) {{
@@ -1488,12 +1854,12 @@ with tab_mapa:
                                     map.addLayer({{
                                         id: 'geo-fill', type: 'fill', source: 'geo-src',
                                         paint: {{ 'fill-color': ['get', 'COLOR_HEX'], 'fill-opacity': 0.5 }},
-                                        layout: {{ 'visibility': 'visible' }}
+                                        layout: {{ 'visibility': 'none' }}
                                     }});
                                     map.addLayer({{
                                         id: 'geo-line', type: 'line', source: 'geo-src',
                                         paint: {{ 'line-color': '#555', 'line-width': 0.5, 'line-opacity': 0.6 }},
-                                        layout: {{ 'visibility': 'visible' }}
+                                        layout: {{ 'visibility': 'none' }}
                                     }});
                                 }}
 
@@ -1547,12 +1913,12 @@ with tab_mapa:
                                 // 7. Puntos Adicionales
                                 map.addSource('add-src', {{ type: 'geojson', data: {geojson_add_str} }});
                                 map.addLayer({{
-                                    id: 'add-layer-circle', type: 'circle', source: 'add-src',
+                                    id: 'add-layer-manual', type: 'circle', source: 'add-src',
                                     filter: ['==', ['get', 'fuente'], 'manual'],
                                     paint: {{ 'circle-radius': 6, 'circle-color': '#d35400', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }}
                                 }});
                                 map.addLayer({{
-                                    id: 'add-layer-square', type: 'circle', source: 'add-src',
+                                    id: 'add-layer-csv', type: 'circle', source: 'add-src',
                                     filter: ['==', ['get', 'fuente'], 'csv'],
                                     paint: {{ 'circle-radius': 6, 'circle-color': '#2980b9', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }}
                                 }});
@@ -1584,31 +1950,150 @@ with tab_mapa:
                                 }} else {{
                                     document.getElementById('hud-ele').innerText = '--';
                                 }}
+
+                                // Lógica de previsualización del Círculo
+                                if (!modoCirculoActivo || !centroCirculo) return;
+                                const actual = [e.lngLat.lng, e.lngLat.lat];
+                                const radioKm = turf.distance(centroCirculo, actual, {{ units: 'kilometers' }});
+                                if (radioKm > 0.0005) {{
+                                    const tempCircle = turf.circle(centroCirculo, radioKm, {{ steps: 48, units: 'kilometers' }});
+                                    if (map.getSource('temp-circle-src')) {{
+                                        map.getSource('temp-circle-src').setData(tempCircle);
+                                    }}
+                                    const radioM = (radioKm * 1000).toFixed(1);
+                                    const areaHa = (turf.area(tempCircle) / 10000).toFixed(2);
+                                    document.getElementById('draw-measure-box').innerHTML = 
+                                        `<b>Radio:</b> ${{radioM}} m (${{radioKm.toFixed(3)}} km)<br>` +
+                                        `<b>Área de Influencia:</b> ${{areaHa}} ha<br>` +
+                                        `<span style="color:#64748B; font-size:10px;">Clic para confirmar circunferencia</span>`;
+                                }}
                             }});
 
-                            // Función para Opacidad del Kriging
-                            function cambiarOpacidadKriging(val) {{
-                                document.getElementById('val-opac').innerText = Math.round(val * 100) + '%';
-                                if (map.getLayer('kriging-layer')) {{
-                                    map.setPaintProperty('kriging-layer', 'raster-opacity', parseFloat(val));
+                            // Lógica de Clic para el Círculo
+                            map.on('click', (e) => {{
+                                if (!modoCirculoActivo) return;
+                                const coords = [e.lngLat.lng, e.lngLat.lat];
+                                if (!centroCirculo) {{
+                                    centroCirculo = coords;
+                                    const box = document.getElementById('draw-measure-box');
+                                    box.innerHTML = '<b>Paso 2:</b> Mueve el cursor y haz un <b>segundo clic</b> para consolidar el radio.';
+                                }} else {{
+                                    const radioKm = turf.distance(centroCirculo, coords, {{ units: 'kilometers' }});
+                                    if (radioKm > 0.001) {{
+                                        const circlePoly = turf.circle(centroCirculo, radioKm, {{ steps: 64, units: 'kilometers' }});
+                                        draw.add(circlePoly);
+                                        
+                                        // Mostrar Popup al finalizar el círculo
+                                        if (popupActivo) popupActivo.remove();
+                                        popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10 }})
+                                            .setLngLat(coords)
+                                            .setHTML(`<div class="custom-transparent-popup">
+                                                        <b>Radio:</b> ${{(radioKm * 1000).toFixed(1)}} m<br>
+                                                        <b>Área:</b> ${{(turf.area(circlePoly) / 10000).toFixed(2)}} ha
+                                                      </div>`)
+                                            .addTo(map);
+                                    }}
+                                    detenerModoCirculo();
                                 }}
+                            }});
+
+                            // Actualizar resultados de medición (Líneas y Polígonos)
+                            function generarTextoMedicion(feat) {{
+                                const tipo = feat.geometry.type;
+                                if (tipo === 'Point') {{
+                                    const c = feat.geometry.coordinates;
+                                    return `<b>Punto:</b> ${{c[1].toFixed(5)}}° N, ${{c[0].toFixed(5)}}° W`;
+                                }} else if (tipo === 'LineString') {{
+                                    const km = turf.length(feat, {{ units: 'kilometers' }});
+                                    return `<b>Distancia:</b> ${{(km * 1000).toFixed(1)}} m (${{km.toFixed(3)}} km)`;
+                                }} else if (tipo === 'Polygon') {{
+                                    const m2 = turf.area(feat);
+                                    const perim = turf.length(turf.polygonToLine(feat), {{ units: 'kilometers' }});
+                                    return `<b>Superficie:</b> ${{(m2 / 10000).toFixed(2)}} ha<br><b>Perímetro:</b> ${{perim.toFixed(2)}} km`;
+                                }}
+                                return "";
                             }}
-                            
-                            // Función para Opacidad de Geología
-                            function cambiarOpacidadGeologia(val) {{
-                                document.getElementById('val-opac-geo').innerText = Math.round(val * 100) + '%';
-                                if (map.getLayer('geo-fill')) {{
-                                    map.setPaintProperty('geo-fill', 'fill-opacity', parseFloat(val));
+
+                            // 1. ACTUALIZACIÓN EN VIVO (Mientras se mueve el mouse dibujando)
+                            map.on('draw.render', () => {{
+                                const data = draw.getAll();
+                                if (data.features.length > 0) {{
+                                    const feat = data.features[data.features.length - 1];
+                                    const box = document.getElementById('draw-measure-box');
+                                    box.style.display = 'block';
+                                    box.innerHTML = generarTextoMedicion(feat) + '<br><span style="color:#64748B; font-size:10px;">Doble clic para finalizar</span>';
                                 }}
+                            }});
+
+                            // 2. POPUP AL FINALIZAR EL DIBUJO
+                            map.on('draw.create', (e) => {{
+                                const feat = e.features[0];
+                                const texto = generarTextoMedicion(feat);
+                                
+                                // Determinar dónde anclar el popup
+                                let coords;
+                                if (feat.geometry.type === 'Point') coords = feat.geometry.coordinates;
+                                else if (feat.geometry.type === 'LineString') coords = feat.geometry.coordinates[feat.geometry.coordinates.length - 1];
+                                else coords = turf.centroid(feat).geometry.coordinates; // Centro del polígono
+
+                                if (popupActivo) popupActivo.remove();
+                                popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10 }})
+                                    .setLngLat(coords)
+                                    .setHTML(`<div class="custom-transparent-popup">
+                                                <h4>📏 Medición Finalizada</h4>
+                                                ${{texto}}
+                                              </div>`)
+                                    .addTo(map);
+                                    
+                                limpiarHerramientasActivas();
+                            }});
+
+                            map.on('draw.selectionchange', (e) => {{
+                                if (e.features && e.features.length > 0) {{
+                                    const feat = e.features[0];
+                                    const texto = generarTextoMedicion(feat);
+                                    
+                                    // Actualizar la caja si el panel está abierto
+                                    const box = document.getElementById('draw-measure-box');
+                                    if (box) box.innerHTML = texto;
+
+                                    // Determinar dónde anclar el popup
+                                    let coords;
+                                    if (feat.geometry.type === 'Point') coords = feat.geometry.coordinates;
+                                    else if (feat.geometry.type === 'LineString') {{
+                                        const pts = feat.geometry.coordinates;
+                                        coords = pts[Math.floor(pts.length / 2)]; // Mitad de la línea
+                                    }}
+                                    else coords = turf.centroid(feat).geometry.coordinates; // Centro del polígono
+
+                                    if (popupActivo) popupActivo.remove();
+                                    popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10 }})
+                                        .setLngLat(coords)
+                                        .setHTML(`<div class="custom-transparent-popup">
+                                                    <h4>📏 Medición</h4>
+                                                    ${{texto}}
+                                                  </div>`)
+                                        .addTo(map);
+                                }}
+                            }});
+
+                            // =========================================================
+                            // 🛡️ PROTECCIÓN DE EVENTOS Y CURSOR DURANTE EL DIBUJO
+                            // =========================================================
+                            function isDrawingMode() {{
+                                try {{
+                                    return draw.getMode() !== 'simple_select' || modoCirculoActivo;
+                                }} catch(e) {{ return false; }}
                             }}
 
                             // Eventos de Clic en Pozos Oficiales
                             map.on('click', 'pozos-layer', (e) => {{
+                                if (isDrawingMode()) return; // Ignorar si estamos dibujando
                                 if (popupActivo) popupActivo.remove();
                                 const p = e.features[0].properties;
                                 popupActivo = new maplibregl.Popup().setLngLat(e.lngLat)
-                                    .setHTML(`<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:150px;">
-                                                <h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">📍 Pozo: ${{p.Pozo}}</h4>
+                                    .setHTML(`<div class="custom-transparent-popup">
+                                                <h4>📍 Pozo: ${{p.Pozo}}</h4>
                                                 <b>${{p.Variable}}:</b> ${{p.Valor}}<br>
                                                 <b>Año de Medición:</b> ${{p.Año}}
                                               </div>`)
@@ -1616,13 +2101,14 @@ with tab_mapa:
                             }});
 
                             // Eventos de Clic en Puntos Adicionales
-                            map.on('click', 'add-layer-circle', (e) => showAddPopup(e));
-                            map.on('click', 'add-layer-square', (e) => showAddPopup(e));
+                            map.on('click', 'add-layer-manual', (e) => showAddPopup(e));
+                            map.on('click', 'add-layer-csv', (e) => showAddPopup(e));
 
                             function showAddPopup(e) {{
+                                if (isDrawingMode()) return; // Ignorar si estamos dibujando
                                 if (popupActivo) popupActivo.remove();
                                 const p = e.features[0].properties;
-                                let html = `<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:150px;"><h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">${{p.nombre}}</h4><b>Tipo:</b> ${{p.tipo}}<br>`;
+                                let html = `<div class="custom-transparent-popup"><h4>${{p.nombre}}</h4><b>Tipo:</b> ${{p.tipo}}<br>`;
                                 let attrs = p.atributos;
                                 if (typeof attrs === 'string') {{
                                     try {{ attrs = JSON.parse(attrs); }} catch(err) {{ attrs = {{}}; }}
@@ -1634,6 +2120,7 @@ with tab_mapa:
                             
                             // Eventos de Clic en Geología
                             map.on('click', 'geo-fill', (e) => {{
+                                if (isDrawingMode()) return; // Ignorar si estamos dibujando
                                 if (popupActivo) popupActivo.remove();
                                 const p = e.features[0].properties;
                                 const formacion = (p.FORMACION && p.FORMACION !== 'null' && p.FORMACION !== 'NINGUNO') ? p.FORMACION : 'Formación No Asignada';
@@ -1651,47 +2138,92 @@ with tab_mapa:
                                 if (!edadGeo.trim()) edadGeo = p.ERA || 'S/D';
 
                                 let html = `
-                                    <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5; min-width:200px;">
-                                        <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
-                                            <div style="display:flex; align-items:center; gap:6px;">
-                                                <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block;"></span>
-                                                <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{formacion}}</h4>
-                                            </div>
-                                            <span style="background:#F1F5F9; border:1px solid #CBD5E1; color:#334155; font-size:9.5px; font-weight:700; padding:1px 4px; border-radius:3px;">${{claveSgm}}</span>
-                                        </div>
-                                        <b>Litología:</b> <span style="color:#0f172a; font-weight:600;">${{litologia}}</span><br>
+                                    <div class="custom-transparent-popup">
+                                        <h4>${{formacion}}</h4>
+                                        <b>Clave:</b> ${{claveSgm}}<br>
+                                        <b>Litología:</b> ${{litologia}}<br>
                                         <b>Tipo de Roca:</b> ${{roca}}<br>
                                         <b>Edad Geológica:</b> ${{edadGeo}}<br>
-                                        <span style="color:#64748B; font-size:10px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
+                                        <span style="color:#64748B; font-size:10.5px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
                                     </div>
                                 `;
                                 popupActivo = new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
                             }});
 
-                            map.on('mouseenter', 'pozos-layer', () => map.getCanvas().style.cursor = 'pointer');
-                            map.on('mouseleave', 'pozos-layer', () => map.getCanvas().style.cursor = '');
-                            map.on('mouseenter', 'add-layer-circle', () => map.getCanvas().style.cursor = 'pointer');
-                            map.on('mouseleave', 'add-layer-circle', () => map.getCanvas().style.cursor = '');
-                            map.on('mouseenter', 'add-layer-square', () => map.getCanvas().style.cursor = 'pointer');
-                            map.on('mouseleave', 'add-layer-square', () => map.getCanvas().style.cursor = '');
-                            map.on('mouseenter', 'geo-fill', () => map.getCanvas().style.cursor = 'pointer');
-                            map.on('mouseleave', 'geo-fill', () => map.getCanvas().style.cursor = '');
-
-                            // Toggles de Capas
-                            const toggleLayer = (chkId, layerIds) => {{
-                                document.getElementById(chkId).addEventListener('change', (e) => {{
-                                    const vis = e.target.checked ? 'visible' : 'none';
-                                    layerIds.forEach(id => {{ if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis); }});
+                            // Controlar el cursor (Evitar que cambie a manita si estamos dibujando)
+                            const capasInteractivas = ['pozos-layer', 'add-layer-manual', 'add-layer-csv', 'geo-fill'];
+                            capasInteractivas.forEach(capa => {{
+                                map.on('mouseenter', capa, () => {{
+                                    if (!isDrawingMode()) map.getCanvas().style.cursor = 'pointer';
                                 }});
+                                map.on('mouseleave', capa, () => {{
+                                    if (!isDrawingMode()) map.getCanvas().style.cursor = '';
+                                }});
+                            }});
+
+                            // Toggles de Capas y Sincronización con la Leyenda
+                            const toggleLayer = (chkId, layerIds, legId = null) => {{
+                                const chk = document.getElementById(chkId);
+                                if (chk) {{
+                                    chk.addEventListener('change', (e) => {{
+                                        const vis = e.target.checked ? 'visible' : 'none';
+                                        layerIds.forEach(id => {{ if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis); }});
+                                        if (legId) {{
+                                            const leg = document.getElementById(legId);
+                                            if (leg) leg.style.display = e.target.checked ? 'block' : 'none';
+                                        }}
+                                    }});
+                                }}
                             }};
 
                             toggleLayer('chk-kriging', ['kriging-layer']);
                             toggleLayer('chk-iso', ['iso-layer']);
                             toggleLayer('chk-vec', ['vec-layer']);
                             toggleLayer('chk-heat', ['heat-layer']);
-                            toggleLayer('chk-pozos', ['pozos-layer']);
-                            toggleLayer('chk-add', ['add-layer-circle', 'add-layer-square']);
-                            toggleLayer('chk-geo', ['geo-fill', 'geo-line']);
+                            toggleLayer('chk-pozos', ['pozos-layer'], 'leg-pozos');
+                            toggleLayer('chk-manual', ['add-layer-manual'], 'leg-manual');
+                            toggleLayer('chk-csv', ['add-layer-csv'], 'leg-csv');
+                            toggleLayer('chk-geo', ['geo-fill', 'geo-line'], 'leg-geo');
+
+                            // =========================================================
+                            // 🖱️ HACER POPUPS ARRASTRABLES (DRAGGABLE) AUTOMÁTICAMENTE
+                            // =========================================================
+                            let isDraggingPopup = false;
+
+                            window.addEventListener('mousemove', (e) => {{
+                                if (!isDraggingPopup || !popupActivo) return;
+                                const rect = map.getCanvasContainer().getBoundingClientRect();
+                                const point = [e.clientX - rect.left, e.clientY - rect.top];
+                                popupActivo.setLngLat(map.unproject(point));
+                            }});
+
+                            window.addEventListener('mouseup', () => {{
+                                if (isDraggingPopup) {{
+                                    isDraggingPopup = false;
+                                    map.dragPan.enable();
+                                }}
+                            }});
+
+                            const observerPopups = new MutationObserver((mutations) => {{
+                                mutations.forEach((mutation) => {{
+                                    mutation.addedNodes.forEach((node) => {{
+                                        if (node.classList && node.classList.contains('maplibregl-popup')) {{
+                                            if (popupActivo && !node.dataset.draggable) {{
+                                                node.dataset.draggable = "true";
+                                                node.style.cursor = 'move';
+                                                node.addEventListener('mousedown', (e) => {{
+                                                    isDraggingPopup = true;
+                                                    map.dragPan.disable(); // Evita que el mapa se mueva al arrastrar
+                                                    e.stopPropagation();
+                                                }});
+                                            }}
+                                        }}
+                                    }});
+                                }});
+                            }});
+                            // Observar cuando se inyecta un popup al DOM
+                            observerPopups.observe(document.body, {{ childList: true, subtree: true }});
+
                         </script>
                     </body>
                     </html>
