@@ -2003,7 +2003,6 @@ with tab_mapa:
                                         popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                             .setLngLat(coords)
                                             .setHTML(`<div class="custom-transparent-popup">
-                                                        <h4>⭕ Círculo Finalizado</h4>
                                                         <b>Radio:</b> ${{(radioKm * 1000).toFixed(1)}} m<br>
                                                         <b>Área:</b> ${{(turf.area(circlePoly) / 10000).toFixed(2)}} ha
                                                       </div>`)
@@ -2055,7 +2054,6 @@ with tab_mapa:
                                 popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                     .setLngLat(coords)
                                     .setHTML(`<div class="custom-transparent-popup">
-                                                <h4>📏 Medición Finalizada</h4>
                                                 ${{texto}}
                                               </div>`)
                                     .addTo(map);
@@ -2083,7 +2081,6 @@ with tab_mapa:
                                     popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                         .setLngLat(coords)
                                         .setHTML(`<div class="custom-transparent-popup">
-                                                    <h4>📏 Medición</h4>
                                                     ${{texto}}
                                                   </div>`)
                                         .addTo(map);
