@@ -677,6 +677,10 @@ html_code = f"""
                         <button id="btn-coords" class="action-button" style="flex: 1;">Ubicar en Mapa</button>
                         <button id="btn-clear-coord" class="btn-clear-point" title="Borrar punto">🗑️</button>
                     </div>
+                    <!-- MENSAJE DE ERROR OCULTO -->
+                    <div id="coord-error" style="display: none; color: #D90404; font-size: 11px; margin-top: 6px; font-weight: 600; text-align: center;">
+                        ⚠️ Ingresa Latitud y Longitud.
+                    </div>
                 </div>
 
                 <div class="control-section">
@@ -1039,8 +1043,16 @@ html_code = f"""
                 let lat = parseFloat(document.getElementById('coord-lat').value);
                 let lon = parseFloat(document.getElementById('coord-lon').value);
                 let name = document.getElementById('coord-name').value || 'Punto Buscado';
+                let errorMsg = document.getElementById('coord-error');
                 
-                if(isNaN(lat) || isNaN(lon)) return alert("Coordenadas inválidas");
+                // Muestra el error en el panel sin salir de pantalla completa
+                if(isNaN(lat) || isNaN(lon)) {{
+                    errorMsg.style.display = 'block';
+                    setTimeout(() => {{ errorMsg.style.display = 'none'; }}, 3000); // Se oculta a los 3 segundos
+                    return;
+                }}
+                
+                errorMsg.style.display = 'none'; // Oculta el error si todo está bien
                 if(tempMarker) tempMarker.remove();
                 
                 const popupHtml = `
