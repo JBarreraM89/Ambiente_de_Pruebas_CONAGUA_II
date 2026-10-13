@@ -109,7 +109,12 @@ st.markdown("""
             color: #000000 !important;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
         }
-        
+        section[data-testid="stSidebar"] button[kind="primary"] {
+            border-radius: 6px !important;
+            min-height: 38px !important;
+            font-weight: 600 !important;
+            margin-top: 4px !important;
+        }
 
         /* ========================================================= */
         /* 🚀 3. BOTONES DE FRONTERAS DEL MODELO (CARGAR / LIMPIAR)  */
