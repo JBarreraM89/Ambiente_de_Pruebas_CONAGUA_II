@@ -208,27 +208,57 @@ def inyectar_css_oficial():
         .stTabs [data-baseweb="tab"] p { font-weight: bold; font-size: 15px; color: #6F7271; margin: 0; }
         .stTabs [aria-selected="true"] p { color: #691C32 !important; }
         
-        /* 4. Botones Globales (Primarios, Secundarios y Terciarios) */
-        button[kind="primary"] {
+        /* 4. Botones Globales Compatibles con Streamlit Moderno */
+        button[kind="primary"],
+        button[data-testid="baseButton-primary"] {
             background-color: #9F2241 !important;
-            border-color: #9F2241 !important;
+            border: 1px solid #9F2241 !important;
             color: #FFFFFF !important;
-            transition: all 0.3s ease !important;
+            border-radius: 6px !important;
+            transition: all 0.2s ease !important;
         }
-        button[kind="primary"]:hover {
+        button[kind="primary"]:hover,
+        button[data-testid="baseButton-primary"]:hover {
             background-color: #691C32 !important;
             border-color: #691C32 !important;
+            color: #FFFFFF !important;
             box-shadow: 0 4px 8px rgba(105,28,50,0.3) !important;
         }
         
-        button[kind="secondary"], button[kind="tertiary"] {
-            color: #2980b9 !important; font-weight: 600 !important; padding: 0 !important; 
-            margin-top: 5px !important; margin-bottom: 15px !important; 
-            background-color: transparent !important; border: none !important; box-shadow: none !important;
-        } 
-        button[kind="secondary"]:hover, button[kind="tertiary"]:hover {
-            color: #9F2241 !important; text-decoration: underline !important; 
-            background-color: transparent !important; border: none !important;
+        button[kind="secondary"],
+        button[data-testid="baseButton-secondary"] {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            color: #333333 !important;
+            border-radius: 6px !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+        }
+        button[kind="secondary"]:hover,
+        button[data-testid="baseButton-secondary"]:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+        }
+
+        /* 4.1 Sliders Institucionales (Track, Thumb y Valor) */
+        div[data-testid="stSlider"] div[role="slider"] {
+            background-color: #691C32 !important;
+            border: 2px solid #ffffff !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+        }
+        div[data-testid="stSlider"] div[data-baseweb="slider"] > div > div > div {
+            background-color: #691C32 !important;
+        }
+        div[data-testid="stSlider"] div[data-testid="stThumbValue"] {
+            color: #691C32 !important;
+            font-weight: 700 !important;
+        }
+        
+        /* 4.2 Botones de incremento (+ / -) de números */
+        button[data-testid="stNumberInputStepDown"],
+        button[data-testid="stNumberInputStepUp"] {
+            color: #691C32 !important;
         }
         
         /* 5. Reglas blindadas exclusivas de la tarjeta BAS */
