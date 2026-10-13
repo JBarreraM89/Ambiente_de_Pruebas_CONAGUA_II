@@ -5,27 +5,29 @@ Diagnóstico físico con Kriging Ordinario, Variogramas, Isopiezas, Vectores de 
 Desacoplamiento de modelo matemático vs renderizado para interactividad instantánea (<40 ms).
 """
 
+import os
+import io
+import re
+import math
+import json
+import base64
+import zipfile
+import tempfile
+import unicodedata
+from pathlib import Path
+
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import unicodedata
-import re
-import io
-import os
-import json
-import zipfile
-import tempfile
-import base64
-import time
-import math
-from pathlib import Path
-import streamlit.components.v1 as components
+from scipy.spatial import ConvexHull
+from matplotlib.path import Path as MplPath
 
 try:
     import geopandas as gpd
-    from shapely.geometry import LineString, Point, Polygon, MultiPolygon, shape
+    from shapely.geometry import LineString, Point, Polygon, MultiPolygon
     GEOPANDAS_INSTALADO = True
 except ImportError:
     GEOPANDAS_INSTALADO = False
@@ -35,11 +37,212 @@ from utils.styles import inyectar_css_oficial, banner_institucional
 from core.data_loader import CARPETA_DATOS, cargar_catalogo, cargar_datos_maestros, DIRECTORIO_RAIZ
 
 # =======================================================
+# ⚡ FUNCIÓN MÁGICA: Descargas Cero-Rerun (Scope Global)
+# =======================================================
+def generar_enlace_descarga(data, filename, mime, label):
+    """Genera un enlace de descarga en Base64 que opera 100% en el cliente sin causar rerun en Streamlit."""
+    b64 = base64.b64encode(data).decode()
+    return f'<a href="data:{mime};base64,{b64}" download="{filename}" class="btn-descarga-html">{label}</a>'
+
+# =======================================================
 # 🎨 1. CONFIGURACIÓN E INYECCIÓN DE ESTILOS
 # =======================================================
 st.set_page_config(layout="wide", page_title="Red Piezométrica", page_icon="📉")
 inyectar_css_oficial()
 banner_institucional()
+
+# ⚡ CSS AISLADO Y NEUTRALIZACIÓN DE CONFLICTOS CON styles.py
+st.markdown("""
+    <style>
+        /* ========================================================= */
+        /* 📏 0. ESTABILIZADOR DE PESTAÑAS (ELIMINA BRINCOS DE SCROLL)*/
+        /* ========================================================= */
+        div[data-testid="stTabs"] div[role="tabpanel"],
+        div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
+            min-height: 880px !important;
+        }
+
+        /* Sub-pestañas del panel izquierdo conservan su tamaño natural */
+        div[data-testid="stColumn"] div[data-testid="stTabs"] div[role="tabpanel"],
+        div[data-testid="stColumn"] div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
+            min-height: auto !important;
+        }
+
+        /* ========================================================= */
+        /* 🚨 1. ANULAR MARGEN DE 1.8rem DE styles.py EN BOTONES     */
+        /* ========================================================= */
+        [data-testid="stExpanderDetails"] button [data-testid="stMarkdownContainer"] p,
+        [data-testid="stExpanderDetails"] button p,
+        [data-testid="stExpanderDetails"] [data-testid="stFileUploader"] p {
+            margin: 0 !important;
+            margin-bottom: 0 !important;
+            padding: 0 !important;
+            line-height: 1 !important;
+        }
+
+        /* ========================================================= */
+        /* 📍 2. BOTONES DE BARRA LATERAL                            */
+        /* ========================================================= */
+        section[data-testid="stSidebar"] button[kind="secondary"],
+        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]),
+        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 6px !important;
+            color: #333333 !important;
+            font-weight: 600 !important;
+            width: 100% !important;
+            min-height: 38px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            text-decoration: none !important;
+            transition: all 0.2s ease !important;
+            margin-top: 4px !important;
+        }
+        section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]):hover,
+        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+        section[data-testid="stSidebar"] button[kind="primary"] {
+            border-radius: 6px !important;
+            min-height: 38px !important;
+            font-weight: 600 !important;
+            margin-top: 4px !important;
+        }
+
+        /* ========================================================= */
+        /* 🚀 3. BOTONES DE FRONTERAS DEL MODELO (CARGAR / LIMPIAR)  */
+        /* ========================================================= */
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button {
+            height: 38px !important;
+            min-height: 38px !important;
+            max-height: 38px !important;
+            border-radius: 6px !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 14px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            transition: all 0.2s ease !important;
+        }
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button div {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            height: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* Botón Limpiar (Gris) */
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="secondary"] {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            color: #333333 !important;
+        }
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="secondary"]:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+
+        /* Botón Cargar (Guinda) */
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="primary"] {
+            background-color: #9F2241 !important;
+            border: 1px solid #9F2241 !important;
+            color: #ffffff !important;
+        }
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="primary"]:hover {
+            background-color: #691C32 !important;
+            border-color: #691C32 !important;
+        }
+
+        /* ========================================================= */
+        /* 📦 4. CONTENEDOR DEL UPLOADER BLANCO + BOTÓN UPLOAD       */
+        /* ========================================================= */
+        [data-testid="stFileUploaderDropzone"],
+        [data-testid="stFileUploader"] section {
+            background-color: #ffffff !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 8px !important;
+        }
+
+        [data-testid="stFileUploader"] button {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 6px !important;
+            color: #333333 !important;
+            font-size: 14px !important;
+            font-weight: 600 !important;
+            width: 100% !important;
+            height: 38px !important;
+            min-height: 38px !important;
+            padding: 0 14px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            margin: 0 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            transition: all 0.2s ease !important;
+        }
+        [data-testid="stFileUploader"] button:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+        [data-testid="stFileUploader"] button div {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            height: 100% !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* ========================================================= */
+        /* 📥 5. ENLACES DE DESCARGAS SIG                            */
+        /* ========================================================= */
+        .btn-descarga-html {
+            display: inline-flex !important; 
+            align-items: center !important; 
+            justify-content: center !important;
+            background-color: #e9ecef !important; 
+            border: 1px solid #ced4da !important; 
+            border-radius: 6px !important;
+            color: #333333 !important; 
+            font-weight: 600 !important; 
+            font-size: 14px !important; 
+            text-decoration: none !important; 
+            width: 100% !important; 
+            min-height: 38px !important;
+            height: 38px !important;
+            box-sizing: border-box !important; 
+            transition: all 0.2s ease !important; 
+            margin-top: 4px !important;
+            margin-bottom: 4px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+        }
+        .btn-descarga-html:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 st.subheader("📉 Red de Monitoreo Geohidrológico")
 st.caption("Validación Física: Evaluación espacial, temporal, modelación geostadística de flujo y proyectiva.")
@@ -55,7 +258,8 @@ def cargar_estilos_sgm_oficiales():
         try:
             with open(ruta_json, 'r', encoding='utf-8') as f:
                 return json.load(f), "Catálogo Oficial SGM (3,024 reglas QGIS)"
-        except Exception: pass
+        except Exception:
+            pass
     return {}, "Norma Cartográfica General SGM"
 
 DICCIONARIO_SGM_GLOBAL, ORIGEN_SGM_GLOBAL = cargar_estilos_sgm_oficiales()
@@ -77,11 +281,13 @@ def resolver_color_oficial(clave_sgm, litologia, roca):
     for val in [clave_sgm, litologia, roca]:
         if val is not None and pd.notna(val):
             txt = str(val).strip().upper()
-            if txt in DICCIONARIO_SGM_GLOBAL: return DICCIONARIO_SGM_GLOBAL[txt]
+            if txt in DICCIONARIO_SGM_GLOBAL:
+                return DICCIONARIO_SGM_GLOBAL[txt]
             for k_estilo, hex_col in DICCIONARIO_SGM_GLOBAL.items():
                 if len(k_estilo) >= 3 and (k_estilo == txt or k_estilo in txt):
                     return hex_col
-            if txt in TABLA_CROMATICA_RESPALDO: return TABLA_CROMATICA_RESPALDO[txt]
+            if txt in TABLA_CROMATICA_RESPALDO:
+                return TABLA_CROMATICA_RESPALDO[txt]
 
     texto_eval = f"{clave_sgm} {litologia} {roca}".upper()
     if any(k in texto_eval for k in ["ALUV", "ALUVION", "ALUVIÓN", "SUELO"]): return "#FFF5AF"
@@ -106,8 +312,10 @@ def auto_identificar_acuifero_por_coordenadas(lat, lon, gdf_consulta):
         val_lon = -abs(float(lon))
         pt_geom = Point(val_lon, val_lat)
         
-        if gdf_consulta is None or gdf_consulta.empty: return None
-        if gdf_consulta.crs is None: gdf_consulta = gdf_consulta.set_crs(epsg=4326)
+        if gdf_consulta is None or gdf_consulta.empty:
+            return None
+        if gdf_consulta.crs is None:
+            gdf_consulta = gdf_consulta.set_crs(epsg=4326)
         
         idx_posibles = list(gdf_consulta.sindex.intersection(pt_geom.bounds))
         if not idx_posibles:
@@ -138,10 +346,7 @@ if "marcadores_piezo" not in st.session_state:
 if "csv_uploader_key_piezo" not in st.session_state:
     st.session_state["csv_uploader_key_piezo"] = 0
 
-def limpiar_puntos_piezo():
-    st.session_state["marcadores_piezo"] = []
-    st.session_state["csv_uploader_key_piezo"] += 1
-
+@st.fragment
 def renderizar_controles_puntos_piezo():
     tab_m, tab_c = st.tabs(["✍️ Manual", "📁 Carga CSV"])
     
@@ -166,32 +371,44 @@ def renderizar_controles_puntos_piezo():
                         "fuente": "manual"
                     })
                     
-                    # ⚡ AUTODETECCIÓN ESPACIAL
                     acuifero_detectado = auto_identificar_acuifero_por_coordenadas(lat, lon_final, gdf_m)
                     if acuifero_detectado:
                         st.session_state["clave_piezo"] = acuifero_detectado["clave"]
                         st.session_state["nombre_piezo"] = acuifero_detectado["nombre"]
                         st.session_state["area_total_piezo"] = acuifero_detectado["area"]
                         st.session_state["piezo_sel_edo"] = acuifero_detectado["estado"]
-                        st.success(f"📍 Acuífero autodetectado: **{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}**")
-                        time.sleep(1)
-                        
-                    st.rerun()
-        
-        if st.button("🧹 Limpiar Todos los Puntos", use_container_width=True, key="btn_limpiar_manual_piezo"):
-            limpiar_puntos_piezo()
-            st.rerun()
+                        st.session_state["piezo_sel_clv"] = f"{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}"
+                        st.session_state["puntos_recien_cargados"] = True
+
+                    try:
+                        st.rerun(scope="app")
+                    except TypeError:
+                        st.rerun()
+                else:
+                    st.warning("Ingresa coordenadas válidas distintas de 0.00000.")
+
+        if st.button("🧹 Limpiar Todos los Puntos", use_container_width=True, type="secondary", key="btn_limpiar_manual_piezo"):
+            st.session_state["marcadores_piezo"] = []
+            st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
         
     with tab_c:
-        st.markdown("""<div style="background-color: #f8f9fa; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;">Sube tu archivo y mapea las columnas. El mapa no se actualizará hasta que des clic en "Cargar Puntos CSV".</div>""", unsafe_allow_html=True)
+        st.markdown("""<div style="background-color: #ffffff; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;">Sube tu archivo y mapea las columnas. El mapa se actualizará al dar clic en "Cargar Puntos CSV".</div>""", unsafe_allow_html=True)
         
         up_key = f"csv_up_piezo_{st.session_state['csv_uploader_key_piezo']}"
         archivo_csv = st.file_uploader("Subir CSV", type=['csv'], key=up_key, label_visibility="collapsed")
         
         c_csv1, c_csv2 = st.columns(2)
         if c_csv2.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_csv_piezo"):
-            limpiar_puntos_piezo()
-            st.rerun()
+            st.session_state["marcadores_piezo"] = []
+            st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
         
         if archivo_csv is not None:
             try:
@@ -247,26 +464,28 @@ def renderizar_controles_puntos_piezo():
                                         "atributos": attrs, "fuente": "csv"
                                     })
                                     
-                                    # ⚡ AUTODETECCIÓN ESPACIAL
                                     if not acuifero_detectado:
                                         acuifero_detectado = auto_identificar_acuifero_por_coordenadas(lat_v, lon_final, gdf_m)
                                         
-                            except: pass
+                            except Exception:
+                                pass
                             
                         if nuevos:
+                            st.session_state["puntos_recien_cargados"] = True
                             st.session_state["marcadores_piezo"].extend(nuevos)
-                            
                             if acuifero_detectado:
                                 st.session_state["clave_piezo"] = acuifero_detectado["clave"]
                                 st.session_state["nombre_piezo"] = acuifero_detectado["nombre"]
                                 st.session_state["area_total_piezo"] = acuifero_detectado["area"]
                                 st.session_state["piezo_sel_edo"] = acuifero_detectado["estado"]
+                                st.session_state["piezo_sel_clv"] = f"{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}"
                                 st.success(f"📍 Acuífero autodetectado: **{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}**")
                             else:
                                 st.success(f"✅ {len(nuevos)} puntos cargados correctamente.")
-                                
-                            time.sleep(1)
-                            st.rerun()
+                            try:
+                                st.rerun(scope="app")
+                            except TypeError:
+                                st.rerun()
                         else:
                             st.error("❌ No se encontraron coordenadas válidas.")
             except Exception as e:
@@ -277,24 +496,6 @@ def renderizar_controles_puntos_piezo():
 st.sidebar.markdown("---")
 st.sidebar.subheader("📍 Puntos de Referencia / Pozos")
 st.sidebar.markdown("""<div style="font-size: 11px; color: #666; margin-top: -14px; margin-bottom: 8px;">Ingresa coordenadas manuales o carga masiva vía CSV</div>""", unsafe_allow_html=True)
-st.sidebar.markdown("""
-    <style>
-        section[data-testid="stSidebar"] button[kind="secondary"],
-        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]),
-        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button {
-            background-color: #e9ecef !important; border: 1px solid #ced4da !important;
-            border-radius: 6px !important; color: #333333 !important; font-weight: 600 !important;
-            width: 100% !important; min-height: 38px !important; transition: all 0.2s ease !important;
-            margin-top: 4px !important;
-        }
-        section[data-testid="stSidebar"] button[kind="secondary"]:hover {
-            background-color: #dde2e6 !important; border-color: #adb5bd !important; color: #000000 !important;
-        }
-        section[data-testid="stSidebar"] button[kind="primary"] {
-            border-radius: 6px !important; min-height: 38px !important; font-weight: 600 !important; margin-top: 4px !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
 
 with st.sidebar:
     renderizar_controles_puntos_piezo()
@@ -308,7 +509,8 @@ with st.sidebar:
             df_descarga = df_descarga.rename(columns={"tipo": "Infraestructura", "nombre": "Nombre", "lat": "Latitud", "lon": "Longitud"})
             cols_to_keep = ["Infraestructura", "Nombre", "Latitud", "Longitud"] + [c for c in df_descarga.columns if c not in ["Infraestructura", "Nombre", "Latitud", "Longitud", "fuente", "color_hex"]]
             csv_data = df_descarga[cols_to_keep].to_csv(index=False).encode('utf-8-sig')
-            st.download_button(label="⬇️ Descargar Puntos (CSV)", data=csv_data, file_name="puntos_piezometria.csv", mime="text/csv", use_container_width=True)
+            
+            st.markdown(generar_enlace_descarga(csv_data, "puntos_piezometria.csv", "text/csv", "⬇️ Descargar Puntos (CSV)"), unsafe_allow_html=True)
 
 # =======================================================
 # 🔍 3. SELECTOR Y SINCRONIZACIÓN DE SESIÓN GLOBAL
@@ -343,11 +545,15 @@ with st.expander("📍 Búsqueda de Acuífero en Catálogo Oficial", expanded=ab
                     st.session_state["nombre_piezo"] = str(datos_acu["ACUÍFERO"])
                     st.session_state["area_total_piezo"] = round(float(datos_acu["AREA_KM2"]), 1)
                     
-                    # Limpiar puntos al cambiar de acuífero
-                    st.session_state["marcadores_piezo"] = []
-                    st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+                    # 🛡️ PROTECCIÓN: Solo limpiar si el cambio vino de selección manual en el buscador
+                    if not st.session_state.get("puntos_recien_cargados", False):
+                        st.session_state["marcadores_piezo"] = []
+                        st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+                    st.session_state["puntos_recien_cargados"] = False
                     
-                    st.rerun()
+                    clave_actual = st.session_state["clave_piezo"]
+                    nombre_actual = st.session_state["nombre_piezo"]
+                    area_actual = st.session_state["area_total_piezo"]
         except Exception as e:
             st.error(f"Error cargando catálogo: {e}")
 
@@ -370,20 +576,21 @@ st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
 @st.cache_data(show_spinner="Procesando serie de tiempo piezométrica nacional...")
 def cargar_piezometria():
     archivos_candidatos = list(CARPETA_DATOS.glob("Mediciones*.csv"))
-    if not archivos_candidatos: return None, None, None
+    if not archivos_candidatos:
+        return None, None, None
         
     archivos_candidatos.sort(key=lambda x: x.stat().st_mtime, reverse=True)
     ruta_csv = archivos_candidatos[0] 
     
-    try: df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='utf-8-sig')
-    except: df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='latin1')
+    try:
+        df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='utf-8-sig')
+    except Exception:
+        df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='latin1')
         
     df.columns = df.columns.str.strip()
     cols_upper = [str(c).upper() for c in df.columns]
     
-    # Buscar la columna de la Clave del Acuífero
     col_cve = next((c for c, u in zip(df.columns, cols_upper) if 'CVE_ACUI' in u or 'CLAVE' in u), None)
-    
     col_pozo = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_POZ' in u), next((c for c, u in zip(df.columns, cols_upper) if 'POZO' in u), 'Pozo'))
     col_edo = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_EDO' in u or 'ESTADO' in u), 'Estado')
     col_ac = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_ACU' in u or 'ACUIFERO' in u or 'ACUÍFERO' in u), 'Acuifero')
@@ -396,7 +603,8 @@ def cargar_piezometria():
     renombre_anios = {}
     for col in df.columns:
         match = re.search(r'(19\d{2}|20\d{2})', str(col))
-        if match: renombre_anios[col] = match.group(1)
+        if match:
+            renombre_anios[col] = match.group(1)
             
     df = df.rename(columns=renombre_anios)
     columnas_anios_limpias = list(renombre_anios.values())
@@ -482,7 +690,8 @@ poligono_oficial_geom = obtener_poligono_oficial(clave_actual)
 
 @st.cache_data(show_spinner=False)
 def preparar_geologia_vectorial(clave_ac, _geom_acuifero):
-    if _geom_acuifero is None: return None, "Ninguna", {}
+    if _geom_acuifero is None:
+        return None, "Ninguna", {}
     carpeta_cache = DIRECTORIO_RAIZ / "data" / "cache_geologia"
     carpeta_cache.mkdir(parents=True, exist_ok=True)
     ruta_cache_parquet = carpeta_cache / f"GEO_SHP_{clave_ac}.parquet"
@@ -491,9 +700,12 @@ def preparar_geologia_vectorial(clave_ac, _geom_acuifero):
     if ruta_cache_parquet.exists() and ruta_cache_parquet.stat().st_size > 2000:
         try:
             gdf_cached = gpd.read_parquet(ruta_cache_parquet)
-            if len(gdf_cached.columns) > 3: gdf_sgm = gdf_cached
-            else: ruta_cache_parquet.unlink()
-        except Exception: pass
+            if len(gdf_cached.columns) > 3:
+                gdf_sgm = gdf_cached
+            else:
+                ruta_cache_parquet.unlink()
+        except Exception:
+            pass
 
     if gdf_sgm is None or gdf_sgm.empty:
         rutas_busqueda = [DIRECTORIO_RAIZ / "data" / "geologia"]
@@ -503,44 +715,38 @@ def preparar_geologia_vectorial(clave_ac, _geom_acuifero):
                 if any(k in pq_p.name.lower() for k in ["lito", "geo", "cnal"]) and "estructura" not in pq_p.name.lower():
                     try:
                         gdf_temp = gpd.read_parquet(pq_p)
-                        if gdf_temp.crs is None: gdf_temp = gdf_temp.set_crs(epsg=4326)
-                        else: gdf_temp = gdf_temp.to_crs(epsg=4326)
+                        if gdf_temp.crs is None:
+                            gdf_temp = gdf_temp.set_crs(epsg=4326)
+                        else:
+                            gdf_temp = gdf_temp.to_crs(epsg=4326)
                         recorte = gdf_temp.clip(_geom_acuifero)
                         if not recorte.empty:
                             gdf_sgm = recorte
                             break
-                    except Exception: pass
-            if gdf_sgm is not None: break
+                    except Exception:
+                        pass
+            if gdf_sgm is not None:
+                break
 
     if gdf_sgm is not None and not gdf_sgm.empty:
         def reparar_texto_mojibake(val):
             if val is None or pd.isna(val): return ""
             s = str(val).strip()
-            try: s = s.encode('latin1').decode('utf-8')
-            except: pass
+            try:
+                s = s.encode('latin1').decode('utf-8')
+            except Exception:
+                pass
             return s
 
         for col in gdf_sgm.select_dtypes(include=['object', 'string']).columns:
-            if col != 'geometry': gdf_sgm[col] = gdf_sgm[col].apply(reparar_texto_mojibake)
+            if col != 'geometry':
+                gdf_sgm[col] = gdf_sgm[col].apply(reparar_texto_mojibake)
 
         cols_upper = [c.upper() for c in gdf_sgm.columns]
         if "CLAVE_SGM" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE_SGM")]
         elif "CLAVE" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE")]
         elif "LITOLOGIA" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("LITOLOGIA")]
         else: col_sel = gdf_sgm.columns[0]
-
-        def resolver_color(c, l, r):
-            texto_eval = f"{c} {l} {r}".upper()
-            if any(k in texto_eval for k in ["ALUV", "ALUVION", "SUELO"]): return "#FFF5AF"
-            if any(k in texto_eval for k in ["BASALT", "BASÁLT"]): return "#800080"
-            if any(k in texto_eval for k in ["ANDESIT", "ANDESÍT"]): return "#B43264"
-            if any(k in texto_eval for k in ["RIOLIT", "RIOLÍT"]): return "#ED5F7D"
-            if any(k in texto_eval for k in ["CALIZ", "CALÍZ"]): return "#2887CD"
-            if any(k in texto_eval for k in ["LUTIT", "LUTÍT"]): return "#9BB95A"
-            if any(k in texto_eval for k in ["ARENISC", "ARENA"]): return "#BED273"
-            if any(k in texto_eval for k in ["GRANIT", "GRANOD"]): return "#EB3732"
-            if "AGUA" in texto_eval: return "#A6CAE8"
-            return "#B0BEC5"
 
         colores = []
         dic_leyenda = {}
@@ -555,8 +761,10 @@ def preparar_geologia_vectorial(clave_ac, _geom_acuifero):
         gdf_sgm["COLOR_HEX"] = colores
         gdf_sgm["geometry"] = gdf_sgm.geometry.simplify(tolerance=0.0001, preserve_topology=True)
 
-        try: gdf_sgm.to_parquet(ruta_cache_parquet)
-        except Exception: pass
+        try:
+            gdf_sgm.to_parquet(ruta_cache_parquet)
+        except Exception:
+            pass
         return gdf_sgm, col_sel, dic_leyenda
         
     return None, "Ninguna", {}
@@ -668,9 +876,6 @@ def empaquetar_shapefile_zip(gdf, base_name):
         return zip_buf.getvalue()
 
 def generar_geotiff_bytes(Z_masked, bounds):
-    import rasterio
-    from rasterio.transform import from_bounds
-    from rasterio.io import MemoryFile
     import matplotlib.pyplot as plt
     try:
         import rasterio
@@ -703,7 +908,6 @@ def generar_geotiff_bytes(Z_masked, bounds):
 # =======================================================
 # 🎨 7. RENDERIZADO VISUAL REACTIVO (<30 ms)
 # =======================================================
-# ⚡ OPTIMIZACIÓN: Sin decoradores @st.cache_data para evitar UnhashableParamError
 def render_imagen_kriging(X, Y, Z_masked, bounds):
     import matplotlib
     matplotlib.use('Agg')
@@ -715,7 +919,7 @@ def render_imagen_kriging(X, Y, Z_masked, bounds):
     ax.set_xlim(bounds[0][1], bounds[1][1])
     ax.set_ylim(bounds[0][0], bounds[1][0])
     
-    contourf = ax.contourf(X, Y, Z_masked, levels=40, cmap='Blues')
+    ax.contourf(X, Y, Z_masked, levels=40, cmap='Blues')
     
     buf = io.BytesIO()
     plt.savefig(buf, format='png', transparent=True, pad_inches=0)
@@ -888,7 +1092,15 @@ with tab_mapa:
     @st.fragment
     def renderizar_pestaña_mapa():
         
-        # 1. CREACIÓN DE COLUMNAS (PANEL IZQUIERDO Y MAPA DERECHO)
+        if "poly_uploader_key" not in st.session_state:
+            st.session_state["poly_uploader_key"] = 0
+        if "poligono_personalizado" not in st.session_state:
+            st.session_state["poligono_personalizado"] = None
+            
+        def limpiar_poly():
+            st.session_state["poly_uploader_key"] = st.session_state.get("poly_uploader_key", 0) + 1
+            st.session_state["poligono_personalizado"] = None
+
         col_izq, col_der = st.columns([1.2, 2.8], gap="large")
         
         with col_izq:
@@ -898,46 +1110,63 @@ with tab_mapa:
             with tab_params:
                 st.markdown("<p style='font-size:12px; color:#64748B;'>Ajusta los parámetros matemáticos. El modelo se recalculará automáticamente.</p>", unsafe_allow_html=True)
                 
-                st.markdown("**1. Modelo Matemático**")
-                var_interp = st.selectbox("Variable a Modelar:", ["Carga Hidráulica (msnm) [Recomendado para flujo]", "Profundidad del Nivel (m)"])
-                var_real = 'Carga_Hidraulica' if "Carga" in var_interp else 'Profundidad_NE'
-                
-                param = st.selectbox("Modelo de Variograma:", [
-                    "Lineal (no nugget)", "Raíz Cuadrada (square root)", "Logarítmico", 
-                    "Stable (0 < k < 2)", "Cúbico", "Esférico (spherical)", "Exponencial (exponential)", "Gaussiano (gaussian)"
-                ])
+                with st.expander("1. Modelo Matemático", expanded=True):
+                    var_interp = st.selectbox("Variable a Modelar:", ["Carga Hidráulica (msnm) [Recomendado para flujo]", "Profundidad del Nivel (m)"])
+                    var_real = 'Carga_Hidraulica' if "Carga" in var_interp else 'Profundidad_NE'
+                    
+                    param = st.selectbox("Modelo de Variograma:", [
+                        "Lineal (no nugget)", "Raíz Cuadrada (square root)", "Logarítmico", 
+                        "Stable (0 < k < 2)", "Cúbico", "Esférico (spherical)", "Exponencial (exponential)", "Gaussiano (gaussian)"
+                    ])
                 
                 df_ultimo = df_ac.loc[df_ac.groupby('Pozo')['Año'].idxmax()].dropna(subset=[var_real, 'Latitud', 'Longitud']).copy()
                 
-                st.markdown("**2. Fronteras del Modelo**")
-                geom_activa = poligono_oficial_geom
-                opciones_delimitacion = ["Pozos de Monitoreo (Envolvente Convexa)"]
-                if geom_activa is not None:
-                    opciones_delimitacion.insert(0, "Polígono Oficial del Acuífero")
+                with st.expander("2. Fronteras del Modelo", expanded=True):
+                    geom_activa = poligono_oficial_geom
+                    opciones_delimitacion = ["Pozos de Monitoreo (Envolvente Convexa)"]
+                    if geom_activa is not None:
+                        opciones_delimitacion.insert(0, "Polígono Oficial del Acuífero")
 
-                modo_delimitacion = st.radio(
-                    "Delimitar interpolación por:", 
-                    opciones_delimitacion, 
-                    index=0
-                )
-                
-                up_geom = st.file_uploader("Cargar Polígono (.geojson/.zip):", type=['geojson', 'json', 'zip'], key="up_poly_piezo")
-                if up_geom is not None:
-                    try:
-                        if up_geom.name.endswith(".zip"):
-                            with tempfile.TemporaryDirectory() as tmpdir:
-                                zip_path = os.path.join(tmpdir, "poly.zip")
-                                with open(zip_path, "wb") as f_up: f_up.write(up_geom.read())
-                                gdf_up = gpd.read_file(f"zip://{zip_path}")
+                    modo_delimitacion = st.radio(
+                        "Delimitar interpolación por:", 
+                        opciones_delimitacion, 
+                        index=0
+                    )
+                    
+                    st.markdown("""<div style="background-color: #ffffff; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;"><span id="sec-fronteras-poly"></span>Sube tu polígono (.geojson o .zip) para delimitar el área.</div>""", unsafe_allow_html=True)
+                    
+                    up_key = f"up_poly_piezo_{st.session_state.get('poly_uploader_key', 0)}"
+                    up_geom = st.file_uploader("Cargar Polígono", type=['geojson', 'json', 'zip'], key=up_key, label_visibility="collapsed")
+                    
+                    st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+                    
+                    c_poly1, c_poly2 = st.columns(2)
+                    with c_poly1:
+                        if up_geom is not None:
+                            if st.button("🚀 Cargar", use_container_width=True, type="primary", key="btn_cargar_poly"):
+                                try:
+                                    if up_geom.name.endswith(".zip"):
+                                        with tempfile.TemporaryDirectory() as tmpdir:
+                                            zip_path = os.path.join(tmpdir, "poly.zip")
+                                            with open(zip_path, "wb") as f_up: f_up.write(up_geom.read())
+                                            gdf_up = gpd.read_file(f"zip://{zip_path}")
+                                    else:
+                                        gdf_up = gpd.read_file(up_geom)
+
+                                    if gdf_up.crs != "EPSG:4326":
+                                        gdf_up = gdf_up.to_crs(epsg=4326)
+                                    st.session_state["poligono_personalizado"] = gdf_up.unary_union
+                                    st.success("✅ Polígono cargado.")
+                                except Exception as err:
+                                    st.error(f"Error procesando archivo: {err}")
                         else:
-                            gdf_up = gpd.read_file(up_geom)
-
-                        if gdf_up.crs != "EPSG:4326":
-                            gdf_up = gdf_up.to_crs(epsg=4326)
-                        geom_activa = gdf_up.unary_union
-                        st.success("✅ Polígono cargado.")
-                    except Exception as err:
-                        st.error(f"Error procesando archivo: {err}")
+                            st.button("🚀 Cargar", use_container_width=True, type="primary", disabled=True, key="btn_cargar_poly_dis")
+                    
+                    with c_poly2:
+                        st.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_poly", on_click=limpiar_poly)
+                    
+                    if st.session_state.get("poligono_personalizado") is not None:
+                        geom_activa = st.session_state["poligono_personalizado"]
                         
                 if len(df_ultimo) >= 4:
                     rango_estimado = max(1.0, float(df_ultimo[var_real].max() - df_ultimo[var_real].min()))
@@ -947,15 +1176,17 @@ with tab_mapa:
                     rango_estimado = 50.0
                     def_equidistancia = 5.0
                     
-                st.markdown("**3. Ajustes Visuales**")
-                intervalo_iso = st.slider(
-                    "Equidistancia de Isolíneas (m):", 
-                    min_value=max(0.5, round(rango_estimado / 40.0, 1)), 
-                    max_value=max(2.0, round(rango_estimado / 2.0, 1)), 
-                    value=float(min(max(2.0, round(rango_estimado / 2.0, 1)), def_equidistancia)), 
-                    step=0.5 if rango_estimado < 20 else 1.0
-                )
-                densidad_flujo = st.slider("Densidad de Vectores de Flujo:", 8, 36, 20, 2)
+                with st.expander("3. Ajustes Visuales", expanded=True):
+                    intervalo_iso = st.slider(
+                        "Equidistancia de Isolíneas (m):", 
+                        min_value=max(0.5, round(rango_estimado / 40.0, 1)), 
+                        max_value=max(2.0, round(rango_estimado / 2.0, 1)), 
+                        value=float(min(max(2.0, round(rango_estimado / 2.0, 1)), def_equidistancia)), 
+                        step=0.5 if rango_estimado < 20 else 1.0
+                    )
+                    densidad_flujo = st.slider("Densidad de Vectores de Flujo:", 8, 36, 20, 2)
+
+                ph_descargas = st.empty()
 
             with tab_vario:
                 ph_variograma = st.empty()
@@ -964,7 +1195,6 @@ with tab_mapa:
         with col_der:
             if len(df_ultimo) >= 4:
                 with st.spinner("Modelando superficie geostadística y delimitando fronteras..."):
-                    # Tupla hasheable (min_x, min_y, max_x, max_y)
                     geom_para_kriging = geom_activa if modo_delimitacion == "Polígono Oficial del Acuífero" else None
                     bounds_limite_hashable = geom_para_kriging.bounds if geom_para_kriging is not None else None
                     
@@ -977,62 +1207,53 @@ with tab_mapa:
                     else:
                         X, Y, Z, grid_x, grid_y, bounds, props_kriging, exp_lags, exp_semi, smooth_lags, theo_semi = resultado_kriging
                         
-                        # 🎯 DELIMITACIÓN MATEMÁTICA
                         pts_grid = np.column_stack((X.ravel(), Y.ravel()))
                         hull_pts = None
                         inside_mask = None
                         
                         if modo_delimitacion == "Polígono Oficial del Acuífero" and geom_activa is not None:
                             try:
-                                from scipy.spatial import ConvexHull
-                                from matplotlib.path import Path
                                 if geom_activa.geom_type == 'Polygon':
-                                    path_poly = Path(np.array(geom_activa.exterior.coords))
+                                    path_poly = MplPath(np.array(geom_activa.exterior.coords))
                                     inside_mask = path_poly.contains_points(pts_grid).reshape(X.shape)
                                 elif geom_activa.geom_type == 'MultiPolygon':
                                     mask_accum = np.zeros(len(pts_grid), dtype=bool)
                                     for poly_sub in geom_activa.geoms:
-                                        p_sub = Path(np.array(poly_sub.exterior.coords))
+                                        p_sub = MplPath(np.array(poly_sub.exterior.coords))
                                         mask_accum |= p_sub.contains_points(pts_grid)
                                     inside_mask = mask_accum.reshape(X.shape)
                             except Exception:
                                 inside_mask = None
 
                         if inside_mask is None:
-                            from scipy.spatial import ConvexHull
-                            from matplotlib.path import Path
                             x_pozos = df_ultimo['Longitud'].values
                             y_pozos = df_ultimo['Latitud'].values
                             try:
                                 hull = ConvexHull(np.column_stack((x_pozos, y_pozos)))
                                 hull_pts = np.column_stack((x_pozos[hull.vertices], y_pozos[hull.vertices]))
-                                hull_path = Path(hull_pts)
+                                hull_path = MplPath(hull_pts)
                                 inside_mask = hull_path.contains_points(pts_grid).reshape(X.shape)
                             except Exception:
                                 inside_mask = np.ones(X.shape, dtype=bool)
 
                         Z_masked = np.where(inside_mask, Z, np.nan)
 
-                        # ⚡ Renderizado Desacoplado
                         img_kriging, vmin, vmax = render_imagen_kriging(X, Y, Z_masked, bounds)
                         img_isolineas, geojson_iso, shp_iso_zip = render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_real)
                         img_flujo, geojson_flujo, shp_flujo_zip = render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, var_real, densidad_flujo, inside_mask)
 
-                        # Preparación de datos de Kriging para exportación y para JS
                         geotiff_bytes = generar_geotiff_bytes(Z_masked, bounds)
                         mask_val = ~np.isnan(Z_masked)
                         df_grid = pd.DataFrame({"LONGITUD": np.round(X[mask_val], 6), "LATITUD": np.round(Y[mask_val], 6), "VALOR": np.round(Z_masked[mask_val], 3)})
                         geojson_krig = json.dumps({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["LONGITUD"], r["LATITUD"]]}, "properties": {"VALOR": r["VALOR"], "VARIABLE": var_real}} for _, r in df_grid.iterrows()]}, indent=2).encode('utf-8')
                         shp_krig_zip = empaquetar_shapefile_zip(gpd.GeoDataFrame(df_grid, geometry=[Point(xy) for xy in zip(df_grid["LONGITUD"], df_grid["LATITUD"])], crs="EPSG:4326"), f"kriging_{clave_actual}") if (GEOPANDAS_INSTALADO and not df_grid.empty) else None
 
-                        # Convertir Z_masked a JSON para el click en el mapa
                         z_list = []
                         for row in Z_masked:
                             z_list.append([None if math.isnan(v) else round(float(v), 2) for v in row])
                         z_data_json = json.dumps(z_list)
                         bounds_json = json.dumps(bounds)
 
-                        # Semivariograma (Diseño Vertical para la columna izquierda)
                         with ph_variograma.container():
                             fig_var = go.Figure()
                             fig_var.add_trace(go.Scatter(x=exp_lags, y=exp_semi, mode='markers', name='Exp.', marker=dict(color='#9f2241', size=6)))
@@ -1059,13 +1280,6 @@ with tab_mapa:
                             </div>
                             """
                             st.markdown(tabla_props, unsafe_allow_html=True)
-                        
-                        # =======================================================
-                        # 🗺️ RENDERIZADO MAPLIBRE GL JS (WEBGL)
-                        # =======================================================
-                        import streamlit.components.v1 as components
-                        
-                        centro_lat, centro_lon = df_ultimo['Latitud'].mean(), df_ultimo['Longitud'].mean()
                         
                         # 1. Preparar GeoJSON de Pozos Oficiales
                         features_pozos = []
@@ -1119,6 +1333,18 @@ with tab_mapa:
                         # 4. Coordenadas de la imagen para MapLibre
                         min_y, min_x = bounds[0]
                         max_y, max_x = bounds[1]
+
+                        if geom_activa is not None:
+                            try:
+                                centro_lon = float(geom_activa.centroid.x)
+                                centro_lat = float(geom_activa.centroid.y)
+                            except Exception:
+                                centro_lon = float((min_x + max_x) / 2.0)
+                                centro_lat = float((min_y + max_y) / 2.0)
+                        else:
+                            centro_lon = float((min_x + max_x) / 2.0)
+                            centro_lat = float((min_y + max_y) / 2.0)
+
                         img_coords_json = json.dumps([
                             [min_x, max_y], [max_x, max_y], [max_x, min_y], [min_x, min_y]
                         ])
@@ -1135,33 +1361,35 @@ with tab_mapa:
                         img_iso_b64 = base64.b64encode(img_isolineas).decode('utf-8')
                         img_flujo_b64 = base64.b64encode(img_flujo).decode('utf-8')
                         
-                        # 5. Construcción dinámica de la leyenda
+                        # 5. Construcción dinámica de la leyenda editable (Estilo Visor y Descargas)
                         hay_manual = any(pt.get("fuente") == "manual" for pt in st.session_state.get("marcadores_piezo", []))
                         hay_csv = any(pt.get("fuente") == "csv" for pt in st.session_state.get("marcadores_piezo", []))
                         
+                        span_edit = 'contenteditable="true" spellcheck="false" title="Haz clic para editar este texto" class="txt-leyenda-editable"'
+
                         leyenda_html = f"""
-                        <b style="color:#691C32; font-size: 12px;">Simbología</b><br>
+                        <b style="color:#691C32; font-size: 12px;"><span {span_edit}>Simbología</span></b><br>
                         <div id="leg-pozos" style="margin-top:4px;">
-                            <i style="background:#9f2241;"></i> Pozo Abatiéndose<br>
-                            <i style="background:#285c4d;"></i> Pozo Recuperando<br>
-                            <i style="background:#b38e5d;"></i> Pozo Estable<br>
+                            <i style="background:#9f2241;"></i> <span {span_edit}>Pozo Abatiéndose</span><br>
+                            <i style="background:#285c4d;"></i> <span {span_edit}>Pozo Recuperando</span><br>
+                            <i style="background:#b38e5d;"></i> <span {span_edit}>Pozo Estable</span><br>
                         </div>
                         """
                         
                         leyenda_html += f'<div id="leg-manual" style="display: {"block" if hay_manual else "none"}; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
-                        leyenda_html += '<i style="background:#d35400;"></i> Puntos Manuales<br></div>'
+                        leyenda_html += f'<i style="background:#d35400;"></i> <span {span_edit}>Puntos Manuales</span><br></div>'
                             
                         leyenda_html += f'<div id="leg-csv" style="display: {"block" if hay_csv else "none"}; margin-top:4px;">'
-                        leyenda_html += '<i class="circle" style="background:#2980b9;"></i> Puntos CSV<br></div>'
+                        leyenda_html += f'<i class="circle" style="background:#2980b9;"></i> <span {span_edit}>Puntos CSV</span><br></div>'
                             
                         if dic_leyenda_rocas:
                             leyenda_html += f'<div id="leg-geo" style="display: {"block" if False else "none"}; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
-                            leyenda_html += f'<b style="color:#691C32; font-size:11px;">Geología SGM ({col_sel_geo})</b><div style="max-height: 150px; overflow-y: auto; margin-top:4px;">'
+                            leyenda_html += f'<b style="color:#691C32; font-size:11px;"><span {span_edit}>Geología SGM ({col_sel_geo})</span></b><div style="max-height: 150px; overflow-y: auto; margin-top:4px;">'
                             for roca, color in dic_leyenda_rocas.items():
-                                leyenda_html += f'<i class="square" style="background:{color};"></i> <span style="font-size:9.5px;">{roca}</span><br>'
+                                leyenda_html += f'<i class="square" style="background:{color};"></i> <span {span_edit} style="font-size:9.5px;">{roca}</span><br>'
                             leyenda_html += '</div></div>'
 
-                        # 6. HTML de MapLibre
+                        # 6. HTML de MapLibre (Motor WebGL)
                         html_maplibre = f"""
                         <!DOCTYPE html>
                         <html>
@@ -1179,49 +1407,46 @@ with tab_mapa:
 
                             <style>
                                 body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
-                                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #e2e8f0; border-radius: 8px; }}
+                                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #ffffff; border-radius: 8px; }}
                                 
-                                /* ========================================================= */
-                                /* ✨ ESTILOS PARA POPUPS TRANSPARENTES (TOOLTIP)            */
-                                /* ========================================================= */
+                                .txt-leyenda-editable {{ 
+                                    cursor: text; padding: 1px 4px; border-radius: 3px; outline: none; 
+                                    border-bottom: 1px dashed transparent; transition: background-color 0.2s; 
+                                }}
+                                .txt-leyenda-editable:hover {{ 
+                                    background-color: rgba(0,0,0,0.05); border-bottom: 1px dashed #888; 
+                                }}
+                                .txt-leyenda-editable:focus {{ 
+                                    background-color: #ffffff; border-bottom: 1.5px solid #2980b9; 
+                                    box-shadow: 0 1px 3px rgba(0,0,0,0.15); 
+                                }}
+
                                 .transparent-popup .maplibregl-popup-content {{
-                                    background: none !important;
-                                    box-shadow: none !important;
-                                    border: none !important;
-                                    padding: 0 !important;
+                                    background: none !important; box-shadow: none !important;
+                                    border: none !important; padding: 0 !important;
                                 }}
                                 .transparent-popup .maplibregl-popup-tip {{ display: none !important; }}
                                 .transparent-popup .maplibregl-popup-close-button {{ display: none !important; }}
                                 
                                 .custom-transparent-popup {{
-                                    font-family: 'Segoe UI', sans-serif;
-                                    font-size: 12.5px;
-                                    color: #1E293B;
+                                    font-family: 'Segoe UI', sans-serif; font-size: 12.5px; color: #1E293B;
                                     text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 0px 2px 4px rgba(0,0,0,0.5);
-                                    font-weight: 600;
-                                    pointer-events: none;
-                                    line-height: 1.4;
+                                    font-weight: 600; pointer-events: none; line-height: 1.4;
                                 }}
                                 .custom-transparent-popup h4 {{
-                                    margin: 0 0 2px 0;
-                                    color: #691C32;
-                                    font-size: 14px;
-                                    font-weight: 800;
+                                    margin: 0 0 2px 0; color: #691C32; font-size: 14px; font-weight: 800;
                                     text-shadow: 1px 1px 0 #fff, -1px -1px 0 #fff, 1px -1px 0 #fff, -1px 1px 0 #fff, 0px 2px 4px rgba(0,0,0,0.5);
                                 }}
 
-                                /* HUD Coordenadas */
                                 .hud-elevation {{
                                     position: absolute; top: 12px; right: 55px; z-index: 1000;
                                     background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
                                     color: #1e293b; padding: 7px 14px; border-radius: 8px;
-                                    border: 1.5px solid #691C32;
-                                    box-shadow: 0 4px 15px rgba(0,0,0,0.15); font-size: 11.5px;
-                                    display: flex; gap: 14px; align-items: center; pointer-events: none;
+                                    border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                                    font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
                                 }}
                                 .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
                                 
-                                /* Botón Hamburguesa */
                                 .btn-open-dock-circle {{
                                     position: absolute; top: 12px; left: 12px; z-index: 1000;
                                     background: #691C32; color: #ffffff; width: 38px; height: 38px;
@@ -1233,7 +1458,6 @@ with tab_mapa:
                                 }}
                                 .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.1); }}
                                 
-                                /* Dock / Panel Lateral */
                                 .workbench-dock {{
                                     position: absolute; top: 12px; left: 12px; z-index: 2000;
                                     background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
@@ -1248,32 +1472,27 @@ with tab_mapa:
                                 }}
                                 .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
                                 .dock-section {{ margin-bottom: 12px; }}
-                                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500;}}
+                                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
                                 .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
                                 
-                                /* Leyendas */
                                 .legend-panel {{
-                                    position: absolute; bottom: 25px; left: 12px; z-index: 1000;
+                                    position: absolute; bottom: 35px; left: 12px; z-index: 1000;
                                     background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 8px;
                                     box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 11px; line-height: 1.6;
-                                    border: 1px solid #E2E8F0;
+                                    border: 1px solid #E2E8F0; max-width: 280px; pointer-events: auto;
                                 }}
-                                .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #ccc; box-shadow: 0 1px 3px rgba(0,0,0,0.3);}}
+                                .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #ccc; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }}
                                 .legend-panel .square {{ border-radius: 2px; }}
                                 
-                                /* Botón Gradiente */
                                 .leaflet-open-gradient-btn {{
                                     position: absolute; top: 160px; right: 10px; z-index: 1000;
                                     background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
                                     border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
-                                    box-shadow: none;
-                                    cursor: pointer;
-                                    display: flex; align-items: center; justify-content: center;
+                                    cursor: pointer; display: flex; align-items: center; justify-content: center;
                                     transition: background 0.2s ease;
                                 }}
                                 .leaflet-open-gradient-btn:hover {{ background: #88102B !important; }}
 
-                                /* Panel Gradiente Desplegable */
                                 .gradient-docked-panel {{
                                     position: absolute; top: 160px; right: 50px; z-index: 2000;
                                     background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
@@ -1293,15 +1512,11 @@ with tab_mapa:
                                 .gradient-bar {{ height: 10px; border-radius: 4px; background: linear-gradient(to right, #eff3ff, #bdd7e7, #6baed6, #3182bd, #08519c); margin: 6px 0; border: 1px solid #ccc; }}
                                 .gradient-labels {{ display: flex; justify-content: space-between; font-weight: bold; color: #333; }}
 
-                                /* ========================================================= */
-                                /* 📐 PANEL Y BOTÓN PROFESIONAL DE DIBUJO Y MEDICIÓN         */
-                                /* ========================================================= */
                                 .leaflet-open-draw-btn {{
                                     position: absolute; top: 196px; right: 10px; z-index: 1000;
                                     background: #ffffff; color: #691C32; width: 29px; height: 29px;
                                     border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
-                                    box-shadow: none; cursor: pointer;
-                                    display: flex; align-items: center; justify-content: center;
+                                    cursor: pointer; display: flex; align-items: center; justify-content: center;
                                     transition: background 0.2s ease;
                                 }}
                                 .leaflet-open-draw-btn:hover {{ background: #f4f4f4; }}
@@ -1323,14 +1538,11 @@ with tab_mapa:
                                 .docked-draw-close:hover {{ color: #dc2626; }}
                                 .docked-draw-body {{ padding: 10px; }}
 
-                                .draw-grid {{
-                                    display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px;
-                                }}
+                                .draw-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }}
                                 .btn-tool {{
                                     background: #ffffff; border: 1px solid #CBD5E1; border-radius: 5px;
                                     padding: 6px 8px; font-size: 11px; font-weight: 600; color: #334155;
-                                    display: flex; align-items: center; gap: 6px; cursor: pointer;
-                                    transition: all 0.15s ease;
+                                    display: flex; align-items: center; gap: 6px; cursor: pointer; transition: all 0.15s ease;
                                 }}
                                 .btn-tool svg {{ width: 14px; height: 14px; stroke: #691C32; fill: none; stroke-width: 2; flex-shrink: 0; }}
                                 .btn-tool:hover {{ background: #f1f5f9; border-color: #691C32; color: #691C32; }}
@@ -1344,9 +1556,7 @@ with tab_mapa:
                                 }}
                                 .draw-measure-box b {{ color: #166534; }}
 
-                                .draw-actions {{
-                                    display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px;
-                                }}
+                                .draw-actions {{ display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px; }}
                                 .btn-action-sm {{
                                     flex: 1; padding: 5px 8px; font-size: 10.5px; font-weight: 600;
                                     border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff;
@@ -1357,44 +1567,28 @@ with tab_mapa:
                                 .btn-action-sm:hover {{ background: #f8fafc; border-color: #94A3B8; }}
                                 .btn-action-sm.danger {{ color: #dc2626; border-color: #fecaca; }}
                                 .btn-action-sm.danger:hover {{ background: #fef2f2; border-color: #dc2626; }}
+
+                                .maplibregl-ctrl-attrib {{
+                                    background-color: rgba(255, 255, 255, 0.85) !important;
+                                    padding: 2px 6px !important; border-radius: 3px !important;
+                                    font-size: 10.5px !important; color: #333 !important;
+                                    box-shadow: 0 1px 3px rgba(0,0,0,0.15) !important;
+                                }}
                             </style>
                         </head>
                         <body>
-                            <!-- Definiciones de Iconos SVG para Herramientas de Dibujo -->
-                            <svg style="display:none;">
-                                <symbol id="icon-poly" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M12 2l8 6-3 10H7l-3-10z"/>
-                                </symbol>
-                                <symbol id="icon-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <polyline points="4 20 12 12 20 4"/>
-                                </symbol>
-                                <symbol id="icon-point" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <circle cx="12" cy="12" r="3"/>
-                                    <path d="M12 2v2m0 16v2m10-10h-2M4 12H2"/>
-                                </symbol>
-                                <symbol id="icon-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M3 6h18 M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
-                                </symbol>
-                                <symbol id="icon-clear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M21 4H8l-7 8 7 8h13a2 2 0 002-2V6a2 2 0 00-2-2z M18 9l-6 6 M12 9l6 6"/>
-                                </symbol>
-                            </svg>
-
                             <div id="map"></div>
                             
-                            <!-- HUD COORDENADAS -->
                             <div class="hud-elevation">
                                 <div><b>LON:</b> <span id="hud-lon">--</span></div>
                                 <div><b>LAT:</b> <span id="hud-lat">--</span></div>
                                 <div style="color:#008a3b;"><b>VALOR:</b> <span id="hud-ele">--</span></div>
                             </div>
 
-                            <!-- BOTÓN HAMBURGUESA -->
                             <div id="btn-open-dock" class="btn-open-dock-circle" onclick="toggleDock()" title="Abrir Herramientas Visuales">
                                 ☰
                             </div>
                             
-                            <!-- DOCK PANEL -->
                             <div id="dock-panel" class="workbench-dock" style="display: none;">
                                 <div class="dock-header">
                                     <div style="display:flex; align-items:center; gap:6px;">
@@ -1414,7 +1608,7 @@ with tab_mapa:
                                             <option value="base-terrain-layer">Terreno (Esri)</option>
                                             <option value="base-ocean-layer">Océanos (Esri)</option>
                                             <option value="base-dark-layer">Gris Oscuro (Esri)</option>
-                                            <option value="base-google-layer">Google Satelital</option>
+                                            <option value="base-google-layer">Google Satelital gris 35%</option>
                                         </select>
                                     </div>
                                     <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
@@ -1440,17 +1634,14 @@ with tab_mapa:
                                 </div>
                             </div>
                             
-                            <!-- LEYENDAS -->
                             <div class="legend-panel">
                                 {leyenda_html}
                             </div>
                             
-                            <!-- BOTÓN GRADIENTE -->
                             <div id="btn-open-gradient" class="leaflet-open-gradient-btn" onclick="toggleGradient()" title="Mostrar Gradiente">
                                 <div style="width: 14px; height: 14px; background: linear-gradient(to bottom, #eff3ff, #08519c); border: 1px solid #fff; border-radius: 2px;"></div>
                             </div>
 
-                            <!-- PANEL GRADIENTE -->
                             <div id="gradient-panel-container" class="gradient-docked-panel" style="display: none;">
                                 <div class="docked-gradient-header">
                                     <span>Gradiente Piezométrico</span>
@@ -1467,7 +1658,6 @@ with tab_mapa:
                                 </div>
                             </div>
 
-                            <!-- BOTÓN DIBUJO Y MEDICIÓN (SVG) -->
                             <div id="btn-open-draw" class="leaflet-open-draw-btn" onclick="toggleDraw()" title="Herramientas de Dibujo y Medición">
                                 <svg viewBox="0 0 24 24" style="width:16px; height:16px; stroke:#691C32; fill:none; stroke-width:2;">
                                     <path d="M12 19l7-7 3 3-7 7-3-3z"/>
@@ -1476,7 +1666,6 @@ with tab_mapa:
                                 </svg>
                             </div>
 
-                            <!-- PANEL DESPLEGABLE: TRAZADOS Y MEDICIONES -->
                             <div id="draw-panel-container" class="draw-docked-panel" style="display: none;">
                                 <div class="docked-draw-header">
                                     <div style="display:flex; align-items:center; gap:6px;">
@@ -1509,10 +1698,8 @@ with tab_mapa:
                                         </button>
                                     </div>
 
-                                    <!-- RESULTADOS MÉTRICOS -->
                                     <div id="draw-measure-box" class="draw-measure-box"></div>
 
-                                    <!-- ACCIONES DE EDICIÓN Y EXPORTACIÓN -->
                                     <div class="draw-actions">
                                         <button class="btn-action-sm danger" onclick="eliminarDibujoSeleccionado()" title="Borrar selección o todos los trazos">
                                             <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
@@ -1527,7 +1714,6 @@ with tab_mapa:
                             </div>
 
                             <script>
-                                // Funciones de Opacidad
                                 function cambiarOpacidadKriging(valor) {{
                                     if (map.getLayer('kriging-layer')) {{
                                         map.setPaintProperty('kriging-layer', 'raster-opacity', parseFloat(valor));
@@ -1542,25 +1728,23 @@ with tab_mapa:
                                     }}
                                 }}
 
-                                // Iconos SVG para Fullscreen
                                 const iconExpandSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
                                 const iconCompressSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
 
-                                // Inicialización del Mapa
                                 const map = new maplibregl.Map({{
                                     container: 'map',
                                     style: {{
                                         'version': 8,
                                         'sources': {{
-                                            'base-light': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-sat': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-topo': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-osm': {{ 'type': 'raster', 'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'], 'tileSize': 256 }},
-                                            'base-street': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-terrain': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-ocean': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-dark': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256 }},
-                                            'base-google': {{ 'type': 'raster', 'tiles': ['https://mt1.google.com/vt/lyrs=s&x={{x}}&y={{y}}&z={{z}}'], 'tileSize': 256 }}
+                                            'base-light': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                                            'base-sat': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, Maxar' }},
+                                            'base-topo': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                                            'base-osm': {{ 'type': 'raster', 'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'], 'tileSize': 256, 'attribution': '© OpenStreetMap' }},
+                                            'base-street': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                                            'base-terrain': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                                            'base-ocean': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, GEBCO' }},
+                                            'base-dark': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                                            'base-google': {{ 'type': 'raster', 'tiles': ['https://mt1.google.com/vt/lyrs=s&x={{x}}&y={{y}}&z={{z}}'], 'tileSize': 256, 'attribution': 'Google Satellite' }}
                                         }},
                                         'layers': [
                                             {{ 'id': 'base-light-layer', 'type': 'raster', 'source': 'base-light', 'layout': {{'visibility': 'visible'}} }},
@@ -1571,15 +1755,15 @@ with tab_mapa:
                                             {{ 'id': 'base-terrain-layer', 'type': 'raster', 'source': 'base-terrain', 'layout': {{'visibility': 'none'}} }},
                                             {{ 'id': 'base-ocean-layer', 'type': 'raster', 'source': 'base-ocean', 'layout': {{'visibility': 'none'}} }},
                                             {{ 'id': 'base-dark-layer', 'type': 'raster', 'source': 'base-dark', 'layout': {{'visibility': 'none'}} }},
-                                            {{ 'id': 'base-google-layer', 'type': 'raster', 'source': 'base-google', 'layout': {{'visibility': 'none'}} }}
+                                            {{ 'id': 'base-google-layer', 'type': 'raster', 'source': 'base-google', 'layout': {{'visibility': 'none'}}, 'paint': {{'raster-opacity': 0.35, 'raster-saturation': -1.0}} }}
                                         ]
                                     }},
                                     center: [{centro_lon}, {centro_lat}],
                                     zoom: 9.5,
+                                    attributionControl: false,
                                     preserveDrawingBuffer: true
                                 }});
                                 
-                                // Control Fullscreen Custom
                                 class FullscreenCustomControl {{
                                     onAdd(mapInstance) {{
                                         this._map = mapInstance;
@@ -1623,59 +1807,49 @@ with tab_mapa:
                                 }}
                                 map.addControl(new FullscreenCustomControl(), 'top-right');
                                 
-                                // Controles Nativos
                                 map.addControl(new maplibregl.NavigationControl(), 'top-right');
+                                map.addControl(new maplibregl.AttributionControl({{ compact: false }}), 'bottom-right');
                                 map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
 
-                                // =========================================================
-                                // 📐 INICIALIZACIÓN DE MAPBOX DRAW (HERRAMIENTAS DE DIBUJO)
-                                // =========================================================
                                 const draw = new MapboxDraw({{
                                     displayControlsDefault: false,
                                     controls: {{}},
                                     userProperties: true,
                                     styles: [
                                         {{
-                                            'id': 'gl-draw-line',
-                                            'type': 'line',
+                                            'id': 'gl-draw-line', 'type': 'line',
                                             'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
                                             'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
                                             'paint': {{ 'line-color': '#9f2241', 'line-width': 3, 'line-dasharray': [0.2, 2] }}
                                         }},
                                         {{
-                                            'id': 'gl-draw-polygon-fill',
-                                            'type': 'fill',
+                                            'id': 'gl-draw-polygon-fill', 'type': 'fill',
                                             'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
                                             'paint': {{ 'fill-color': '#285c4d', 'fill-opacity': 0.25 }}
                                         }},
                                         {{
-                                            'id': 'gl-draw-polygon-stroke',
-                                            'type': 'line',
+                                            'id': 'gl-draw-polygon-stroke', 'type': 'line',
                                             'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
                                             'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
                                             'paint': {{ 'line-color': '#285c4d', 'line-width': 2.5 }}
                                         }},
                                         {{
-                                            'id': 'gl-draw-point',
-                                            'type': 'circle',
+                                            'id': 'gl-draw-point', 'type': 'circle',
                                             'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'vertex'], ['!=', 'meta', 'midpoint'], ['!=', 'mode', 'static']],
                                             'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
                                         }},
                                         {{
-                                            'id': 'gl-draw-vertex-inactive',
-                                            'type': 'circle',
+                                            'id': 'gl-draw-vertex-inactive', 'type': 'circle',
                                             'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
                                             'paint': {{ 'circle-radius': 0, 'circle-opacity': 0 }}
                                         }},
                                         {{
-                                            'id': 'gl-draw-vertex-active',
-                                            'type': 'circle',
+                                            'id': 'gl-draw-vertex-active', 'type': 'circle',
                                             'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
                                             'paint': {{ 'circle-radius': 0, 'circle-opacity': 0 }}
                                         }},
                                         {{
-                                            'id': 'gl-draw-midpoint',
-                                            'type': 'circle',
+                                            'id': 'gl-draw-midpoint', 'type': 'circle',
                                             'filter': ['all', ['==', 'meta', 'midpoint'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
                                             'paint': {{ 'circle-radius': 0, 'circle-opacity': 0 }}
                                         }}
@@ -1683,7 +1857,6 @@ with tab_mapa:
                                 }});
                                 map.addControl(draw);
 
-                                // Lógica del Dock (Hamburguesa)
                                 let dockAbierto = true;
                                 function aplicarEstadoVisualDock() {{
                                     const dock = document.getElementById('dock-panel');
@@ -1699,7 +1872,6 @@ with tab_mapa:
                                 }}
                                 aplicarEstadoVisualDock();
                                 
-                                // Lógica del Panel de Gradiente
                                 let gradientAbierto = false;
                                 function toggleGradient() {{
                                     gradientAbierto = !gradientAbierto;
@@ -1715,7 +1887,6 @@ with tab_mapa:
                                     }}
                                 }}
 
-                                // Lógica del Panel de Dibujo
                                 let drawAbierto = false;
                                 function toggleDraw() {{
                                     drawAbierto = !drawAbierto;
@@ -1733,13 +1904,10 @@ with tab_mapa:
                                     }}
                                 }}
 
-                                // Funciones de Botones de Dibujo
                                 function activarModoDibujo(mode) {{
                                     detenerModoCirculo();
                                     limpiarHerramientasActivas();
-                                    
                                     map.getCanvas().style.cursor = 'crosshair'; 
-                                    
                                     if (mode === 'point') {{
                                         document.getElementById('btn-tool-point').classList.add('active');
                                         draw.changeMode('draw_point');
@@ -1786,7 +1954,6 @@ with tab_mapa:
                                     URL.revokeObjectURL(url);
                                 }}
 
-                                // Modo Circunferencia / Radio Geodésico
                                 let modoCirculoActivo = false;
                                 let centroCirculo = null;
 
@@ -1797,7 +1964,6 @@ with tab_mapa:
                                     centroCirculo = null;
                                     document.getElementById('btn-tool-circle').classList.add('active');
                                     map.getCanvas().style.cursor = 'crosshair';
-                                    
                                     const box = document.getElementById('draw-measure-box');
                                     box.style.display = 'block';
                                     box.innerHTML = '<b>Paso 1:</b> Clic en el mapa para fijar el <b>CENTRO</b>.';
@@ -1814,30 +1980,17 @@ with tab_mapa:
                                     }}
                                 }}
 
-                                // Selector de Mapas Base
                                 document.getElementById('sel-basemap').addEventListener('change', (e) => {{
                                     const selected = e.target.value;
                                     const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
                                     
                                     basemaps.forEach(id => {{
                                         if (map.getLayer(id)) {{
-                                            if (selected === 'base-google-layer') {{
-                                                if (id === 'base-light-layer') map.setLayoutProperty(id, 'visibility', 'visible');
-                                                else if (id === 'base-google-layer') {{
-                                                    map.setLayoutProperty(id, 'visibility', 'visible');
-                                                    map.setPaintProperty(id, 'raster-opacity', 0.35);
-                                                }} else {{
-                                                    map.setLayoutProperty(id, 'visibility', 'none');
-                                                }}
-                                            }} else {{
-                                                map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
-                                                if (id === selected) map.setPaintProperty(id, 'raster-opacity', 1.0);
-                                            }}
+                                            map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
                                         }}
                                     }});
                                 }});
 
-                                // Variables Matemáticas
                                 const z_data = {z_data_json};
                                 const bounds = {bounds_json};
                                 const min_y = bounds[0][0], min_x = bounds[0][1];
@@ -1847,25 +2000,19 @@ with tab_mapa:
                                 let popupActivo = null;
 
                                 map.on('load', () => {{
-                                    // Capa auxiliar para preview elástico del círculo
                                     map.addSource('temp-circle-src', {{
                                         type: 'geojson',
                                         data: {{ "type": "FeatureCollection", "features": [] }}
                                     }});
                                     map.addLayer({{
-                                        id: 'temp-circle-fill',
-                                        type: 'fill',
-                                        source: 'temp-circle-src',
+                                        id: 'temp-circle-fill', type: 'fill', source: 'temp-circle-src',
                                         paint: {{ 'fill-color': '#008a3b', 'fill-opacity': 0.2 }}
                                     }});
                                     map.addLayer({{
-                                        id: 'temp-circle-line',
-                                        type: 'line',
-                                        source: 'temp-circle-src',
+                                        id: 'temp-circle-line', type: 'line', source: 'temp-circle-src',
                                         paint: {{ 'line-color': '#008a3b', 'line-width': 2, 'line-dasharray': [2, 2] }}
                                     }});
 
-                                    // 1. Geología SGM
                                     const geoData = {geojson_geo_str};
                                     if (geoData.features) {{
                                         map.addSource('geo-src', {{ type: 'geojson', data: geoData }});
@@ -1881,30 +2028,24 @@ with tab_mapa:
                                         }});
                                     }}
 
-                                    // 2. Kriging Raster
                                     map.addSource('kriging-src', {{
-                                        type: 'image',
-                                        url: 'data:image/png;base64,{img_krig_b64}',
-                                        coordinates: {img_coords_json}
+                                        type: 'image', url: 'data:image/png;base64,{img_krig_b64}', coordinates: {img_coords_json}
                                     }});
                                     map.addLayer({{
                                         id: 'kriging-layer', type: 'raster', source: 'kriging-src',
                                         paint: {{ 'raster-opacity': 0.65, 'raster-resampling': 'linear' }}
                                     }});
 
-                                    // 3. Isolíneas
                                     map.addSource('iso-src', {{
                                         type: 'image', url: 'data:image/png;base64,{img_iso_b64}', coordinates: {img_coords_json}
                                     }});
                                     map.addLayer({{ id: 'iso-layer', type: 'raster', source: 'iso-src', paint: {{ 'raster-opacity': 0.95 }} }});
 
-                                    // 4. Vectores
                                     map.addSource('vec-src', {{
                                         type: 'image', url: 'data:image/png;base64,{img_flujo_b64}', coordinates: {img_coords_json}
                                     }});
                                     map.addLayer({{ id: 'vec-layer', type: 'raster', source: 'vec-src', paint: {{ 'raster-opacity': 0.9 }} }});
 
-                                    // 5. Mapa de Calor
                                     map.addSource('pozos-src', {{ type: 'geojson', data: {geojson_pozos_str} }});
                                     map.addLayer({{
                                         id: 'heat-layer', type: 'heatmap', source: 'pozos-src',
@@ -1917,7 +2058,6 @@ with tab_mapa:
                                         layout: {{ 'visibility': 'none' }}
                                     }});
 
-                                    // 6. Puntos Oficiales
                                     map.addLayer({{
                                         id: 'pozos-layer', type: 'circle', source: 'pozos-src',
                                         paint: {{
@@ -1928,7 +2068,6 @@ with tab_mapa:
                                         }}
                                     }});
 
-                                    // 7. Puntos Adicionales
                                     map.addSource('add-src', {{ type: 'geojson', data: {geojson_add_str} }});
                                     map.addLayer({{
                                         id: 'add-layer-manual', type: 'circle', source: 'add-src',
@@ -1941,14 +2080,19 @@ with tab_mapa:
                                         paint: {{ 'circle-radius': 6, 'circle-color': '#2980b9', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }}
                                     }});
 
-                                    // Ajustar vista
                                     const polyBounds = {poly_bounds_str};
                                     if (polyBounds) {{
                                         map.fitBounds([[polyBounds[0], polyBounds[1]], [polyBounds[2], polyBounds[3]]], {{ padding: 40 }});
                                     }}
                                 }});
 
-                                // HUD Coordenadas y Valor Interpolado
+                                const legContenedor = document.querySelector('.legend-panel');
+                                if (legContenedor) {{
+                                    legContenedor.addEventListener('keydown', function(e) {{ e.stopPropagation(); }});
+                                    legContenedor.addEventListener('keyup', function(e) {{ e.stopPropagation(); }});
+                                    legContenedor.addEventListener('keypress', function(e) {{ e.stopPropagation(); }});
+                                }}
+
                                 map.on('mousemove', (e) => {{
                                     document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4) + '°';
                                     document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4) + '°';
@@ -1969,7 +2113,6 @@ with tab_mapa:
                                         document.getElementById('hud-ele').innerText = '--';
                                     }}
 
-                                    // Lógica de previsualización del Círculo
                                     if (!modoCirculoActivo || !centroCirculo) return;
                                     const actual = [e.lngLat.lng, e.lngLat.lat];
                                     const radioKm = turf.distance(centroCirculo, actual, {{ units: 'kilometers' }});
@@ -1987,7 +2130,6 @@ with tab_mapa:
                                     }}
                                 }});
 
-                                // Lógica de Clic para el Círculo
                                 map.on('click', (e) => {{
                                     if (!modoCirculoActivo) return;
                                     const coords = [e.lngLat.lng, e.lngLat.lat];
@@ -2000,13 +2142,10 @@ with tab_mapa:
                                         if (radioKm > 0.001) {{
                                             const circlePoly = turf.circle(centroCirculo, radioKm, {{ steps: 64, units: 'kilometers' }});
                                             draw.add(circlePoly);
-                                            
-                                            // Mostrar Popup al finalizar el círculo (CON CLASE TRANSPARENTE)
                                             if (popupActivo) popupActivo.remove();
                                             popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                                 .setLngLat(coords)
                                                 .setHTML(`<div class="custom-transparent-popup">
-                                                            <h4>⭕ Círculo Finalizado</h4>
                                                             <b>Radio:</b> ${{(radioKm * 1000).toFixed(1)}} m<br>
                                                             <b>Área:</b> ${{(turf.area(circlePoly) / 10000).toFixed(2)}} ha
                                                           </div>`)
@@ -2016,7 +2155,6 @@ with tab_mapa:
                                     }}
                                 }});
 
-                                // Actualizar resultados de medición
                                 function generarTextoMedicion(feat) {{
                                     const tipo = feat.geometry.type;
                                     if (tipo === 'Point') {{
@@ -2046,7 +2184,6 @@ with tab_mapa:
                                 map.on('draw.create', (e) => {{
                                     const feat = e.features[0];
                                     const texto = generarTextoMedicion(feat);
-                                    
                                     let coords;
                                     if (feat.geometry.type === 'Point') coords = feat.geometry.coordinates;
                                     else if (feat.geometry.type === 'LineString') coords = feat.geometry.coordinates[feat.geometry.coordinates.length - 1];
@@ -2055,12 +2192,8 @@ with tab_mapa:
                                     if (popupActivo) popupActivo.remove();
                                     popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                         .setLngLat(coords)
-                                        .setHTML(`<div class="custom-transparent-popup">
-                                                    <h4>📏 Medición Finalizada</h4>
-                                                    ${{texto}}
-                                                  </div>`)
+                                        .setHTML(`<div class="custom-transparent-popup">${{texto}}</div>`)
                                         .addTo(map);
-                                        
                                     limpiarHerramientasActivas();
                                 }});
 
@@ -2068,7 +2201,6 @@ with tab_mapa:
                                     if (e.features && e.features.length > 0) {{
                                         const feat = e.features[0];
                                         const texto = generarTextoMedicion(feat);
-                                        
                                         const box = document.getElementById('draw-measure-box');
                                         if (box) box.innerHTML = texto;
 
@@ -2077,23 +2209,16 @@ with tab_mapa:
                                         else if (feat.geometry.type === 'LineString') {{
                                             const pts = feat.geometry.coordinates;
                                             coords = pts[Math.floor(pts.length / 2)];
-                                        }}
-                                        else coords = turf.centroid(feat).geometry.coordinates;
+                                        }} else coords = turf.centroid(feat).geometry.coordinates;
 
                                         if (popupActivo) popupActivo.remove();
                                         popupActivo = new maplibregl.Popup({{ closeOnClick: false, offset: 10, className: 'transparent-popup' }})
                                             .setLngLat(coords)
-                                            .setHTML(`<div class="custom-transparent-popup">
-                                                        <h4>📏 Medición</h4>
-                                                        ${{texto}}
-                                                      </div>`)
+                                            .setHTML(`<div class="custom-transparent-popup">${{texto}}</div>`)
                                             .addTo(map);
                                     }}
                                 }});
 
-                                // =========================================================
-                                // 🛡️ RESTAURACIÓN DE POPUPS NORMALES (POZOS Y GEOLOGÍA)
-                                // =========================================================
                                 function isDrawingMode() {{
                                     try {{
                                         return draw.getMode() !== 'simple_select' || modoCirculoActivo;
@@ -2132,8 +2257,6 @@ with tab_mapa:
                                 
                                 map.on('click', 'geo-fill', (e) => {{
                                     if (isDrawingMode()) return;
-                                    
-                                    // ⚡ EVITAR SUPERPOSICIÓN: Si el clic también tocó un pozo o punto, ignorar la geología
                                     const puntosClickeados = map.queryRenderedFeatures(e.point, {{
                                         layers: ['pozos-layer', 'add-layer-manual', 'add-layer-csv']
                                     }});
@@ -2256,36 +2379,30 @@ with tab_mapa:
                         """
                         components.html(html_maplibre, height=720)
 
-                        # =======================================================
-                        # 📥 DESCARGA DIRECTA SIG (GEOTIFF, SHAPEFILE, GEOJSON)
-                        # =======================================================
-                        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-                        with st.expander("📥 Descargar Capas en Formatos SIG (GeoTIFF, Shapefile, GeoJSON)", expanded=False):
-                            st.caption("Archivos 100% compatibles con QGIS, ArcGIS, Google Earth y modelación numérica.")
-                            col_d1, col_d2, col_d3 = st.columns(3)
-
-                            with col_d1:
-                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>🌊 1. Superficie Kriging</p>", unsafe_allow_html=True)
-                                st.download_button("🗺️ GeoTIFF Ráster (.tif)", data=geotiff_bytes, file_name=f"kriging_{clave_actual}_{var_real}.tif", mime="image/tiff", use_container_width=True)
+                        with ph_descargas.container():
+                            with st.expander("📥 Descargas SIG", expanded=False):
+                                st.info("Archivos SIG 100% compatibles con QGIS, ArcGIS y modelación numérica.", icon="ℹ️")
+                                
+                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>🌊 Superficie Kriging</p>", unsafe_allow_html=True)
+                                st.markdown(generar_enlace_descarga(geotiff_bytes, f"kriging_{clave_actual}_{var_real}.tif", "image/tiff", "🗺️ GeoTIFF Ráster (.tif)"), unsafe_allow_html=True)
                                 if shp_krig_zip:
-                                    st.download_button("📦 Shapefile Malla (.zip)", data=shp_krig_zip, file_name=f"kriging_malla_{clave_actual}.zip", mime="application/zip", use_container_width=True)
-                                st.download_button("📄 GeoJSON Malla (.geojson)", data=geojson_krig, file_name=f"kriging_malla_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                                    st.markdown(generar_enlace_descarga(shp_krig_zip, f"kriging_malla_{clave_actual}.zip", "application/zip", "📦 Shapefile Malla (.zip)"), unsafe_allow_html=True)
+                                st.markdown(generar_enlace_descarga(geojson_krig, f"kriging_malla_{clave_actual}.geojson", "application/geo+json", "📄 GeoJSON Malla"), unsafe_allow_html=True)
 
-                            with col_d2:
-                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>📏 2. Isolíneas / Isopiezas</p>", unsafe_allow_html=True)
+                                st.markdown("<hr style='margin:10px 0;'>", unsafe_allow_html=True)
+
+                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>📏 Isolíneas / Isopiezas</p>", unsafe_allow_html=True)
                                 if shp_iso_zip:
-                                    st.download_button("📦 Shapefile Líneas (.zip)", data=shp_iso_zip, file_name=f"isopiezas_{clave_actual}.zip", mime="application/zip", use_container_width=True)
-                                st.download_button("📄 GeoJSON Líneas (.geojson)", data=geojson_iso, file_name=f"isopiezas_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                                    st.markdown(generar_enlace_descarga(shp_iso_zip, f"isopiezas_{clave_actual}.zip", "application/zip", "📦 Shapefile Líneas (.zip)"), unsafe_allow_html=True)
+                                st.markdown(generar_enlace_descarga(geojson_iso, f"isopiezas_{clave_actual}.geojson", "application/geo+json", "📄 GeoJSON Líneas"), unsafe_allow_html=True)
 
-                            with col_d3:
-                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>🧭 3. Vectores de Flujo</p>", unsafe_allow_html=True)
+                                st.markdown("<hr style='margin:10px 0;'>", unsafe_allow_html=True)
+
+                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>🧭 Vectores de Flujo</p>", unsafe_allow_html=True)
                                 if shp_flujo_zip:
-                                    st.download_button("📦 Shapefile Vectores (.zip)", data=shp_flujo_zip, file_name=f"vectores_flujo_{clave_actual}.zip", mime="application/zip", use_container_width=True)
-                                st.download_button("📄 GeoJSON Vectores (.geojson)", data=geojson_flujo, file_name=f"vectores_flujo_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                                    st.markdown(generar_enlace_descarga(shp_flujo_zip, f"vectores_flujo_{clave_actual}.zip", "application/zip", "📦 Shapefile Vectores (.zip)"), unsafe_allow_html=True)
+                                st.markdown(generar_enlace_descarga(geojson_flujo, f"vectores_flujo_{clave_actual}.geojson", "application/geo+json", "📄 GeoJSON Vectores"), unsafe_allow_html=True)
                         
-                        # =======================================================
-                        # 🏷️ 3. LEYENDA CARTOGRÁFICA OFICIAL SGM (EN PYTHON)
-                        # =======================================================
                         if dic_leyenda_rocas:
                             st.markdown(f"""
                                 <div style='background-color:#F8FAFC; border-left:4px solid #691C32; padding:10px 14px; border-radius:4px; margin-top:10px; margin-bottom:8px;'>
@@ -2303,7 +2420,6 @@ with tab_mapa:
                             ]
                             st.markdown(f"<div style='background-color:#ffffff; padding:12px; border-radius:6px; border:1px solid #E2E8F0; line-height:1.6;'>{''.join(items_html)}</div>", unsafe_allow_html=True)
 
-                        # Inspección de atributos de la litología
                         try:
                             if gdf_geo is not None and not gdf_geo.empty:
                                 with st.expander("🔬 Inspeccionar Tabla de Atributos Vectoriales de la Capa SGM", expanded=False):
@@ -2322,7 +2438,6 @@ with tab_hidrograma:
         st.write("Selecciona un pozo de la red de monitoreo para analizar su comportamiento temporal y su tasa de abatimiento matemática.")
         pozo_sel = st.selectbox("🎯 Filtrar por Pozo de Monitoreo:", pozos_disponibles)
         
-        # ⚡ PROTECCIÓN CONTRA VALORES NULOS PARA EVITAR QUE POLYFIT COLAPSE
         df_pozo = df_ac[df_ac['Pozo'].astype(str) == str(pozo_sel)].sort_values(by='Año').dropna(subset=['Año', 'Profundidad_NE'])
         
         if len(df_pozo) >= 2:
@@ -2357,7 +2472,8 @@ with tab_hidrograma:
 
             fig.update_layout(title=f"Hidrograma Invertido - Evolución del Nivel Estático (Pozo: {pozo_sel})", yaxis=dict(autorange="reversed"), height=500, margin=dict(t=60, b=40), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True)
-        else: st.warning("No hay suficientes datos históricos.")
+        else:
+            st.warning("No hay suficientes datos históricos.")
     renderizar_pestaña_hidrograma()
 
 # --- EJE 4: FORECASTING Y ALERTAS ---
@@ -2368,7 +2484,6 @@ with tab_alertas:
         resultados_alertas = []
         
         for pozo in pozos_disponibles:
-            # ⚡ PROTECCIÓN CONTRA VALORES NULOS
             df_hist = df_ac[df_ac['Pozo'].astype(str) == str(pozo)].sort_values(by='Año').dropna(subset=['Año', 'Profundidad_NE'])
             if len(df_hist) >= 3: 
                 x, y = df_hist['Año'].values, df_hist['Profundidad_NE'].values
@@ -2388,8 +2503,10 @@ with tab_alertas:
             st.dataframe(df_alertas.style.map(color_estatus, subset=['Estatus de Estrés']).format({"Tasa (m/año)": "{:.2f}", "Prof. Actual (m)": "{:.2f}", "Prof. Proyectada 2035 (m)": "{:.2f}", "Caída Estimada (m)": "{:.2f}"}), use_container_width=True, hide_index=True)
             
             pozos_criticos = len(df_alertas[df_alertas["Estatus de Estrés"] == "🚨 Crítico"])
-            if pozos_criticos > 0: st.error(f"**Justificación Técnica:** Se detectaron {pozos_criticos} pozos con abatimiento crítico.")
-            else: st.success("La red refleja estabilidad física.")
+            if pozos_criticos > 0:
+                st.error(f"**Justificación Técnica:** Se detectaron {pozos_criticos} pozos con abatimiento crítico.")
+            else:
+                st.success("La red refleja estabilidad física.")
             
             col_g1, col_g2 = st.columns([1, 1.3])
             with col_g1:
@@ -2401,7 +2518,6 @@ with tab_alertas:
             with col_g2:
                 st.write("**2. Proyección y Cálculo**")
                 pozo_demo = st.selectbox("Selecciona un pozo:", df_alertas["ID Pozo"].tolist())
-                # ⚡ PROTECCIÓN CONTRA VALORES NULOS
                 df_pozo_demo = df_ac[df_ac['Pozo'].astype(str) == pozo_demo].sort_values(by='Año').dropna(subset=['Año', 'Profundidad_NE'])
                 x, y = df_pozo_demo['Año'].values, df_pozo_demo['Profundidad_NE'].values
                 z = np.polyfit(x, y, 1)
