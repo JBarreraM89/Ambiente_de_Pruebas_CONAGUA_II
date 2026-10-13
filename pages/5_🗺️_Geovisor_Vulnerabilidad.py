@@ -954,7 +954,9 @@ html_code = f"""
                 let vColor = vulnColors[v] || '#888888';
                 let vText = vulnLabels[v] || 'Sin Datos';
 
-                let html = `<div class="docked-header"><span class="docked-close" onclick="document.getElementById('docked-panel').style.display='none'; clearSelection();">&times;</span><span class="docked-title">${{props.NOM_ACUIF || props.ACUIFERO || props.NOMBRE_POZO || 'Sin Nombre'}}</span><span class="docked-sub">CLAVE OFICIAL: ${{props.CLAVE_ACUI || 'S/D'}}</span></div><div class="docked-body">`;
+                // CORRECCIÓN: Se quitó el onclick="..." del span. 
+                // La acción de cerrar se asigna correctamente al final de esta función.
+                let html = `<div class="docked-header"><span class="docked-close">&times;</span><span class="docked-title">${{props.NOM_ACUIF || props.ACUIFERO || props.NOMBRE_POZO || 'Sin Nombre'}}</span><span class="docked-sub">CLAVE OFICIAL: ${{props.CLAVE_ACUI || 'S/D'}}</span></div><div class="docked-body">`;
 
                 if(theme === 'vuln') html += `<div class="card-badge" style="background:${{vColor}};">${{vText}}</div><table class="card-table"><tr><td class="label">Metodología:</td><td class="val">SEAG-INDEX</td></tr></table>`;
                 else if(theme === 'hydro') html += `<table class="card-table"><tr><td class="label">Transmisividad:</td><td class="val">${{props.transmisividad_media || 'S/D'}} m²/d</td></tr><tr><td class="label">Conductividad:</td><td class="val">${{props.conductividad_media || 'S/D'}} m/d</td></tr><tr><td class="label">Almacenamiento:</td><td class="val">${{props.coef_almacenamiento_medio || 'S/D'}}</td></tr><tr><td class="label">Pozos Oficiales:</td><td class="val">${{props.pozos_registrados || '0'}}</td></tr></table>`;
@@ -963,6 +965,7 @@ html_code = f"""
                 html += `</div>`;
                 panel.innerHTML = html;
                 panel.style.display = 'block';
+                panel.querySelector('.docked-close').onclick = clearSelection;
             }}
 
             document.querySelectorAll('input[name="basemap_radio"]').forEach(radio => {{
