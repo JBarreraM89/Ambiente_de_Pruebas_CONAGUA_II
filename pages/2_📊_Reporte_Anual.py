@@ -23,13 +23,17 @@ import time
 import json
 import os
 import gc
+import logging
 import numpy as np
 from streamlit_folium import st_folium
 from plotly.subplots import make_subplots
 
 # --- IMPORTACIONES DEL CORE (FASE 1 y 2) ---
 from utils.styles import inyectar_css_oficial, banner_institucional, inyectar_css_navegacion
-from core.data_loader import cargar_catalogo, cargar_historico_excel, cargar_datos_maestros
+from core.data_loader import (cargar_catalogo, cargar_historico_excel, obtener_datos_maestros_compartidos,
+                              normalizar_serie_clave)
+
+logger = logging.getLogger(__name__)
 
 # =======================================================
 # --- CSS OFICIAL Y BANNER COMPACTO ---
@@ -79,6 +83,7 @@ def guardar_json_atomico(data, ruta):
 def worker_extraccion(archivo, token, retries=3):
     id_arch = archivo['id']
     nom_arch = archivo['name']
+    from core.drive_api import descargar_json_crudo_rapido  # import local: el módulo se reejecuta en cada rerun
     
     for intento in range(retries):
         try:
@@ -87,8 +92,7 @@ def worker_extraccion(archivo, token, retries=3):
                 return {"estado": "error", "id": id_arch, "name": nom_arch}
             
             ruta_json_fisico = os.path.join(CARPETA_JSONS, f"{id_arch}.json")
-            with open(ruta_json_fisico, 'w', encoding='utf-8') as f:
-                json.dump(data, f)
+            guardar_json_atomico(data, ruta_json_fisico)  # escritura atómica: otra sesión nunca lee un JSON a medias
                 
             return {"estado": "exito", "id": id_arch, "modifiedTime": archivo.get('modifiedTime')}
             
@@ -119,6 +123,7 @@ def calc_flujos_vectorizado(datos, cols):
 
 def worker_generar_excel(f_maestra, anio_procesado, user_dir):
     try:
+        from core.generador_excel import generar_excel_matriz  # import local (antes solo existía tras pulsar 'Escanear')
         ruta_json = f_maestra.get("ruta_fisica", "")
         if not os.path.exists(ruta_json):
             return None
@@ -232,7 +237,7 @@ def worker_generar_excel(f_maestra, anio_procesado, user_dir):
         
         return (ruta_ind, f"Balances_Individuales/{nom_x}")
     except Exception as e:
-        print(f"Error generando Excel para Acuífero {f_maestra.get('Clave')}: {e}")
+        logger.exception("Error generando Excel para el acuífero %s", f_maestra.get('Clave'))
         return None
 
 # ==========================================
@@ -294,7 +299,8 @@ def extraer_datos_balance(ruta_json):
         }
         datos.update({k: round(v, 2) for k, v in usos_totales.items()})
         return datos
-    except:
+    except (OSError, ValueError, TypeError, AttributeError):
+        logger.exception("No se pudo extraer el balance de %s", ruta_json)
         return {}
 
 
@@ -308,19 +314,30 @@ if activar_tendencia:
     anio_comparacion = col_y2.number_input("Año de Publicación Anterior:", min_value=2015, max_value=2100, value=2023, step=1)
 
 if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
-    from google.auth.transport.requests import Request
-    from core.drive_api import buscar_metadatos_drive, descargar_json_crudo_rapido, obtener_servicio_drive
-    from core.generador_excel import generar_excel_matriz
+    from core.drive_api import buscar_metadatos_drive, obtener_token_acceso, ErrorDrive
     limpiar_temporales_antiguos()    
     if activar_tendencia and anio_comparacion >= anio_reporte:
         st.error("⚠️ Error de lógica temporal: El año histórico no puede ser mayor o igual al evaluado.")
         st.stop()
         
     dict_historico = cargar_historico_excel("DMA_VEAS.xlsx", anio_comparacion) if activar_tendencia else {}
+    if activar_tendencia and dict_historico.get("error_columnas"):
+        st.warning(f"⚠️ DMA_VEAS.xlsx no tiene las columnas {dict_historico.get('dma')} y {dict_historico.get('veas')}: la comparativa con el Excel oficial saldrá como N/D.")
+        dict_historico = {}
+    elif activar_tendencia and not dict_historico:
+        st.warning("⚠️ No se encontró o no se pudo leer DMA_VEAS.xlsx: la comparativa con el Excel oficial saldrá como N/D.")
 
     # Buscar JSONs del año actual y del año histórico
-    archivos_drive_actual = buscar_metadatos_drive(anio_reporte)
-    archivos_drive_hist = buscar_metadatos_drive(anio_comparacion) if activar_tendencia else []
+    try:
+        archivos_drive_actual = buscar_metadatos_drive(anio_reporte, estricto=True)
+        archivos_drive_hist = buscar_metadatos_drive(anio_comparacion, estricto=True) if activar_tendencia else []
+    except ErrorDrive as exc:
+        st.error(f"❌ No se pudo completar el escaneo de Drive; el reporte quedaría incompleto. Detalle: {exc}")
+        st.stop()
+    # Si existen varias versiones del mismo balance se conserva la modificada más recientemente
+    # (antes el orden de Drive era arbitrario y podía quedar una versión vieja).
+    archivos_drive_actual.sort(key=lambda a: a.get('modifiedTime', ''), reverse=True)
+    archivos_drive_hist.sort(key=lambda a: a.get('modifiedTime', ''), reverse=True)
     
     if not archivos_drive_actual:
         st.warning(f"No se encontraron archivos en Drive para el año {anio_reporte}.")
@@ -333,8 +350,11 @@ if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
     
     cache_index = {}
     if os.path.exists(INDEX_CACHE):
-        with open(INDEX_CACHE, 'r') as f:
-            cache_index = json.load(f)
+        try:
+            with open(INDEX_CACHE, 'r') as f:
+                cache_index = json.load(f)
+        except (OSError, ValueError):
+            cache_index = {}  # índice ilegible: se vuelve a descargar todo
 
     archivos_a_descargar = []
     for arch in archivos_totales:
@@ -349,11 +369,13 @@ if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
     if archivos_a_descargar:
         texto_progreso.info(f"🧠 Smart Sync: Descargando {len(archivos_a_descargar)} expedientes nuevos/históricos...")
         
-        _, cred = obtener_servicio_drive()
-        if cred: cred.refresh(Request())
+        token = obtener_token_acceso()
+        if not token:
+            st.error("❌ No se pudo autenticar con Google Drive. Revisa las credenciales en secrets.toml.")
+            st.stop()
         
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            futuros = {executor.submit(worker_extraccion, arch, cred.token): arch for arch in archivos_a_descargar}
+            futuros = {executor.submit(worker_extraccion, arch, token): arch for arch in archivos_a_descargar}
             for i, fut in enumerate(concurrent.futures.as_completed(futuros)):
                 res = fut.result()
                 if res['estado'] == 'exito':
@@ -381,6 +403,9 @@ if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
         ruta_actual = os.path.join(CARPETA_JSONS, f"{fid}.json")
         if os.path.exists(ruta_actual):
             datos_actuales = extraer_datos_balance(ruta_actual)
+            if not datos_actuales:
+                omitidos_errores.append(f"{fnom} - JSON ilegible o incompleto")
+                continue
             
             fila = {
                 "Clave": clave,
@@ -429,6 +454,7 @@ if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
     
     if "ruta_zip_generado" in st.session_state:
         del st.session_state["ruta_zip_generado"]
+    st.session_state.pop("aviso_excel_fallidos", None)
         
     time.sleep(1)
     barra_progreso.empty()
@@ -648,92 +674,93 @@ if "datos_reporte_nacional" in st.session_state:
                     st.write(f"**Comparativa Espacial:** Disponibilidad en {anio_comparacion} (Izquierda) vs {anio_procesado} (Derecha).")
                     st.caption("Pinta de rojo 🔴 los acuíferos sobreexplotados (Déficit) y de azul 🔵 los que tienen superávit. ¡Mueve un mapa y el otro te seguirá!")
                     
-                    with st.spinner("Cargando geometrías oficiales de CONAGUA..."):
-                        gdf_maestro = cargar_datos_maestros()
+                    if st.checkbox("🗺️ Cargar mapas comparativos (pueden tardar unos segundos)", key="chk_mapas_comparativos"):
+                        with st.spinner("Cargando geometrías oficiales de CONAGUA..."):
+                            gdf_maestro = obtener_datos_maestros_compartidos()
                         
-                        if gdf_maestro is not None and not df_riesgo.empty:
-                            # Normalizamos claves para el cruce
-                            gdf_maestro['CLV_ACUI'] = gdf_maestro['CLV_ACUI'].astype(str).str.zfill(4)
-                            df_riesgo['Clave_Str'] = df_riesgo['Clave'].astype(str).str.zfill(4)
+                            if gdf_maestro is not None and not df_riesgo.empty:
+                                # Normalizamos claves para el cruce (assign devuelve una copia: el objeto compartido NO se modifica)
+                                gdf_maestro = gdf_maestro.assign(CLV_ACUI=normalizar_serie_clave(gdf_maestro['CLV_ACUI']))
+                                df_riesgo['Clave_Str'] = df_riesgo['Clave'].astype(str).str.zfill(4)
                             
-                            gdf_mapa = gdf_maestro.merge(df_riesgo, left_on='CLV_ACUI', right_on='Clave_Str', how='inner')
+                                gdf_mapa = gdf_maestro.merge(df_riesgo, left_on='CLV_ACUI', right_on='Clave_Str', how='inner')
                             
-                            if not gdf_mapa.empty:
-                                # SANITIZAR DATOS PARA FOLIUM
-                                for col in gdf_mapa.columns:
-                                    if col != 'geometry':
-                                        gdf_mapa[col] = gdf_mapa[col].astype(str)
+                                if not gdf_mapa.empty:
+                                    # SANITIZAR DATOS PARA FOLIUM
+                                    for col in gdf_mapa.columns:
+                                        if col != 'geometry':
+                                            gdf_mapa[col] = gdf_mapa[col].astype(str)
 
-                                def semaforo_hidrico(valor):
-                                    if pd.isna(valor) or valor == "N/D" or valor == "nan": return "#9e9d9e" # Gris institucional
-                                    try:
-                                        # Rojo Institucional si es Déficit, Verde Institucional si es Superávit
-                                        return "#9f2241" if float(valor) < 0 else "#285c4d"
-                                    except: return "#9e9d9e"
+                                    def semaforo_hidrico(valor):
+                                        if pd.isna(valor) or valor == "N/D" or valor == "nan": return "#9e9d9e" # Gris institucional
+                                        try:
+                                            # Rojo Institucional si es Déficit, Verde Institucional si es Superávit
+                                            return "#9f2241" if float(valor) < 0 else "#285c4d"
+                                        except: return "#9e9d9e"
 
-                                centroide = gdf_mapa.geometry.unary_union.centroid
+                                    centroide = gdf_mapa.geometry.unary_union.centroid
                                 
-                                m_dual = plugins.DualMap(
-                                    location=[centroide.y, centroide.x], 
-                                    zoom_start=6, 
-                                    layout='horizontal',
-                                    tiles=None 
-                                )
-                                
-                                esri_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'
-                                esri_attr = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
-                                
-                                folium.TileLayer(tiles=esri_url, attr=esri_attr, name="Mapa Base (Esri)").add_to(m_dual.m1)
-                                folium.TileLayer(tiles=esri_url, attr=esri_attr, name="Mapa Base (Esri)").add_to(m_dual.m2)
-                                
-                                titulos_flotantes = f"""
-                                    <div style="position: absolute; top: 15px; left: 25%; transform: translateX(-50%); z-index: 9999; 
-                                                background-color: white; padding: 6px 20px; border-radius: 20px; 
-                                                box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-family: 'Segoe UI', sans-serif; 
-                                                font-size: 15px; font-weight: bold; color: #691C32; border: 2px solid #691C32;">
-                                        Disponibilidad {anio_comparacion}
-                                    </div>
-                                    <div style="position: absolute; top: 15px; left: 75%; transform: translateX(-50%); z-index: 9999; 
-                                                background-color: white; padding: 6px 20px; border-radius: 20px; 
-                                                box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-family: 'Segoe UI', sans-serif; 
-                                                font-size: 15px; font-weight: bold; color: #244062; border: 2px solid #244062;">
-                                        Disponibilidad {anio_procesado}
-                                    </div>
-                                """
-                                m_dual.get_root().html.add_child(folium.Element(titulos_flotantes))
-
-                                # 6. MAPA IZQUIERDO (AÑO HISTÓRICO)
-                                folium.GeoJson(
-                                    gdf_mapa,
-                                    name=f"Año {anio_comparacion}",
-                                    style_function=lambda feature: {
-                                        'fillColor': semaforo_hidrico(feature['properties'].get(f'DMA {anio_comparacion}')),
-                                        'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
-                                    },
-                                    tooltip=folium.GeoJsonTooltip(
-                                        fields=['NOM_ACUI', f'DMA {anio_comparacion}'], 
-                                        aliases=['Acuífero:', f'DMA {anio_comparacion}:']
+                                    m_dual = plugins.DualMap(
+                                        location=[centroide.y, centroide.x], 
+                                        zoom_start=6, 
+                                        layout='horizontal',
+                                        tiles=None 
                                     )
-                                ).add_to(m_dual.m1)
+                                
+                                    esri_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+                                    esri_attr = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
+                                
+                                    folium.TileLayer(tiles=esri_url, attr=esri_attr, name="Mapa Base (Esri)").add_to(m_dual.m1)
+                                    folium.TileLayer(tiles=esri_url, attr=esri_attr, name="Mapa Base (Esri)").add_to(m_dual.m2)
+                                
+                                    titulos_flotantes = f"""
+                                        <div style="position: absolute; top: 15px; left: 25%; transform: translateX(-50%); z-index: 9999; 
+                                                    background-color: white; padding: 6px 20px; border-radius: 20px; 
+                                                    box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-family: 'Segoe UI', sans-serif; 
+                                                    font-size: 15px; font-weight: bold; color: #691C32; border: 2px solid #691C32;">
+                                            Disponibilidad {anio_comparacion}
+                                        </div>
+                                        <div style="position: absolute; top: 15px; left: 75%; transform: translateX(-50%); z-index: 9999; 
+                                                    background-color: white; padding: 6px 20px; border-radius: 20px; 
+                                                    box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-family: 'Segoe UI', sans-serif; 
+                                                    font-size: 15px; font-weight: bold; color: #244062; border: 2px solid #244062;">
+                                            Disponibilidad {anio_procesado}
+                                        </div>
+                                    """
+                                    m_dual.get_root().html.add_child(folium.Element(titulos_flotantes))
 
-                                # 7. MAPA DERECHO (AÑO PROCESADO)
-                                folium.GeoJson(
-                                    gdf_mapa,
-                                    name=f"Año {anio_procesado}",
-                                    style_function=lambda feature: {
-                                        'fillColor': semaforo_hidrico(feature['properties'].get('Disponibilidad (DMA)')),
-                                        'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
-                                    },
-                                    tooltip=folium.GeoJsonTooltip(
-                                        fields=['NOM_ACUI', 'Disponibilidad (DMA)'], 
-                                        aliases=['Acuífero:', f'DMA {anio_procesado}:']
-                                    )
-                                ).add_to(m_dual.m2)
+                                    # 6. MAPA IZQUIERDO (AÑO HISTÓRICO)
+                                    folium.GeoJson(
+                                        gdf_mapa,
+                                        name=f"Año {anio_comparacion}",
+                                        style_function=lambda feature: {
+                                            'fillColor': semaforo_hidrico(feature['properties'].get(f'DMA {anio_comparacion}')),
+                                            'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
+                                        },
+                                        tooltip=folium.GeoJsonTooltip(
+                                            fields=['NOM_ACUI', f'DMA {anio_comparacion}'], 
+                                            aliases=['Acuífero:', f'DMA {anio_comparacion}:']
+                                        )
+                                    ).add_to(m_dual.m1)
 
-                                # Renderizar en Streamlit
-                                st_folium(m_dual, use_container_width=True, height=600, returned_objects=[])
-                            else:
-                                st.warning("No se encontraron coincidencias geográficas para estos acuíferos.")
+                                    # 7. MAPA DERECHO (AÑO PROCESADO)
+                                    folium.GeoJson(
+                                        gdf_mapa,
+                                        name=f"Año {anio_procesado}",
+                                        style_function=lambda feature: {
+                                            'fillColor': semaforo_hidrico(feature['properties'].get('Disponibilidad (DMA)')),
+                                            'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
+                                        },
+                                        tooltip=folium.GeoJsonTooltip(
+                                            fields=['NOM_ACUI', 'Disponibilidad (DMA)'], 
+                                            aliases=['Acuífero:', f'DMA {anio_procesado}:']
+                                        )
+                                    ).add_to(m_dual.m2)
+
+                                    # Renderizar en Streamlit
+                                    st_folium(m_dual, use_container_width=True, height=600, returned_objects=[])
+                                else:
+                                    st.warning("No se encontraron coincidencias geográficas para estos acuíferos.")
 
             # --- TAB 6: RESUMEN EJECUTIVO (MACRO-BALANCE Y PARETO) ---
             with tab_ejecutiva:
@@ -798,118 +825,122 @@ if "datos_reporte_nacional" in st.session_state:
                         st.success("✨ Excelente noticia: No hay déficit hídrico en la región seleccionada para generar la Curva de Pareto.")
         # --- TAB 7: GEMELO DIGITAL (SIMULADOR WHAT-IF) ---
             with tab_gemelo:
-                st.write("### 🔮 Simulador de Escenarios (What-If)")
-                st.caption("Ajusta las variables climáticas y de demanda para predecir el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
+                @st.fragment
+                def _renderizar_gemelo(df_filtrado):
+                    st.write("### 🔮 Simulador de Escenarios (What-If)")
+                    st.caption("Ajusta las variables climáticas y de demanda para predecir el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
                 
-                with st.container(border=True):
-                    col_sim1, col_sim2 = st.columns(2)
-                    var_clima = col_sim1.slider(
-                        "🌧️ Efecto Cambio Climático en Recarga (%)", 
-                        min_value=-50, max_value=50, value=0, step=1, 
-                        help="Simula periodos de sequía prolongada (valores negativos) o años atípicamente húmedos (valores positivos)."
-                    )
-                    var_demanda = col_sim2.slider(
-                        "🏭 Crecimiento de Concesiones / Bombeo (%)", 
-                        min_value=-50, max_value=100, value=0, step=1, 
-                        help="Simula el impacto del crecimiento industrial, agrícola o poblacional aumentando las extracciones (VEAS)."
-                    )
-
-                # ==========================================
-                # MOTOR MATEMÁTICO DEL GEMELO DIGITAL
-                # ==========================================
-                df_sim = df_filtrado.copy()
-                
-                # 1. Calculamos el volumen diferencial (Delta) exacto generado por los sliders
-                delta_recarga = df_sim['Recarga (R)'] * (var_clima / 100.0)
-                delta_veas = df_sim['VEAS'] * (var_demanda / 100.0)
-                
-                # 2. Aplicamos el Delta a los totales para visualización
-                df_sim['Recarga_Simulada'] = df_sim['Recarga (R)'] + delta_recarga
-                df_sim['VEAS_Simulado'] = df_sim['VEAS'] + delta_veas
-                
-                # 3. Sumamos/Restamos el Delta directamente a la DMA original (Evita errores de redondeo)
-                df_sim['DMA_Simulada'] = (df_sim['Disponibilidad (DMA)'] + delta_recarga - delta_veas).round(6)
-                
-                # Calcular Impactos Macro
-                r_tot_sim = df_sim['Recarga_Simulada'].sum()
-                dnc_tot = df_sim['DNC'].sum() 
-                veas_tot_sim = df_sim['VEAS_Simulado'].sum()
-                dma_tot_sim = df_sim['DMA_Simulada'].sum()
-                dma_tot_original = df_filtrado['Disponibilidad (DMA)'].sum()
-                
-                diferencia_neta = dma_tot_sim - dma_tot_original
-
-                # Encontrar acuíferos críticos (Nuevos) y Agravados (Peores)
-                df_sim['Estado_Original'] = np.where(df_sim['Disponibilidad (DMA)'] < 0, 'Déficit', 'Superávit')
-                df_sim['Estado_Simulado'] = np.where(df_sim['DMA_Simulada'] < 0, 'Déficit', 'Superávit')
-                
-                # 1. Los que acaban de pasar a números rojos
-                cond_nuevos = (df_sim['Estado_Original'] == 'Superávit') & (df_sim['Estado_Simulado'] == 'Déficit')
-                # 2. Los que ya estaban en rojo y perdieron AÚN MÁS agua
-                cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < df_sim['Disponibilidad (DMA)'])
-                
-                df_sim['Categoria_Alerta'] = "Sin peligro crítico"
-                df_sim.loc[cond_nuevos, 'Categoria_Alerta'] = "🚨 Nuevo Déficit"
-                df_sim.loc[cond_agravados, 'Categoria_Alerta'] = "📉 Déficit Agravado"
-                
-                df_alertas = df_sim[df_sim['Categoria_Alerta'] != "Sin peligro crítico"].copy()
-                
-                # ==========================================
-                # VISUALIZACIÓN DEL IMPACTO
-                # ==========================================
-                st.markdown("#### 📉 Resultados de la Simulación")
-                
-                col_res1, col_res2, col_res3 = st.columns(3)
-                col_res1.metric("Nuevo Balance Neto (DMA)", f"{dma_tot_sim:,.1f} hm³", f"{diferencia_neta:,.1f} hm³", delta_color="normal")
-                
-                total_deficit_sim = len(df_sim[df_sim['Estado_Simulado'] == 'Déficit'])
-                nuevos_count = len(df_sim[cond_nuevos])
-                agravados_count = len(df_sim[cond_agravados])
-                
-                col_res2.metric("Total Acuíferos en Déficit", f"{total_deficit_sim}", f"+{nuevos_count} nuevos | {agravados_count} agravados", delta_color="inverse")
-                
-                diferencia_recarga = r_tot_sim - df_filtrado['Recarga (R)'].sum()
-                col_res3.metric("Impacto en Recarga", f"{r_tot_sim:,.1f} hm³", f"{diferencia_recarga:,.1f} hm³", delta_color="normal")
-
-                st.divider()
-                
-                col_chart1, col_chart2 = st.columns(2)
-                
-                with col_chart1:
-                    fig_sim_macro = go.Figure(go.Waterfall(
-                        orientation="v",
-                        measure=["relative", "relative", "relative", "total"],
-                        x=["1. Recarga Simulada", "2. DNC", "3. Concesiones Simuladas", "4. DMA Proyectada"],
-                        textposition="outside",
-                        text=[f"+{r_tot_sim:,.1f}", f"-{dnc_tot:,.1f}", f"-{veas_tot_sim:,.1f}", f"{dma_tot_sim:,.1f}"],
-                        y=[r_tot_sim, -dnc_tot, -veas_tot_sim, dma_tot_sim],
-                        connector={"line": {"color": "rgb(63, 63, 63)"}},
-                        decreasing={"marker": {"color": "#9f2241"}},
-                        increasing={"marker": {"color": "#285c4d"}},
-                        totals={"marker": {"color": "#b38e5d" if dma_tot_sim >= 0 else "#691c32"}}
-                    ))
-                    fig_sim_macro.update_layout(title="Contabilidad Hídrica en Escenario Proyectado", height=450, margin=dict(t=50, b=50))
-                    st.plotly_chart(fig_sim_macro, use_container_width=True)
-                    
-                with col_chart2:
-                    if not df_alertas.empty:
-                        frases_alerta = []
-                        if nuevos_count > 0:
-                            frases_alerta.append(f"**{nuevos_count}** acuíferos sanos entrarían en déficit")
-                        if agravados_count > 0:
-                            frases_alerta.append(f"**{agravados_count}** acuíferos sobreexplotados empeorarían su situación")
-                            
-                        texto_unido = " y ".join(frases_alerta)
-                        st.error(f"🚨 **ALERTA HÍDRICA:** Bajo este escenario, {texto_unido}.")
-                        
-                        df_alertas['Impacto (Pérdida)'] = df_alertas['DMA_Simulada'] - df_alertas['Disponibilidad (DMA)']
-                        
-                        st.dataframe(
-                            df_alertas[['Acuífero', 'Categoria_Alerta', 'Disponibilidad (DMA)', 'DMA_Simulada', 'Impacto (Pérdida)']].rename(columns={'Disponibilidad (DMA)': 'DMA Actual'}),
-                            use_container_width=True, hide_index=True
+                    with st.container(border=True):
+                        col_sim1, col_sim2 = st.columns(2)
+                        var_clima = col_sim1.slider(
+                            "🌧️ Efecto Cambio Climático en Recarga (%)", 
+                            min_value=-50, max_value=50, value=0, step=1, 
+                            help="Simula periodos de sequía prolongada (valores negativos) o años atípicamente húmedos (valores positivos)."
                         )
-                    else:
-                        st.success("✅ Bajo este escenario, ningún acuífero entra en nuevo déficit ni empeora su situación actual.")
+                        var_demanda = col_sim2.slider(
+                            "🏭 Crecimiento de Concesiones / Bombeo (%)", 
+                            min_value=-50, max_value=100, value=0, step=1, 
+                            help="Simula el impacto del crecimiento industrial, agrícola o poblacional aumentando las extracciones (VEAS)."
+                        )
+
+                    # ==========================================
+                    # MOTOR MATEMÁTICO DEL GEMELO DIGITAL
+                    # ==========================================
+                    df_sim = df_filtrado.copy()
+                
+                    # 1. Calculamos el volumen diferencial (Delta) exacto generado por los sliders
+                    delta_recarga = df_sim['Recarga (R)'] * (var_clima / 100.0)
+                    delta_veas = df_sim['VEAS'] * (var_demanda / 100.0)
+                
+                    # 2. Aplicamos el Delta a los totales para visualización
+                    df_sim['Recarga_Simulada'] = df_sim['Recarga (R)'] + delta_recarga
+                    df_sim['VEAS_Simulado'] = df_sim['VEAS'] + delta_veas
+                
+                    # 3. Sumamos/Restamos el Delta directamente a la DMA original (Evita errores de redondeo)
+                    df_sim['DMA_Simulada'] = (df_sim['Disponibilidad (DMA)'] + delta_recarga - delta_veas).round(6)
+                
+                    # Calcular Impactos Macro
+                    r_tot_sim = df_sim['Recarga_Simulada'].sum()
+                    dnc_tot = df_sim['DNC'].sum() 
+                    veas_tot_sim = df_sim['VEAS_Simulado'].sum()
+                    dma_tot_sim = df_sim['DMA_Simulada'].sum()
+                    dma_tot_original = df_filtrado['Disponibilidad (DMA)'].sum()
+                
+                    diferencia_neta = dma_tot_sim - dma_tot_original
+
+                    # Encontrar acuíferos críticos (Nuevos) y Agravados (Peores)
+                    df_sim['Estado_Original'] = np.where(df_sim['Disponibilidad (DMA)'] < 0, 'Déficit', 'Superávit')
+                    df_sim['Estado_Simulado'] = np.where(df_sim['DMA_Simulada'] < 0, 'Déficit', 'Superávit')
+                
+                    # 1. Los que acaban de pasar a números rojos
+                    cond_nuevos = (df_sim['Estado_Original'] == 'Superávit') & (df_sim['Estado_Simulado'] == 'Déficit')
+                    # 2. Los que ya estaban en rojo y perdieron AÚN MÁS agua
+                    cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < df_sim['Disponibilidad (DMA)'])
+                
+                    df_sim['Categoria_Alerta'] = "Sin peligro crítico"
+                    df_sim.loc[cond_nuevos, 'Categoria_Alerta'] = "🚨 Nuevo Déficit"
+                    df_sim.loc[cond_agravados, 'Categoria_Alerta'] = "📉 Déficit Agravado"
+                
+                    df_alertas = df_sim[df_sim['Categoria_Alerta'] != "Sin peligro crítico"].copy()
+                
+                    # ==========================================
+                    # VISUALIZACIÓN DEL IMPACTO
+                    # ==========================================
+                    st.markdown("#### 📉 Resultados de la Simulación")
+                
+                    col_res1, col_res2, col_res3 = st.columns(3)
+                    col_res1.metric("Nuevo Balance Neto (DMA)", f"{dma_tot_sim:,.1f} hm³", f"{diferencia_neta:,.1f} hm³", delta_color="normal")
+                
+                    total_deficit_sim = len(df_sim[df_sim['Estado_Simulado'] == 'Déficit'])
+                    nuevos_count = len(df_sim[cond_nuevos])
+                    agravados_count = len(df_sim[cond_agravados])
+                
+                    col_res2.metric("Total Acuíferos en Déficit", f"{total_deficit_sim}", f"+{nuevos_count} nuevos | {agravados_count} agravados", delta_color="inverse")
+                
+                    diferencia_recarga = r_tot_sim - df_filtrado['Recarga (R)'].sum()
+                    col_res3.metric("Impacto en Recarga", f"{r_tot_sim:,.1f} hm³", f"{diferencia_recarga:,.1f} hm³", delta_color="normal")
+
+                    st.divider()
+                
+                    col_chart1, col_chart2 = st.columns(2)
+                
+                    with col_chart1:
+                        fig_sim_macro = go.Figure(go.Waterfall(
+                            orientation="v",
+                            measure=["relative", "relative", "relative", "total"],
+                            x=["1. Recarga Simulada", "2. DNC", "3. Concesiones Simuladas", "4. DMA Proyectada"],
+                            textposition="outside",
+                            text=[f"+{r_tot_sim:,.1f}", f"-{dnc_tot:,.1f}", f"-{veas_tot_sim:,.1f}", f"{dma_tot_sim:,.1f}"],
+                            y=[r_tot_sim, -dnc_tot, -veas_tot_sim, dma_tot_sim],
+                            connector={"line": {"color": "rgb(63, 63, 63)"}},
+                            decreasing={"marker": {"color": "#9f2241"}},
+                            increasing={"marker": {"color": "#285c4d"}},
+                            totals={"marker": {"color": "#b38e5d" if dma_tot_sim >= 0 else "#691c32"}}
+                        ))
+                        fig_sim_macro.update_layout(title="Contabilidad Hídrica en Escenario Proyectado", height=450, margin=dict(t=50, b=50))
+                        st.plotly_chart(fig_sim_macro, use_container_width=True)
+                    
+                    with col_chart2:
+                        if not df_alertas.empty:
+                            frases_alerta = []
+                            if nuevos_count > 0:
+                                frases_alerta.append(f"**{nuevos_count}** acuíferos sanos entrarían en déficit")
+                            if agravados_count > 0:
+                                frases_alerta.append(f"**{agravados_count}** acuíferos sobreexplotados empeorarían su situación")
+                            
+                            texto_unido = " y ".join(frases_alerta)
+                            st.error(f"🚨 **ALERTA HÍDRICA:** Bajo este escenario, {texto_unido}.")
+                        
+                            df_alertas['Impacto (Pérdida)'] = df_alertas['DMA_Simulada'] - df_alertas['Disponibilidad (DMA)']
+                        
+                            st.dataframe(
+                                df_alertas[['Acuífero', 'Categoria_Alerta', 'Disponibilidad (DMA)', 'DMA_Simulada', 'Impacto (Pérdida)']].rename(columns={'Disponibilidad (DMA)': 'DMA Actual'}),
+                                use_container_width=True, hide_index=True
+                            )
+                        else:
+                            st.success("✅ Bajo este escenario, ningún acuífero entra en nuevo déficit ni empeora su situación actual.")
+
+                _renderizar_gemelo(df_filtrado)
 
         st.markdown("---")
         st.subheader(f"📑 Resumen de Balances ({anio_procesado})")
@@ -958,9 +989,10 @@ if "datos_reporte_nacional" in st.session_state:
                                 
                                 total_archivos = len(datos_maestros)
                                 procesados = 0
+                                fallidos_excel = []
                                 
                                 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                                    futuros = [executor.submit(worker_generar_excel, f_m, anio_procesado, USER_TEMP_DIR) for f_m in datos_maestros]
+                                    futuros = {executor.submit(worker_generar_excel, f_m, anio_procesado, USER_TEMP_DIR): f_m for f_m in datos_maestros}
                                     
                                     for fut in concurrent.futures.as_completed(futuros):
                                         resultado = fut.result()
@@ -968,6 +1000,8 @@ if "datos_reporte_nacional" in st.session_state:
                                             ruta_ind, arc_name = resultado
                                             z.write(ruta_ind, arcname=arc_name)
                                             os.remove(ruta_ind)
+                                        else:
+                                            fallidos_excel.append(str(futuros[fut].get("Clave", "?")))
                                             
                                         procesados += 1
                                         avance.progress(procesados / total_archivos)
@@ -977,10 +1011,14 @@ if "datos_reporte_nacional" in st.session_state:
                                             gc.collect()
                                         
                             st.session_state["ruta_zip_generado"] = zip_path
+                            st.session_state["aviso_excel_fallidos"] = fallidos_excel
                             status.update(label="✅ Paquete ZIP generado a velocidad máxima", state="complete", expanded=False)
                             st.rerun()
                 
                 else:
+                    _fallidos = st.session_state.get("aviso_excel_fallidos") or []
+                    if _fallidos:
+                        st.warning(f"⚠️ No se pudo generar el Excel individual de {len(_fallidos)} acuíferos (claves: {', '.join(_fallidos[:15])}{'…' if len(_fallidos) > 15 else ''}). El ZIP no los incluye.")
                     with open(st.session_state["ruta_zip_generado"], "rb") as f:
                         st.download_button(
                             label="📥 2. Descargar Balances (ZIP) Ahora", 
