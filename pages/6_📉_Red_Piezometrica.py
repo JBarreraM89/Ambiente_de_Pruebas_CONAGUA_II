@@ -84,7 +84,6 @@ st.markdown("""
         /* 📍 2. BOTONES DE BARRA LATERAL                            */
         /* ========================================================= */
         section[data-testid="stSidebar"] button[kind="secondary"],
-        section[data-testid="stSidebar"] button[data-testid="baseButton-secondary"],
         section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]),
         section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button {
             background-color: #e9ecef !important;
@@ -103,7 +102,6 @@ st.markdown("""
             margin-top: 4px !important;
         }
         section[data-testid="stSidebar"] button[kind="secondary"]:hover,
-        section[data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover,
         section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]):hover,
         section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button:hover {
             background-color: #dde2e6 !important;
@@ -111,27 +109,13 @@ st.markdown("""
             color: #000000 !important;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
         }
-        section[data-testid="stSidebar"] button[kind="primary"],
-        section[data-testid="stSidebar"] button[data-testid="baseButton-primary"],
-        section[data-testid="stSidebar"] div[data-testid="stFormSubmitButton"] button {
-            background-color: #9F2241 !important;
-            border: 1px solid #9F2241 !important;
-            color: #ffffff !important;
+        section[data-testid="stSidebar"] button[kind="primary"] {
             border-radius: 6px !important;
             min-height: 38px !important;
             font-weight: 600 !important;
-            width: 100% !important;
             margin-top: 4px !important;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
         }
 
-        section[data-testid="stSidebar"] button[kind="primary"]:hover,
-        section[data-testid="stSidebar"] button[data-testid="baseButton-primary"]:hover,
-        section[data-testid="stSidebar"] div[data-testid="stFormSubmitButton"] button:hover {
-            background-color: #691C32 !important;
-            border-color: #691C32 !important;
-            color: #ffffff !important;
-        }
         /* ========================================================= */
         /* 🚀 3. BOTONES DE FRONTERAS DEL MODELO (CARGAR / LIMPIAR)  */
         /* ========================================================= */
