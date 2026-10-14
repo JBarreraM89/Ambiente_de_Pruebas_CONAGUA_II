@@ -29,11 +29,14 @@ import io
 import re
 import json
 import time
+import html as _html
 from pathlib import Path
 
 # Importaciones del Core
 from utils.styles import inyectar_css_oficial, banner_institucional
-from core.data_loader import cargar_catalogo, cargar_datos_maestros, DIRECTORIO_RAIZ
+from core.data_loader import (cargar_catalogo, obtener_datos_maestros_compartidos, normalizar_clave,
+                              normalizar_serie_clave, DIRECTORIO_RAIZ)
+from core.puntos import detectar_columnas_puntos
 
 # =======================================================
 # 🎨 1. CONFIGURACIÓN Y ESTILOS
@@ -41,6 +44,24 @@ from core.data_loader import cargar_catalogo, cargar_datos_maestros, DIRECTORIO_
 st.set_page_config(layout="wide", page_title="Modelo Conceptual 3D", page_icon="🧊")
 inyectar_css_oficial()
 banner_institucional()
+
+def _json_seguro(texto):
+    """JSON apto para incrustar en <script>: evita que '</script>' o '<!--' en los datos rompan la página."""
+    return str(texto).replace("</", "<\\/").replace("<!--", "<\\!--")
+
+def _pozos_para_visor(lista):
+    """Copia de los puntos con texto escapado (el visor lo inserta en HTML) y color validado."""
+    seguros = []
+    for p in lista:
+        q = dict(p)
+        for campo in ("nombre", "tipo"):
+            if q.get(campo) is not None:
+                q[campo] = _html.escape(str(q[campo]), quote=False)
+        color = q.get("color_hex")
+        if color is not None and not re.fullmatch(r"#[0-9A-Fa-f]{3,8}", str(color).strip()):
+            q["color_hex"] = None
+        seguros.append(q)
+    return seguros
 
 st.subheader("🧊 Estación de Trabajo: Modelo Conceptual 3D")
 st.caption("Modelación geológica y física 3D: Bloque aislado 360°, estructuras 1:50k SGM y pozos con profundidad real.")
@@ -104,7 +125,8 @@ def resolver_color_oficial(clave_sgm, litologia, roca):
 # =======================================================
 # 🛰️ 3. MOTOR DE AUTODETECCIÓN ESPACIAL DE ACUÍFEROS
 # =======================================================
-gdf_m = cargar_datos_maestros()
+# Compartido entre sesiones y sin copia por interacción. SOLO LECTURA (usar .copy() para modificar).
+gdf_m = obtener_datos_maestros_compartidos()
 
 def auto_identificar_acuifero_por_coordenadas(lat, lon, gdf_consulta):
     try:
@@ -153,7 +175,7 @@ def agregar_punto_manual():
             "nombre": nom if nom else f"Punto {len(st.session_state['lista_marcadores'])+1}",
             "tipo": tipo,
             "profundidad": float(prof),
-            "nivel_estatico": 30.0
+            "nivel_estatico": None
         }
         st.session_state["lista_marcadores"].append(nuevo_pto)
         
@@ -215,13 +237,9 @@ def renderizar_controles_puntos():
 
                     df_p.columns = df_p.columns.astype(str).str.strip().str.upper()
                     
-                    col_lat = next((c for c in df_p.columns if any(k in c for k in ['LATITUD', 'LAT', 'Y', 'NORTE'])), None)
-                    col_lon = next((c for c in df_p.columns if any(k in c for k in ['LONGITUD', 'LON', 'LONG', 'X', 'OESTE'])), None)
-                    col_tipo = next((c for c in df_p.columns if any(k in c for k in ['INFRAESTRUCTURA', 'INFRA', 'TIPO', 'CATEGORIA'])), None)
-                    col_nom = next((c for c in df_p.columns if any(k in c for k in ['NOMBRE/SITIO', 'NOMBRE', 'SITIO', 'NOM', 'ID', 'POZO'])), None)
-                    col_color = next((c for c in df_p.columns if any(k in c for k in ['COLOR', 'HEX'])), None)
-                    col_prof = next((c for c in df_p.columns if any(k in c for k in ['PROFUNDIDAD', 'PROF', 'PERF', 'DEPTH'])), None)
-                    col_ne = next((c for c in df_p.columns if any(k in c for k in ['NIVEL', 'NE', 'ESTATICO'])), None)
+                    _cols = detectar_columnas_puntos(df_p.columns)
+                    col_lat, col_lon, col_tipo, col_nom = _cols["lat"], _cols["lon"], _cols["tipo"], _cols["nombre"]
+                    col_color, col_prof, col_ne = _cols["color"], _cols["profundidad"], _cols["nivel_estatico"]
 
                     if col_lat and col_lon:
                         nuevos_puntos = []
@@ -236,15 +254,15 @@ def renderizar_controles_puntos():
                                 nom_v = str(row[col_nom]).strip() if col_nom and pd.notna(row[col_nom]) else tipo_v
                                 col_v = str(row[col_color]).strip() if col_color and pd.notna(row[col_color]) else None
                                 
-                                prof_v = 150.0
+                                prof_v = None  # sin dato: no se inventa una profundidad
                                 if col_prof and pd.notna(row[col_prof]):
                                     try: prof_v = float(str(row[col_prof]).replace(',', '.').strip())
-                                    except: pass
+                                    except ValueError: pass
                                     
-                                ne_v = 30.0
+                                ne_v = None  # sin dato: no se inventa un nivel estático
                                 if col_ne and pd.notna(row[col_ne]):
                                     try: ne_v = float(str(row[col_ne]).replace(',', '.').strip())
-                                    except: pass
+                                    except ValueError: pass
 
                                 lon_final = -abs(float(lon_val))
                                 nuevos_puntos.append({
@@ -376,11 +394,7 @@ with st.container(border=True):
     col_b2.markdown(f"<p style='font-size:12px; color:#64748B; margin:0;'>ACUÍFERO</p><h4 style='color:#691C32; margin:0;'>{nombre_actual}</h4>", unsafe_allow_html=True)
     col_b3.markdown(f"<p style='font-size:12px; color:#64748B; margin:0;'>SUPERFICIE</p><h4 style='color:#691C32; margin:0;'>{float(area_actual):,.1f} km²</h4>", unsafe_allow_html=True)
 
-def normalizar_cve(v):
-    try: return str(int(float(v))).zfill(4)
-    except: return str(v).strip().zfill(4)
-
-coincidencias = gdf_m[gdf_m['CLV_ACUI'].apply(normalizar_cve) == normalizar_cve(clave_actual)] if gdf_m is not None else None
+coincidencias = gdf_m[normalizar_serie_clave(gdf_m['CLV_ACUI']) == normalizar_clave(clave_actual)] if gdf_m is not None else None
 if coincidencias is None or coincidencias.empty:
     st.error(f"No se localizó la geometría espacial del acuífero {clave_actual}.")
     st.stop()
@@ -406,46 +420,82 @@ def num2deg(xtile, ytile, zoom):
     lat_rad = math.atan(math.sinh(math.pi * (1.0 - 2.0 * ytile / n)))
     return math.degrees(lat_rad), lon_deg
 
+MAX_TESELAS_DEM = 400  # tope de teselas (~105 MB de malla base); por encima se baja el zoom
+
+def contar_teselas(bounds, zoom):
+    minx, miny, maxx, maxy = bounds
+    x0, y0 = deg2num(maxy, minx, zoom)
+    x1, y1 = deg2num(miny, maxx, zoom)
+    return (x1 - x0 + 1) * (y1 - y0 + 1)
+
+def zoom_para_limite(bounds, zoom, max_teselas=MAX_TESELAS_DEM, zoom_min=8):
+    """Baja el zoom hasta que el número de teselas no supere el tope (protege la memoria)."""
+    while zoom > zoom_min and contar_teselas(bounds, zoom) > max_teselas:
+        zoom -= 1
+    return zoom
+
+def zoom_de_ruta(ruta):
+    m = re.search(r"_z(\d+)$", Path(ruta).stem)
+    return int(m.group(1)) if m else 12
+
+def resolucion_dem_m(zoom, lat):
+    """Tamaño aproximado de pixel (m) de una tesela de 256 px a esa latitud."""
+    return 156543.03392 * math.cos(math.radians(lat)) / (2.0 ** zoom)
+
 def descargar_tesela_elevacion(args):
     x, y, zoom_level = args
     url = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{zoom_level}/{x}/{y}.png"
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            img = Image.open(io.BytesIO(r.content)).convert('RGB')
-            arr = np.array(img, dtype=np.float32)
-            elev = (arr[:, :, 0] * 256.0 + arr[:, :, 1] + arr[:, :, 2] / 256.0) - 32768.0
-            return (x, y, elev)
-    except Exception: pass
+    for intento in range(3):
+        try:
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                img = Image.open(io.BytesIO(r.content)).convert('RGB')
+                arr = np.array(img, dtype=np.float32)
+                elev = (arr[:, :, 0] * 256.0 + arr[:, :, 1] + arr[:, :, 2] / 256.0) - 32768.0
+                return (x, y, elev)
+            if r.status_code == 404:
+                break  # la tesela no existe: no insistir
+        except Exception:
+            pass
+        time.sleep(0.5 * (intento + 1))
     return (x, y, None)
 
 def obtener_o_generar_dem_acuifero(datos_ac, clave_ac, zoom_level=12):
     import rasterio
     import rasterio.mask
     from rasterio.transform import from_bounds
+    zoom_level = zoom_para_limite(datos_ac.geometry.bounds, zoom_level)
     carpeta_cache = DIRECTORIO_RAIZ / "data" / "cache_dem"
     carpeta_cache.mkdir(parents=True, exist_ok=True)
     ruta_tif = carpeta_cache / f"DEM_{clave_ac}_z{zoom_level}.tif"
-    if ruta_tif.exists(): return ruta_tif
+    ruta_ok = ruta_tif.with_suffix(".ok")
+    # Solo se reutiliza un DEM verificado: se descargó COMPLETO (sin teselas faltantes).
+    if ruta_tif.exists() and ruta_ok.exists(): return ruta_tif
 
     minx, miny, maxx, maxy = datos_ac.geometry.bounds
     x_start, y_start = deg2num(maxy, minx, zoom_level)
     x_end, y_end = deg2num(miny, maxx, zoom_level)
-    
+
     num_x = (x_end - x_start) + 1
     num_y = (y_end - y_start) + 1
-    malla_elevacion = np.zeros((num_y * 256, num_x * 256), dtype=np.float32)
-    
+    malla_elevacion = np.full((num_y * 256, num_x * 256), -9999.0, dtype=np.float32)
+
     tareas = [(x, y, zoom_level) for y in range(y_start, y_end + 1) for x in range(x_start, x_end + 1)]
+    fallidas = 0
     with ThreadPoolExecutor(max_workers=8) as executor:
         for x, y, elev in executor.map(descargar_tesela_elevacion, tareas):
-            if elev is not None:
-                malla_elevacion[(y - y_start)*256:(y - y_start + 1)*256, (x - x_start)*256:(x - x_start + 1)*256] = elev
-                
+            if elev is None:
+                fallidas += 1
+                continue
+            malla_elevacion[(y - y_start)*256:(y - y_start + 1)*256, (x - x_start)*256:(x - x_start + 1)*256] = elev
+    if fallidas:
+        # No se guarda nada: un DEM con huecos quedaría en caché y daría un terreno falso.
+        raise RuntimeError(f"No se pudieron descargar {fallidas} de {len(tareas)} teselas de elevación. Intenta de nuevo en unos minutos.")
+
     lat_top, lon_left = num2deg(x_start, y_start, zoom_level)
     lat_bottom, lon_right = num2deg(x_end + 1, y_end + 1, zoom_level)
     transform_base = from_bounds(lon_left, lat_bottom, lon_right, lat_top, malla_elevacion.shape[1], malla_elevacion.shape[0])
-    
+
     with rasterio.MemoryFile() as memfile:
         with memfile.open(driver='GTiff', height=malla_elevacion.shape[0], width=malla_elevacion.shape[1], count=1, dtype='float32', crs='EPSG:4326', transform=transform_base, nodata=-9999.0) as ds:
             ds.write(malla_elevacion, 1)
@@ -453,8 +503,12 @@ def obtener_o_generar_dem_acuifero(datos_ac, clave_ac, zoom_level=12):
             meta = ds.meta.copy()
 
     meta.update({"height": out_img.shape[1], "width": out_img.shape[2], "transform": out_trans, "nodata": -9999.0})
-    with rasterio.open(ruta_tif, 'w', **meta) as dst: dst.write(out_img)
+    ruta_tmp = ruta_tif.with_suffix(".tmp.tif")
+    with rasterio.open(ruta_tmp, 'w', **meta) as dst: dst.write(out_img)
+    os.replace(ruta_tmp, ruta_tif)  # escritura atómica: otra sesión nunca lee un archivo a medias
+    ruta_ok.write_text("ok")
     return ruta_tif
+
 
 with st.spinner("Sincronizando topografía de alta resolución (SRTM NASA)..."):
     try:
@@ -463,8 +517,12 @@ with st.spinner("Sincronizando topografía de alta resolución (SRTM NASA)..."):
         st.error(f"Error cargando DEM: {e}")
         ruta_dem_local = None
 
+if ruta_dem_local is None:
+    st.warning("No se pudo construir el modelo digital de elevación; el visor 3D no está disponible por ahora.")
+    st.stop()
+
 @st.cache_data(show_spinner=False)
-def generar_curvas_nivel_base_geojson(ruta_tif, intervalo_base=25):
+def generar_curvas_nivel_base_geojson(ruta_tif, intervalo_base=25, mtime=0.0):
     import rasterio
     import matplotlib
     matplotlib.use('Agg')
@@ -481,7 +539,7 @@ def generar_curvas_nivel_base_geojson(ruta_tif, intervalo_base=25):
             if len(niveles) == 0: return "{}"
 
             paso = max(1, int(max(z.shape) / 400))
-            z_sub = z[::paso, ::paso]
+            z_sub = np.ma.masked_where(~mask[::paso, ::paso], z[::paso, ::paso])  # sin nodata: evita curvas falsas sobre el borde
             H, W = z_sub.shape
             x_lin = np.linspace(src.bounds.left, src.bounds.right, W)
             y_lin = np.linspace(src.bounds.top, src.bounds.bottom, H)
@@ -507,7 +565,7 @@ def generar_curvas_nivel_base_geojson(ruta_tif, intervalo_base=25):
 
 geojson_curvas_cota = "{}"
 if ruta_dem_local and ruta_dem_local.exists():
-    geojson_curvas_cota = generar_curvas_nivel_base_geojson(str(ruta_dem_local), intervalo_base=25)
+    geojson_curvas_cota = _json_seguro(generar_curvas_nivel_base_geojson(str(ruta_dem_local), intervalo_base=25, mtime=ruta_dem_local.stat().st_mtime))
 
 # =======================================================
 # 📂 7. CAPA VECTORIAL SGM RECORTE COMPLETO
@@ -624,24 +682,33 @@ def preparar_geologia_vectorial(clave_ac):
 gdf_geologia_recortada, dic_leyenda_rocas, col_litologica = preparar_geologia_vectorial(clave_actual)
 
 gdf_borde = gpd.GeoDataFrame(geometry=[datos_ac.geometry], crs="EPSG:4326")
-geojson_borde = gdf_borde.to_json()
+geojson_borde = _json_seguro(gdf_borde.to_json())
 
 minx, miny, maxx, maxy = datos_ac.geometry.bounds
 centro_lon = (minx + maxx) / 2.0
 centro_lat = (miny + maxy) / 2.0
 
-# 🛡️ GEOJSON OPTIMIZADO PARA EL VISOR 3D (Sin romper JavaScript con saltos de línea ni comillas)
-if gdf_geologia_recortada is not None and not gdf_geologia_recortada.empty:
-    cols_visor = [c for c in ['CLAVE_SGM', 'ETIQUETA_LITO', 'COLOR_HEX', 'FORMACION', 'LITOLOGIA', 'ROCA', 'PERIODO', 'EDINICIO', 'EDFINAL', 'ERA', 'geometry'] if c in gdf_geologia_recortada.columns]
-    gdf_visor = gdf_geologia_recortada[cols_visor].copy()
+@st.cache_data(show_spinner=False, max_entries=8, ttl=3600)
+def _geologia_a_json(_gdf, clave, n_filas):
+    """GeoJSON de geología para el visor 3D, cacheado por acuífero (el argumento con guion bajo no se hashea)."""
+    cols_visor = [c for c in ['CLAVE_SGM', 'ETIQUETA_LITO', 'COLOR_HEX', 'FORMACION', 'LITOLOGIA', 'ROCA', 'PERIODO', 'EDINICIO', 'EDFINAL', 'ERA', 'geometry'] if c in _gdf.columns]
+    gdf_visor = _gdf[cols_visor].copy()
     for col in gdf_visor.select_dtypes(include=['object', 'string']).columns:
         gdf_visor[col] = gdf_visor[col].fillna("").astype(str).str.replace('"', '').str.replace('\n', ' ').str.replace('\r', '')
-    geojson_geologia = gdf_visor.to_json()
+    return _json_seguro(gdf_visor.to_json())
+
+@st.cache_data(show_spinner=False, max_entries=8, ttl=3600)
+def _gdf_a_json_cache(_gdf, clave, capa, n_filas):
+    return _json_seguro(_gdf.to_json())
+
+# 🛡️ GEOJSON OPTIMIZADO PARA EL VISOR 3D (Sin romper JavaScript con saltos de línea ni comillas)
+if gdf_geologia_recortada is not None and not gdf_geologia_recortada.empty:
+    geojson_geologia = _geologia_a_json(gdf_geologia_recortada, clave_actual, len(gdf_geologia_recortada))
 else:
     geojson_geologia = "{}"
 
 # Serializar puntos sincronizados de la sesión con profundidad
-pozos_3d_json = json.dumps(st.session_state.get("lista_marcadores", []))
+pozos_3d_json = _json_seguro(json.dumps(_pozos_para_visor(st.session_state.get("lista_marcadores", []))))
 
 # =======================================================
 # ⚡ 8. RECORTE INSTANTÁNEO DESDE EL PARQUET NACIONAL SGM
@@ -679,7 +746,7 @@ def obtener_estructuras_50k(datos_ac, clave_ac):
     return None
 
 gdf_estructuras_50k = obtener_estructuras_50k(datos_ac, clave_actual)
-geojson_estructuras = gdf_estructuras_50k.to_json() if gdf_estructuras_50k is not None and not gdf_estructuras_50k.empty else "{}"
+geojson_estructuras = _gdf_a_json_cache(gdf_estructuras_50k, clave_actual, "estructuras", len(gdf_estructuras_50k)) if gdf_estructuras_50k is not None and not gdf_estructuras_50k.empty else "{}"
 
 # =======================================================
 # 💾 EXPORTACIÓN SHAPEFILE SEGURA (DBF DE 10 CARACTERES CACHEADA)
@@ -714,9 +781,9 @@ def exportar_shapefile_zip(_gdf_origen, base_name):  # 👈 NOTA EL GUION BAJO: 
         # 3. Rellenar nulos para evitar error de tipo en DBF
         for col in gdf.columns:
             if col == 'geometry': continue
-            if gdf[col].dtype == 'object':
+            if pd.api.types.is_object_dtype(gdf[col]) or pd.api.types.is_string_dtype(gdf[col]):
                 gdf[col] = gdf[col].fillna("").astype(str)
-            elif np.issubdtype(gdf[col].dtype, np.number):
+            elif pd.api.types.is_numeric_dtype(gdf[col]) and not pd.api.types.is_bool_dtype(gdf[col]):
                 gdf[col] = gdf[col].fillna(0)
 
         # 4. Escribir Shapefile temporal y comprimir
@@ -743,11 +810,12 @@ def exportar_shapefile_zip(_gdf_origen, base_name):  # 👈 NOTA EL GUION BAJO: 
 if ruta_dem_local and ruta_dem_local.exists():
     st.sidebar.markdown("---")
     st.sidebar.subheader("💾 Exportación SIG Oficial")
+    zoom_dem = zoom_de_ruta(ruta_dem_local)
     with open(ruta_dem_local, "rb") as f_dem:
         st.sidebar.download_button(
-            label="💾 Descargar GeoTIFF (35 m - SRTM)",
+            label=f"💾 Descargar GeoTIFF (~{resolucion_dem_m(zoom_dem, centro_lat):.0f} m)",
             data=f_dem,
-            file_name=f"DEM_Acuifero_{clave_actual}_z12.tif",
+            file_name=f"DEM_Acuifero_{clave_actual}_z{zoom_dem}.tif",
             mime="image/tiff",
             type="secondary",
             use_container_width=True
@@ -790,7 +858,7 @@ if ruta_dem_local and ruta_dem_local.exists():
 # 🌐 9. PREPARACIÓN DE LA MALLA THREE.JS (MODO AISLADO 360°)
 # =======================================================
 @st.cache_data(show_spinner=False)
-def preparar_malla_terreno_threejs(ruta_tif):
+def preparar_malla_terreno_threejs(ruta_tif, mtime=0.0):
     import rasterio
     with rasterio.open(ruta_tif) as src:
         z = src.read(1)
@@ -815,13 +883,14 @@ def preparar_malla_terreno_threejs(ruta_tif):
             "bounds": [src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top]
         }
 
-datos_malla_3d = preparar_malla_terreno_threejs(str(ruta_dem_local))
-malla_json = json.dumps(datos_malla_3d)
+datos_malla_3d = preparar_malla_terreno_threejs(str(ruta_dem_local), mtime=ruta_dem_local.stat().st_mtime)
+malla_json = _json_seguro(json.dumps(datos_malla_3d))
 
 # =======================================================
 # 🧊 10A. MOTOR THREE.JS: SOLO ACUÍFERO (BLOQUE AISLADO 360°)
 # =======================================================
-html_threejs_isolated = f"""
+def construir_html_aislado():
+    return f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -1498,7 +1567,7 @@ html_threejs_isolated = f"""
                     <h4 style="margin:0 0 6px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">📍 ${{d.nombre || 'Pozo'}}</h4>
                     <div style="line-height:1.5;">
                         <b>Tipo:</b> ${{d.tipo || 'Infraestructura'}}<br>
-                        <b>Profundidad Real:</b> <span style="color:#691C32; font-weight:bold;">${{d.profundidad || 150}} m</span><br>
+                        <b>Profundidad:</b> <span style="color:#691C32; font-weight:bold;">${{d.profundidad > 0 ? d.profundidad + ' m' : 'Sin dato (se dibuja a 150 m)'}}</span><br>
                         <b>Cota Terreno:</b> ${{d.cota_msnm || '--'}} msnm<br>
                         <b>Lat:</b> ${{d.lat.toFixed(5)}} | <b>Lon:</b> ${{d.lon.toFixed(5)}}
                     </div>
@@ -1676,7 +1745,8 @@ html_threejs_isolated = f"""
 # =======================================================
 # 🌐 10B. MOTOR MAPLIBRE: CON ENTORNO GEOGRÁFICO (MAPA MUNDIAL)
 # =======================================================
-html_maplibre_world = f"""
+def construir_html_mapa():
+    return f"""
 <!DOCTYPE html>
 <html>
 <head>
@@ -2174,7 +2244,7 @@ html_maplibre_world = f"""
                                 <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{p.nombre || 'Pozo'}}</h4>
                             </div>
                             <b>Tipo:</b> ${{p.tipo || 'Infraestructura'}}<br>
-                            <b>Profundidad Real:</b> <span style="color:#691C32; font-weight:bold;">${{profVal}} m</span><br>
+                            <b>Profundidad:</b> <span style="color:#691C32; font-weight:bold;">${{p.profundidad > 0 ? p.profundidad + ' m' : 'Sin dato (se dibuja a 150 m)'}}</span><br>
                             <span style="color:#64748B; font-size:10px;">Coords: ${{latNum.toFixed(4)}}°, ${{lonNum.toFixed(4)}}°</span>
                         </div>
                     `);
@@ -2444,9 +2514,9 @@ with st.container(border=True):
 # 🖥️ 12. RENDERIZADO DEL MOTOR SELECCIONADO
 # =======================================================
 if "Aislado" in modo_visualizacion:
-    components.html(html_threejs_isolated, height=760)
+    components.html(construir_html_aislado(), height=760)
 else:
-    components.html(html_maplibre_world, height=760)
+    components.html(construir_html_mapa(), height=760)
 
 # =======================================================
 # 🏷️ 13. LEYENDA CARTOGRÁFICA OFICIAL SGM
