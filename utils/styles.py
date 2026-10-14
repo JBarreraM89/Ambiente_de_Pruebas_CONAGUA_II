@@ -142,7 +142,7 @@ def inyectar_css_oficial():
     """Inyecta la estética avanzada del Visor en todas las páginas internas"""
     css_oficial = """
     <style>
-        /* 1. Globales y Títulos (CON RESPIRACIÓN REFORZADA) */
+        /* 1. Globales y Títulos */
         h1, h2, h3, h4, h5, h6 { 
             color: #691C32 !important; 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important; 
@@ -208,7 +208,7 @@ def inyectar_css_oficial():
         .stTabs [data-baseweb="tab"] p { font-weight: bold; font-size: 15px; color: #6F7271; margin: 0; }
         .stTabs [aria-selected="true"] p { color: #691C32 !important; }
         
-        /* 4. Botones Globales Compatibles con Streamlit Moderno */
+        /* 4. Botones Globales (Compatibles con versiones nuevas y anteriores de Streamlit) */
         button[kind="primary"],
         button[data-testid="baseButton-primary"] {
             background-color: #9F2241 !important;
@@ -241,7 +241,7 @@ def inyectar_css_oficial():
             color: #000000 !important;
         }
 
-        /* 4.1 Sliders Institucionales (Track, Thumb y Valor) */
+        /* 4.1 Sliders Institucionales (Track y Bolita) */
         div[data-testid="stSlider"] div[role="slider"] {
             background-color: #691C32 !important;
             border: 2px solid #ffffff !important;
@@ -254,13 +254,11 @@ def inyectar_css_oficial():
             color: #691C32 !important;
             font-weight: 700 !important;
         }
-        
-        /* 4.2 Botones de incremento (+ / -) de números */
         button[data-testid="stNumberInputStepDown"],
         button[data-testid="stNumberInputStepUp"] {
             color: #691C32 !important;
         }
-        
+
         /* 5. Reglas blindadas exclusivas de la tarjeta BAS */
         div[data-testid="stVerticalBlockBorderWrapper"]:has(#alerta-card-doc) div[data-testid="stButton"] > button,
         div[data-testid="stVerticalBlockBorderWrapper"]:has(#alerta-card-doc) div[data-testid="stDownloadButton"] > button {
@@ -276,11 +274,10 @@ def inyectar_css_oficial():
         div[data-testid="stVerticalBlockBorderWrapper"]:has(#alerta-card-doc) { padding: 14px 10px !important; }
         div[data-testid="stVerticalBlockBorderWrapper"]:has(#alerta-card-doc) [data-testid="stColumn"] { padding: 0px !important; }
 
-        /* 6. Estilos para los Expander (Pestañas colapsables / Acordeones) */
+        /* 6. Estilos para los Expander */
         [data-testid="stExpander"] {
             margin-bottom: 15px !important; 
         }
-
         [data-testid="stExpander"] summary {
             background-color: #f1f3f6 !important; 
             border: 1px solid #dcdde1 !important;
@@ -289,32 +286,25 @@ def inyectar_css_oficial():
             padding-bottom: 0.5rem !important;
             transition: all 0.3s ease !important;
         }
-        
         [data-testid="stExpander"] summary:hover {
             background-color: #DDC9A3 !important; 
             border-color: #DDC9A3 !important;
         }
-        
         [data-testid="stExpander"] summary p {
             color: #691C32 !important; 
             font-weight: 700 !important;
             font-size: 15px !important;
         }
-        
         [data-testid="stExpander"] summary svg {
             fill: #691C32 !important; 
             color: #691C32 !important;
         }
-        
-        /* 7. Espaciado interno de los Expander (Controles de respiración) */
         [data-testid="stExpanderDetails"] {
             padding-top: 1.5rem !important;
         }
-        
         [data-testid="stExpanderDetails"] [data-testid="stMarkdownContainer"] p {
             margin-bottom: 1.8rem !important;
         }
-        
         [data-testid="stExpanderDetails"] ul {
             margin-bottom: 1.8rem !important;
         }
