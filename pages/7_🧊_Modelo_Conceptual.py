@@ -1059,12 +1059,15 @@ def construir_html_aislado():
         <div class="dock-section" style="background:#f8fafc; padding:8px 10px; border-radius:6px; border:1px solid #e2e8f0;">
             <label style="color:#691C32; margin-bottom:3px;">📏 Curvas de Nivel (Cotas):</label>
             <div style="font-size:11px; margin-bottom:5px;">Equidistancia: <b id="val-cotas" style="color:#691C32;">Cada 50 m</b></div>
+            <!-- Salto lineal de 25 en 25 hasta 250 -->
             <input type="range" class="slider-ctrl" id="slider-cotas" min="0" max="250" step="25" value="50" oninput="cambiarEquidistanciaCotasThree(this.value)">
-            <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#64748B; margin-top:3px;">
-                <span>Off (0m)</span>
-                <span>25m</span>
+            <!-- 6 marcas equidistantes proporcionales al ancho de 250m -->
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748B; margin-top:3px; padding:0 1px;">
+                <span>Off</span>
                 <span>50m</span>
                 <span>100m</span>
+                <span>150m</span>
+                <span>200m</span>
                 <span>250m</span>
             </div>
         </div>
@@ -1449,6 +1452,8 @@ def construir_html_aislado():
         construirMallaTerreno(parseInt(stepVal));
         construirPozosSubterraneos();
     }}
+
+    const COTAS_PASOS = [0, 25, 50, 100, 250];
 
     function cambiarEquidistanciaCotasThree(val) {{
         pasoCotasActual = parseInt(val);
@@ -1882,11 +1887,12 @@ def construir_html_mapa():
             <label style="color:#691C32; margin-bottom:3px;">📏 Curvas de Nivel (Cotas):</label>
             <div style="font-size:11px; margin-bottom:5px;">Equidistancia: <b id="val-cotas" style="color:#691C32;">Cada 50 m</b></div>
             <input type="range" class="slider-ctrl" id="slider-cotas" min="0" max="250" step="25" value="50" oninput="cambiarEquidistanciaCotas(this.value)">
-            <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#64748B; margin-top:3px;">
-                <span>Off (0m)</span>
-                <span>25m</span>
+            <div style="display:flex; justify-content:space-between; font-size:9px; color:#64748B; margin-top:3px; padding:0 1px;">
+                <span>Off</span>
                 <span>50m</span>
                 <span>100m</span>
+                <span>150m</span>
+                <span>200m</span>
                 <span>250m</span>
             </div>
         </div>
@@ -2299,6 +2305,8 @@ def construir_html_mapa():
     function toggleVisibilidadPozos(visible) {{
         marcadoresDOM.forEach(el => {{ el.style.display = visible ? 'block' : 'none'; }});
     }}
+
+    const COTAS_PASOS_MAP = [0, 25, 50, 100, 250];
 
     function cambiarEquidistanciaCotas(val) {{
         let step = parseInt(val);
