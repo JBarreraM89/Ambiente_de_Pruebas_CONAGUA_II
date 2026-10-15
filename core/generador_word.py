@@ -1,28 +1,21 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Fri Jul 31 17:03:16 2026
-
-@author: dchable
-"""
-
 # core/generador_word.py
 import pandas as pd
 from docx import Document
 from docx.shared import Cm, Pt
-from docx.enum.table import WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.text.paragraph import Paragraph
 from core.word_utils import (dar_formato_celda, forzar_bordes_tabla, borrar_borde_celda, 
-                             buscar_parrafos_tabla, limpiar_tablas_viejas)
+                             buscar_parrafos_tabla, limpiar_tablas_viejas, tiene_datos_reales_parquet)
 
 def inyectar_tabla_vertices_en_word(ruta_doc, clave_ac, df_vertices):
     try:
         if df_vertices is None or df_vertices.empty: return "⚠️ Vertices.xlsx no cargado."
         
         df_verts = df_vertices[df_vertices['ID_ACUIFERO'] == clave_ac].copy()
-        if df_verts.empty: return "⚠️ El Acuífero no tiene vértices registrados."
+        if df_verts.empty: return "⚠️ El Acuífero no tiene vértices registrados (se conserva tabla original)."
         
-        # Lógica de cierre de polígono
         df_verts = df_verts.sort_values(by='VERTICE')
         fila_cierre = df_verts[df_verts.duplicated(subset=['VERTICE'], keep='first')]
         df_verts = df_verts.drop_duplicates(subset=['VERTICE'], keep='first')
@@ -30,7 +23,7 @@ def inyectar_tabla_vertices_en_word(ruta_doc, clave_ac, df_vertices):
         df_verts['OBSERVACIONES'] = df_verts['OBSERVACIONES'].fillna('')
         
         doc = Document(ruta_doc)
-        parrafos = buscar_parrafos_tabla(doc, ["tabla", "coordenadas"])
+        parrafos = buscar_parrafos_tabla(doc, ["tabla", ("coordenadas", "poligonal", "vertices")])
         if not parrafos: return "⚠️ No se encontró título Tabla 1 (Vértices)."
         
         table = doc.add_table(rows=2, cols=8)
@@ -65,7 +58,7 @@ def inyectar_tabla_vertices_en_word(ruta_doc, clave_ac, df_vertices):
             dar_formato_celda(cells[7], str(row.get('OBSERVACIONES', '')), None, False, 8)
 
         parrafos[-1]._p.addnext(table._tbl)
-        limpiar_tablas_viejas(parrafos)
+        limpiar_tablas_viejas(parrafos, table._tbl)
         doc.save(ruta_doc)
         return "✅ Vértices inyectados."
     except Exception as e: return f"❌ Error Vértices: {e}"
@@ -74,10 +67,18 @@ def inyectar_tabla_flujo_en_word(ruta_doc, clave_ac, df_global, palabras_clave, 
     try:
         if df_global is None: return f"⚠️ Parquet no encontrado para {nombre_log}."
         df_flujo = df_global[df_global['CLV_ACUI'] == clave_ac].copy()
-        if df_flujo.empty: return f"⚠️ Sin registros para {nombre_log}."
+        
+        # Validar que el Parquet realmente tenga caudales/volúmenes > 0 (evita inyectar tablas de guiones como en 0210 Salidas)
+        cols_validar = [c for c in df_flujo.columns if any(k in c.upper() for k in ['VOLUMEN', 'CAUDAL', 'LONG_B', 'ANCHO_A'])]
+        if not tiene_datos_reales_parquet(df_flujo, cols_validar):
+            return f"⚠️ Sin datos válidos en Parquet para {nombre_log} (se conserva tabla original estilizada)."
 
         doc = Document(ruta_doc)
-        parrafos = buscar_parrafos_tabla(doc, palabras_clave)
+        # Búsqueda flexible del título de la tabla
+        tipo_flujo = "entradas" if "entrada" in nombre_log.lower() else "salidas"
+        parrafos = buscar_parrafos_tabla(doc, ["tabla", tipo_flujo, ("flujo", "subterraneas", "horizontal")])
+        if not parrafos:
+            parrafos = buscar_parrafos_tabla(doc, palabras_clave)
         if not parrafos: return f"⚠️ Título de {nombre_log} no encontrado."
 
         table = doc.add_table(rows=1, cols=8)
@@ -98,7 +99,6 @@ def inyectar_tabla_flujo_en_word(ruta_doc, clave_ac, df_global, palabras_clave, 
             nueva_fila = table.add_row()
             cells = nueva_fila.cells
             
-            # Filtrar columnas no deseadas
             datos_validos = [v for k, v in row.items() if not any(x in str(k).lower() for x in ['clv_acui', 'unnamed', 'index'])]
             while len(datos_validos) < 8: datos_validos.append("-")
             
@@ -124,7 +124,7 @@ def inyectar_tabla_flujo_en_word(ruta_doc, clave_ac, df_global, palabras_clave, 
         borrar_borde_celda(fila_total.cells[7], 'left')
 
         parrafos[-1]._p.addnext(table._tbl)
-        limpiar_tablas_viejas(parrafos)
+        limpiar_tablas_viejas(parrafos, table._tbl)
         doc.save(ruta_doc)
         return f"✅ {nombre_log} inyectadas."
     except Exception as e: return f"❌ Error {nombre_log}: {e}"
@@ -133,10 +133,11 @@ def inyectar_tabla_almacenamiento_en_word(ruta_doc, clave_ac, df_almacenamiento)
     try:
         if df_almacenamiento is None: return "⚠️ Parquet de Almacenamiento no encontrado."
         df_datos = df_almacenamiento[df_almacenamiento['CLV_ACUI'] == clave_ac].copy()
-        if df_datos.empty: return f"⚠️ Sin registros de almacenamiento."
+        if not tiene_datos_reales_parquet(df_datos, ['AREA_km2', 'VOLUMEN_hm3']):
+            return "⚠️ Sin registros válidos de almacenamiento (se conserva tabla original estilizada)."
 
         doc = Document(ruta_doc)
-        parrafos = buscar_parrafos_tabla(doc, ["tabla", "cambio de almacenamiento"])
+        parrafos = buscar_parrafos_tabla(doc, ["tabla", ("cambio de almacenamiento", "evolucion del nivel")])
         if not parrafos: return "⚠️ Título Almacenamiento no encontrado."
 
         table = doc.add_table(rows=1, cols=5)
@@ -173,7 +174,6 @@ def inyectar_tabla_almacenamiento_en_word(ruta_doc, clave_ac, df_almacenamiento)
             try: total_vol += float(vol)
             except: pass
 
-        # Fila Total
         fila_total = table.add_row()
         celda_label = fila_total.cells[0].merge(fila_total.cells[3])
         dar_formato_celda(celda_label, "TOTAL", fondo_color="C0D7EE", negrita=True, alineacion=WD_ALIGN_PARAGRAPH.RIGHT, color_texto="244062")
@@ -181,7 +181,6 @@ def inyectar_tabla_almacenamiento_en_word(ruta_doc, clave_ac, df_almacenamiento)
         borrar_borde_celda(celda_label, 'right')
         borrar_borde_celda(fila_total.cells[4], 'left')
 
-        # Fila Promedio Anual (si existe)
         if val_promedio_anual is not None and str(val_promedio_anual).lower() not in ['nan', 'none', '', '-']:
             fila_prom = table.add_row()
             celda_label_prom = fila_prom.cells[0].merge(fila_prom.cells[3])
@@ -191,7 +190,7 @@ def inyectar_tabla_almacenamiento_en_word(ruta_doc, clave_ac, df_almacenamiento)
             borrar_borde_celda(fila_prom.cells[4], 'left')
 
         parrafos[-1]._p.addnext(table._tbl)
-        limpiar_tablas_viejas(parrafos)
+        limpiar_tablas_viejas(parrafos, table._tbl)
         doc.save(ruta_doc)
         return "✅ Almacenamiento inyectado."
     except Exception as e: return f"❌ Error Almacenamiento: {e}"
@@ -200,7 +199,10 @@ def inyectar_tabla_evapotranspiracion_en_word(ruta_doc, clave_ac, df_etr):
     try:
         if df_etr is None: return "⚠️ Parquet Evapotranspiración no encontrado."
         df_datos = df_etr[df_etr['CLV_ACUI'] == clave_ac].copy()
-        if df_datos.empty: return f"⚠️ Sin registros de evapotranspiración."
+        
+        # Validar que el Parquet de ETR no esté lleno de 0.0 y '-' (como en 0210)
+        if not tiene_datos_reales_parquet(df_datos, ['AREA_km2', 'VOLUMEN_ETR_hm3_ano']):
+            return "⚠️ Sin registros válidos de ETR en Parquet (se conserva tabla original estilizada)."
 
         doc = Document(ruta_doc)
         parrafos = buscar_parrafos_tabla(doc, ["tabla", "evapotranspiracion"])
@@ -254,7 +256,7 @@ def inyectar_tabla_evapotranspiracion_en_word(ruta_doc, clave_ac, df_etr):
             borrar_borde_celda(celda_obj, lado_borde)
 
         parrafos[-1]._p.addnext(table._tbl)
-        limpiar_tablas_viejas(parrafos)
+        limpiar_tablas_viejas(parrafos, table._tbl)
         doc.save(ruta_doc)
         return "✅ ETR inyectada."
     except Exception as e: return f"❌ Error ETR: {e}"
@@ -317,6 +319,7 @@ def modificar_censo_y_bombeo(ruta_doc, p_aprov, p_vol):
             p1._p.addnext(p_espacio._p)
             p_espacio._p.addnext(p2._p)
         
+        activar_ortografia_y_gramatica_es_mx(doc_mold)
         doc.save(ruta_doc)
         return "✅ Censo/Bombeo actualizados."
     except Exception as e: return f"❌ Error Censo/Bombeo: {e}"
