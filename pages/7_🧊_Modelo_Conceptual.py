@@ -807,6 +807,96 @@ def exportar_shapefile_zip(_gdf_origen, base_name):  # 👈 NOTA EL GUION BAJO: 
         print(f"Error exportando Shapefile {base_name}: {e}")
         return None
 
+# =======================================================
+# 🌍 FUNCIÓN PARA EXPORTAR KMZ (GOOGLE EARTH)
+# =======================================================
+def hex_to_kml_color(hex_str, alpha="cc"):
+    """Convierte color HEX (#RRGGBB) a formato KML (AABBGGRR) con opacidad (cc = 80%)."""
+    hex_str = str(hex_str).strip().lstrip('#')
+    if len(hex_str) == 6:
+        r, g, b = hex_str[0:2], hex_str[2:4], hex_str[4:6]
+        return f"{alpha}{b}{g}{r}".lower()
+    return f"{alpha}ffffff"
+
+@st.cache_data(show_spinner=False)
+def exportar_kmz_geologia(_gdf_origen, base_name):
+    if _gdf_origen is None or _gdf_origen.empty:
+        return None
+    try:
+        gdf = _gdf_origen.copy()
+        if gdf.crs is None or gdf.crs.to_epsg() != 4326:
+            gdf = gdf.to_crs(epsg=4326)
+            
+        kml_header = f'<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n<name>{base_name}</name>\n'
+        kml_footer = '</Document>\n</kml>'
+        
+        styles = ""
+        placemarks = ""
+        
+        if 'COLOR_HEX' in gdf.columns:
+            unique_colors = gdf['COLOR_HEX'].dropna().unique()
+            for color in unique_colors:
+                kml_color = hex_to_kml_color(color, alpha="cc")
+                style_id = f"style_{color.replace('#', '')}"
+                styles += f'<Style id="{style_id}"><LineStyle><color>ff333333</color><width>1.5</width></LineStyle><PolyStyle><color>{kml_color}</color></PolyStyle></Style>\n'
+                
+        for _, row in gdf.iterrows():
+            geom = row.geometry
+            if geom is None or geom.is_empty: continue
+            
+            color = row.get('COLOR_HEX', '#cccccc')
+            style_id = f"style_{color.replace('#', '')}"
+            
+            name = str(row.get('ETIQUETA_LITO', row.get('CLAVE_SGM', 'Polígono')))
+            desc = "<table border='1' cellpadding='4' style='border-collapse:collapse; width:100%; font-family:sans-serif; font-size:12px;'>"
+            desc += f"<tr style='background-color:{color}; color:#fff;'><th colspan='2'>Atributos Geológicos</th></tr>"
+            for col in gdf.columns:
+                if col not in ['geometry', 'COLOR_HEX', 'ETIQUETA_LITO']:
+                    val = row[col]
+                    if pd.notna(val) and str(val).strip() != "":
+                        desc += f"<tr><td style='background-color:#f2f2f2; font-weight:bold;'>{col}</td><td>{val}</td></tr>"
+            desc += "</table>"
+            
+            def get_polygon_kml(poly):
+                poly_kml = "<Polygon>\n<tessellate>1</tessellate>\n"
+                poly_kml += "<outerBoundaryIs><LinearRing><coordinates>"
+                poly_kml += " ".join([f"{c[0]},{c[1]}" for c in poly.exterior.coords])
+                poly_kml += "</coordinates></LinearRing></outerBoundaryIs>\n"
+                for interior in poly.interiors:
+                    poly_kml += "<innerBoundaryIs><LinearRing><coordinates>"
+                    poly_kml += " ".join([f"{c[0]},{c[1]}" for c in interior.coords])
+                    poly_kml += "</coordinates></LinearRing></innerBoundaryIs>\n"
+                poly_kml += "</Polygon>\n"
+                return poly_kml
+
+            geom_kml = ""
+            if geom.geom_type == 'Polygon':
+                geom_kml = get_polygon_kml(geom)
+            elif geom.geom_type == 'MultiPolygon':
+                geom_kml = "<MultiGeometry>\n"
+                for poly in geom.geoms:
+                    geom_kml += get_polygon_kml(poly)
+                geom_kml += "</MultiGeometry>\n"
+            else:
+                continue
+                
+            placemarks += f"<Placemark>\n<name>{name}</name>\n<styleUrl>#{style_id}</styleUrl>\n<description><![CDATA[{desc}]]></description>\n{geom_kml}</Placemark>\n"
+            
+        kml_content = kml_header + styles + placemarks + kml_footer
+        
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('doc.kml', kml_content.encode('utf-8'))
+            
+        buf.seek(0)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"Error exportando KMZ: {e}")
+        return None
+
+# =======================================================
+# 💾 BOTONES DE EXPORTACIÓN SIG OFICIAL
+# =======================================================
 if ruta_dem_local and ruta_dem_local.exists():
     st.sidebar.markdown("---")
     st.sidebar.subheader("💾 Exportación SIG Oficial")
@@ -814,12 +904,13 @@ if ruta_dem_local and ruta_dem_local.exists():
     with open(ruta_dem_local, "rb") as f_dem:
         st.sidebar.download_button(
             label=f"💾 Descargar GeoTIFF (~{resolucion_dem_m(zoom_dem, centro_lat):.0f} m)",
-            data=f_dem,
+            data=f_dem.read(),
             file_name=f"DEM_Acuifero_{clave_actual}_z{zoom_dem}.tif",
             mime="image/tiff",
             type="secondary",
             use_container_width=True
         )
+        
     if gdf_geologia_recortada is not None and not gdf_geologia_recortada.empty:
         zip_shp_bytes = exportar_shapefile_zip(gdf_geologia_recortada, f"Geologia_{clave_actual}")
         if zip_shp_bytes:
@@ -828,6 +919,17 @@ if ruta_dem_local and ruta_dem_local.exists():
                 data=zip_shp_bytes,
                 file_name=f"Geologia_Shapefile_{clave_actual}.zip",
                 mime="application/zip",
+                type="secondary",
+                use_container_width=True
+            )
+            
+        kmz_bytes = exportar_kmz_geologia(gdf_geologia_recortada, f"Geologia_{clave_actual}")
+        if kmz_bytes:
+            st.sidebar.download_button(
+                label="🌍 Descargar Geología Google Earth (.kmz)",
+                data=kmz_bytes,
+                file_name=f"Geologia_GoogleEarth_{clave_actual}.kmz",
+                mime="application/vnd.google-earth.kmz",
                 type="secondary",
                 use_container_width=True
             )
