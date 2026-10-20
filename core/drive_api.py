@@ -155,8 +155,12 @@ _cache_carpetas: dict = {}  # clave -> (instante, id_carpeta_csvs); solo se guar
 _candado_cache = threading.Lock()
 
 
-def obtener_id_carpeta_csvs(servicio, clave_ac):
-    """ID de la subcarpeta 'CSVS' del acuífero, o None si no existe o hay un error."""
+def obtener_id_carpeta_csvs(servicio, clave_ac, estricto=False):
+    """ID de la subcarpeta 'CSVS' del acuífero, o None si no existe o hay un error.
+
+    estricto=True: un error de configuración o de la API lanza ErrorDrive (None solo significa
+    "la carpeta no existe"), para que quien llama no confunda un fallo con un resultado vacío.
+    """
     clave = str(clave_ac).strip()
     with _candado_cache:
         acierto = _cache_carpetas.get(clave)
@@ -166,6 +170,8 @@ def obtener_id_carpeta_csvs(servicio, clave_ac):
     raiz = _id_carpeta_raiz()
     if not raiz:
         _notificar(f"❌ {MENSAJE_SECRETS_DRIVE}")
+        if estricto:
+            raise ErrorDrive("Falta la configuración de Drive (id_carpeta_raiz) en secrets.")
         return None
     try:
         q_acuifero = ("mimeType='application/vnd.google-apps.folder' "
@@ -194,8 +200,10 @@ def obtener_id_carpeta_csvs(servicio, clave_ac):
         with _candado_cache:
             _cache_carpetas[clave] = (time.monotonic(), id_csvs)
         return id_csvs
-    except Exception:
+    except Exception as exc:
         logger.exception("No se pudo resolver la carpeta CSVS del acuífero %s", clave)
+        if estricto:
+            raise ErrorDrive(f"No se pudo resolver la carpeta del acuífero {clave}: {exc}") from exc
         return None
 
 
@@ -212,17 +220,22 @@ def obtener_nombre_archivo_oficial(clave_ac, nombre_ac, anio_corto=None):
 # ==========================================
 # LECTURA
 # ==========================================
-def listar_balances_json(clave_ac, max_reintentos=4):
+def listar_balances_json(clave_ac, max_reintentos=4, estricto=False):
     """Archivos .json de balances del acuífero (más recientes primero). [] si no hay o falla.
+
+    estricto=True: si Drive falla o no hay credenciales lanza ErrorDrive en lugar de devolver [].
+    Úsalo cuando el resultado se cachea: así un fallo transitorio no se guarda como "sin balances".
 
     `max_reintentos` se pasa a googleapiclient (`num_retries`), que reintenta solo
     errores transitorios (5xx y límites de cuota) con espera exponencial.
     """
     servicio, _ = obtener_servicio_drive()
     if not servicio:
+        if estricto:
+            raise ErrorDrive("No se pudo autenticar con Google Drive")
         return []
     try:
-        id_carpeta_destino = obtener_id_carpeta_csvs(servicio, clave_ac)
+        id_carpeta_destino = obtener_id_carpeta_csvs(servicio, clave_ac, estricto=estricto)
         if not id_carpeta_destino:
             return []
         query = f"name contains '.json' and '{_escapar(id_carpeta_destino)}' in parents and trashed = false"
@@ -231,8 +244,12 @@ def listar_balances_json(clave_ac, max_reintentos=4):
             includeItemsFromAllDrives=True, supportsAllDrives=True, orderBy="createdTime desc",
         ).execute(num_retries=max_reintentos)
         return resultados.get("files", [])
-    except Exception:
+    except ErrorDrive:
+        raise
+    except Exception as exc:
         logger.exception("No se pudieron listar los balances del acuífero %s", clave_ac)
+        if estricto:
+            raise ErrorDrive(f"No se pudieron listar los balances de {clave_ac}: {exc}") from exc
         return []
 
 
