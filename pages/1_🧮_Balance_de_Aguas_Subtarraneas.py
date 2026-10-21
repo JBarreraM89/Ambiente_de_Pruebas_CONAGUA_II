@@ -1046,7 +1046,7 @@ with tab5:
             st.session_state.pop("bytes_excel_balance", None)
 
         if st.session_state.get("bytes_excel_balance") is None:
-            if st.button("📊 Preparar Matriz de Cálculo (Excel)", use_container_width=True,
+            if st.button("📊 Preparar Matriz de Cálculo (Excel)", type="primary", use_container_width=True,
                          disabled=error_critico, key=f"btn_prep_excel_{clave_actual}"):
                 st.session_state["bytes_excel_balance"] = generar_excel_matriz(
                     df_resumen=df_resumen_excel,
@@ -1085,7 +1085,7 @@ with tab5:
 
         if st.session_state.get("modo_historico", False):
             st.warning("🔒 Guardado bloqueado (Histórico)")
-            if st.button("🔄 Capturar nuevo año", use_container_width=True):
+            if st.button("🔄 Capturar nuevo año",type="primary", use_container_width=True):
                 st.session_state["datos_drive_cargados"] = "LIMPIO"
                 st.session_state["modo_historico"] = False
                 st.session_state["veas_historico"] = None
