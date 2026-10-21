@@ -9,13 +9,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime
+import hashlib
 import math
 
 # --- IMPORTACIONES DEL CORE (FASE 1 y 2) ---
 from utils.styles import inyectar_css_oficial, banner_institucional, inyectar_css_navegacion
-from core.drive_api import listar_balances_json, descargar_balance_json_por_id, guardar_balance_drive
+from core.drive_api import listar_balances_json, descargar_balance_json_por_id, guardar_balance_drive, ErrorDrive
 from core.generador_excel import generar_excel_matriz
-from core.data_loader import cargar_catalogo, CARPETA_DATOS
+from core.data_loader import cargar_catalogo, cargar_excel, normalizar_clave, normalizar_serie_clave
 
 # =======================================================
 # --- CSS OFICIAL Y BANNER COMPACTO ---
@@ -29,27 +30,45 @@ st.caption("Evaluación y Disponibilidad Oficial (NOM-011-CONAGUA-2015).")
 # =======================================================
 # Función para obtener VEAS desde catálogo
 # =======================================================
-@st.cache_data(show_spinner="Buscando VEAS oficial en base de datos...")
+@st.cache_data(show_spinner="Buscando VEAS oficial en base de datos...", max_entries=1, ttl=3600)
+def _tabla_veas_oficial():
+    """{clave: VEAS_SEP_2025}. Se lee el Excel UNA sola vez (antes se releía completo por cada acuífero)."""
+    df = cargar_excel("VEAS_SEP25.xlsx")
+    if df is None or df.empty:
+        return {}
+    df = df.copy()
+    df.columns = df.columns.astype(str).str.strip()
+    if "CLVE_ACUIF" not in df.columns or "VEAS_SEP_2025" not in df.columns:
+        return {}
+    claves = normalizar_serie_clave(df["CLVE_ACUIF"])
+    valores = pd.to_numeric(df["VEAS_SEP_2025"], errors="coerce")
+    tabla = {}
+    for clave, valor in zip(claves, valores):
+        if clave and pd.notna(valor):
+            tabla.setdefault(clave, float(valor))  # si hay duplicados se conserva la primera fila
+    return tabla
+
 def obtener_veas_excel(clave_ac):
-    ruta_completa = CARPETA_DATOS / "VEAS_SEP25.xlsx"
-    if not ruta_completa.exists():
-        return None
-    try:
-        df = pd.read_excel(ruta_completa)
-        df.columns = df.columns.str.strip()
-        df['CLVE_ACUIF'] = df['CLVE_ACUIF'].astype(str).str.zfill(4)
-        clave_str = str(clave_ac).zfill(4)
-        fila = df[df['CLVE_ACUIF'] == clave_str]
-        if not fila.empty:
-            return float(fila.iloc[0]['VEAS_SEP_2025'])
-        return None
-    except Exception:
-        return None
+    """VEAS oficial (hm³/año) del acuífero o None si no está en el catálogo."""
+    return _tabla_veas_oficial().get(normalizar_clave(clave_ac))
 
 @st.cache_data(ttl=300, show_spinner=False)
+def _listar_balances_estricto(clave):
+    """Historial de balances en Drive (TTL 5 min). Si Drive falla lanza ErrorDrive y el fallo NO se cachea."""
+    return listar_balances_json(clave, estricto=True)
+
 def listar_balances_json_cache(clave):
-    """Versión cacheada de listar_balances_json con TTL de 5 minutos."""
-    return listar_balances_json(clave)
+    try:
+        return _listar_balances_estricto(clave)
+    except ErrorDrive:
+        st.session_state["error_drive_historial"] = True
+        return []
+
+listar_balances_json_cache.clear = _listar_balances_estricto.clear  # compatibilidad con .clear()
+
+# Prefijos de las claves de sesión propias de esta página (cada una termina en _<clave del acuífero>)
+PREFIJOS_CLAVES_BALANCE = ("b_src_", "b_yr_", "btn_calc_", "btn_prep_excel_", "dvs_base_", "dvs_tope_", "editor_",
+                           "etr_pme_", "oa_", "p_dnc_", "p_ri_field_", "rr_field_", "save_yr_", "select_hist_")
 
 # ==========================================
 # 1️⃣ INTERFAZ: GESTIÓN DE ENTORNO SINCRO-GEOVISOR
@@ -124,11 +143,14 @@ st.markdown("---")
 # ==========================================
 if "lista_archivos_nube" not in st.session_state or st.session_state.get("last_clave_cache") != clave_actual:
     with st.spinner(f"Buscando el historial de balances del acuífero {clave_actual} en Drive..."):
+        st.session_state.pop("error_drive_historial", None)
         st.session_state["lista_archivos_nube"] = listar_balances_json_cache(clave_actual)
 
     if st.session_state.get("last_clave_cache") is not None and st.session_state.get("last_clave_cache") != clave_actual:
         clave_vieja = st.session_state["last_clave_cache"]
-        llaves_huerfanas = [k for k in st.session_state.keys() if str(k).endswith(f"_{clave_vieja}")]
+        # Solo las claves de ESTA página: antes también se borraban claves de otras páginas que terminaran en _<clave>
+        llaves_huerfanas = [k for k in st.session_state.keys()
+                            if str(k).endswith(f"_{clave_vieja}") and str(k).startswith(PREFIJOS_CLAVES_BALANCE)]
         for k in llaves_huerfanas:
             del st.session_state[k]
         st.session_state["datos_drive_cargados"] = "LIMPIO"
@@ -141,6 +163,14 @@ if "lista_archivos_nube" not in st.session_state or st.session_state.get("last_c
         st.session_state["datos_drive_cargados"] = None
 
 archivos_nube = st.session_state.get("lista_archivos_nube", [])
+
+if st.session_state.get("error_drive_historial"):
+    st.warning("⚠️ No se pudo consultar el historial en Drive: puede haber balances guardados que no se muestran.")
+    if st.button("🔄 Reintentar consulta a Drive", key="btn_reintentar_drive"):
+        st.session_state.pop("error_drive_historial", None)
+        st.session_state.pop("lista_archivos_nube", None)
+        st.session_state.pop("last_clave_cache", None)
+        st.rerun()
 
 if archivos_nube:
     st.warning(f"⚠️ **REGISTROS HISTÓRICOS:** Se localizaron {len(archivos_nube)} balances históricos guardados para el Acuífero {clave_actual}.")
@@ -167,7 +197,7 @@ if archivos_nube:
                             st.session_state["modo_historico"] = True
                         else:
                             st.session_state["modo_historico"] = False
-                    except:
+                    except (ValueError, IndexError):
                         st.session_state["modo_historico"] = False
 
                     resultados_nube = datos_nube.get("resultados", {})
@@ -204,7 +234,7 @@ def safe_val(val, default=0.0):
     try:
         v = float(val)
         return default if math.isnan(v) else v
-    except:
+    except (TypeError, ValueError, OverflowError):
         return default
 
 decision = st.session_state.get("datos_drive_cargados")
@@ -293,7 +323,7 @@ elif decision == "LIMPIO":
     # Limpiar resultados calculados, mensajes y bandera de auto-cálculo
     claves_resultados = [
         "eh_acumulado", "eas_acumulado", "sh_acumulado", "etr_acumulado", "dvs_anualizado",
-        "df_calculado_eh", "df_calculado_eas", "df_calculado_sh", "df_calculado_etr", "df_calculado_dvs",
+        "calculado_df_eh", "calculado_df_eas", "calculado_df_sh", "calculado_df_etr", "calculado_df_dvs",
         "mensaje_table_eh", "mensaje_table_eas", "mensaje_table_sh", "mensaje_etr", "mensaje_dvs",
         "auto_calc"
     ]
@@ -348,16 +378,16 @@ else:
 # ==========================================
 # Inicialización de variables globales para evitar NameError
 # ==========================================
-if "df_calculado_eh" not in st.session_state:
-    st.session_state.df_calculado_eh = pd.DataFrame()
-if "df_calculado_eas" not in st.session_state:
-    st.session_state.df_calculado_eas = pd.DataFrame()
-if "df_calculado_sh" not in st.session_state:
-    st.session_state.df_calculado_sh = pd.DataFrame()
-if "df_calculado_etr" not in st.session_state:
-    st.session_state.df_calculado_etr = pd.DataFrame()
-if "df_calculado_dvs" not in st.session_state:
-    st.session_state.df_calculado_dvs = pd.DataFrame()
+if "calculado_df_eh" not in st.session_state:
+    st.session_state.calculado_df_eh = pd.DataFrame()
+if "calculado_df_eas" not in st.session_state:
+    st.session_state.calculado_df_eas = pd.DataFrame()
+if "calculado_df_sh" not in st.session_state:
+    st.session_state.calculado_df_sh = pd.DataFrame()
+if "calculado_df_etr" not in st.session_state:
+    st.session_state.calculado_df_etr = pd.DataFrame()
+if "calculado_df_dvs" not in st.session_state:
+    st.session_state.calculado_df_dvs = pd.DataFrame()
 
 if "eh_acumulado" not in st.session_state:
     st.session_state.eh_acumulado = 0.0
@@ -438,7 +468,7 @@ def editor_tabla_flujo(df_guardado, widget_key, titulo, modo_hist, tabla_session
         st.session_state[tabla_session_key] = df_editado[cols_guardar].copy().reset_index(drop=True)
         df_calculado = calcular_flujo_vectorizado(df_editado, modo_hist)
         total = df_calculado['Volumen [hm³/año]'].sum(skipna=True)
-        st.session_state[f'df_calculado_{tabla_session_key.split("_")[-1]}'] = df_calculado.reset_index(drop=True)
+        st.session_state[f'calculado_df_{tabla_session_key.split("_")[-1]}'] = df_calculado.reset_index(drop=True)
         st.session_state[f'{tabla_session_key.split("_")[-1]}_acumulado'] = total
         st.session_state[f"mensaje_{tabla_session_key}"] = f"**Total {titulo}: {total:,.1f} hm³/año**"
         st.session_state[tabla_session_key] = df_calculado.reset_index(drop=True)
@@ -650,10 +680,10 @@ with tab2:
         lamina = pd.to_numeric(df_editado_etr['Lámina ETR [m]'], errors='coerce')
         filas_completas = df_editado_etr[['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']].notna().all(axis=1)
 
-        df_calculado_etr = df_editado_etr.copy()
-        df_calculado_etr['Prof. Media (PM) [m]'] = np.nan
-        df_calculado_etr['% ETR'] = np.nan
-        df_calculado_etr['Volumen [hm³/año]'] = np.nan
+        calculado_df_etr = df_editado_etr.copy()
+        calculado_df_etr['Prof. Media (PM) [m]'] = np.nan
+        calculado_df_etr['% ETR'] = np.nan
+        calculado_df_etr['Volumen [hm³/año]'] = np.nan
 
         if filas_completas.any():
             lsup_c = lsup[filas_completas]
@@ -661,19 +691,19 @@ with tab2:
             pm = np.where(linf_c.isna(), lsup_c, (lsup_c + linf_c) / 2.0)
             pct_etr = np.where((pm < PME) & (PME > 0), ((PME - pm) / PME) * 100, 0.0)
             vol = area_etr[filas_completas] * lamina[filas_completas] * (pct_etr / 100.0)
-            df_calculado_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
-            df_calculado_etr.loc[filas_completas, '% ETR'] = pct_etr
-            df_calculado_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
+            calculado_df_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
+            calculado_df_etr.loc[filas_completas, '% ETR'] = pct_etr
+            calculado_df_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
 
-        etr_acumulado_tabla = df_calculado_etr['Volumen [hm³/año]'].sum(skipna=True)
+        etr_acumulado_tabla = calculado_df_etr['Volumen [hm³/año]'].sum(skipna=True)
         hist_res = st.session_state.get("historico_resultados", {}) if st.session_state.get("modo_historico", False) else {}        
         if st.session_state.get("modo_historico", False) and etr_acumulado_tabla == 0:
             etr_acumulado = float(hist_res.get("ETR", 0.0))
         else:
             etr_acumulado = etr_acumulado_tabla
         st.session_state.etr_acumulado = etr_acumulado
-        st.session_state.df_calculado_etr = df_calculado_etr.reset_index(drop=True)
-        st.session_state.table_etr = df_calculado_etr.reset_index(drop=True)
+        st.session_state.calculado_df_etr = calculado_df_etr.reset_index(drop=True)
+        st.session_state.table_etr = calculado_df_etr.reset_index(drop=True)
         st.session_state["mensaje_etr"] = f"**Total Evapotranspiración (ETR): {etr_acumulado:,.1f} hm³/año**"
 
     if st.button("Calcular ETR", key=f"btn_calc_etr_{clave_actual}", type="primary"):
@@ -686,10 +716,10 @@ with tab2:
         lamina = pd.to_numeric(df_editado_etr['Lámina ETR [m]'], errors='coerce')
         filas_completas = df_editado_etr[['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']].notna().all(axis=1)
 
-        df_calculado_etr = df_editado_etr.copy()
-        df_calculado_etr['Prof. Media (PM) [m]'] = np.nan
-        df_calculado_etr['% ETR'] = np.nan
-        df_calculado_etr['Volumen [hm³/año]'] = np.nan
+        calculado_df_etr = df_editado_etr.copy()
+        calculado_df_etr['Prof. Media (PM) [m]'] = np.nan
+        calculado_df_etr['% ETR'] = np.nan
+        calculado_df_etr['Volumen [hm³/año]'] = np.nan
 
         if filas_completas.any():
             lsup_c = lsup[filas_completas]
@@ -697,19 +727,19 @@ with tab2:
             pm = np.where(linf_c.isna(), lsup_c, (lsup_c + linf_c) / 2.0)
             pct_etr = np.where((pm < PME) & (PME > 0), ((PME - pm) / PME) * 100, 0.0)
             vol = area_etr[filas_completas] * lamina[filas_completas] * (pct_etr / 100.0)
-            df_calculado_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
-            df_calculado_etr.loc[filas_completas, '% ETR'] = pct_etr
-            df_calculado_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
+            calculado_df_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
+            calculado_df_etr.loc[filas_completas, '% ETR'] = pct_etr
+            calculado_df_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
 
-        etr_acumulado_tabla = df_calculado_etr['Volumen [hm³/año]'].sum(skipna=True)
+        etr_acumulado_tabla = calculado_df_etr['Volumen [hm³/año]'].sum(skipna=True)
         hist_res = st.session_state.get("historico_resultados", {}) if st.session_state.get("modo_historico", False) else {}        
         if st.session_state.get("modo_historico", False) and etr_acumulado_tabla == 0:
             etr_acumulado = float(hist_res.get("ETR", 0.0))
         else:
             etr_acumulado = etr_acumulado_tabla
         st.session_state.etr_acumulado = etr_acumulado
-        st.session_state.df_calculado_etr = df_calculado_etr.reset_index(drop=True)
-        st.session_state.table_etr = df_calculado_etr.reset_index(drop=True)
+        st.session_state.calculado_df_etr = calculado_df_etr.reset_index(drop=True)
+        st.session_state.table_etr = calculado_df_etr.reset_index(drop=True)
         st.session_state["mensaje_etr"] = f"**Total Evapotranspiración (ETR): {etr_acumulado:,.1f} hm³/año**"
         st.rerun()
 
@@ -784,22 +814,22 @@ with tab3:
             sy = pd.to_numeric(df_editado_dvs['Sy'], errors='coerce')
             filas_completas = df_editado_dvs[['Límite 1 [m]', 'Área [km²]', 'Sy']].notna().all(axis=1)
 
-            df_calculado_dvs = df_editado_dvs.copy()
-            df_calculado_dvs['Evolución Media [m]'] = np.nan
-            df_calculado_dvs['Volumen Parcial [hm³]'] = np.nan
+            calculado_df_dvs = df_editado_dvs.copy()
+            calculado_df_dvs['Evolución Media [m]'] = np.nan
+            calculado_df_dvs['Volumen Parcial [hm³]'] = np.nan
 
             if filas_completas.any():
                 ev_media = np.where(l2[filas_completas].isna(), l1[filas_completas],
                                     (l1[filas_completas] + l2[filas_completas]) / 2.0)
                 vol_parcial = ev_media * area[filas_completas] * sy[filas_completas]
-                df_calculado_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
-                df_calculado_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
+                calculado_df_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
+                calculado_df_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
 
-            DVS_t = df_calculado_dvs['Volumen Parcial [hm³]'].sum(skipna=True)
+            DVS_t = calculado_df_dvs['Volumen Parcial [hm³]'].sum(skipna=True)
             dvs_anualizado = DVS_t / RDA
             st.session_state.dvs_anualizado = dvs_anualizado
-            st.session_state.df_calculado_dvs = df_calculado_dvs.reset_index(drop=True)
-            st.session_state.table_dvs = df_calculado_dvs.reset_index(drop=True)
+            st.session_state.calculado_df_dvs = calculado_df_dvs.reset_index(drop=True)
+            st.session_state.table_dvs = calculado_df_dvs.reset_index(drop=True)
             st.session_state["mensaje_dvs"] = f"**Cambio de Almacenamiento Anualizado ΔV(S):** {dvs_anualizado:,.1f} hm³/año"
 
         if st.button("Calcular ΔV(S)", key=f"btn_calc_dvs_{clave_actual}", type="primary"):
@@ -812,22 +842,22 @@ with tab3:
             sy = pd.to_numeric(df_editado_dvs['Sy'], errors='coerce')
             filas_completas = df_editado_dvs[['Límite 1 [m]', 'Área [km²]', 'Sy']].notna().all(axis=1)
 
-            df_calculado_dvs = df_editado_dvs.copy()
-            df_calculado_dvs['Evolución Media [m]'] = np.nan
-            df_calculado_dvs['Volumen Parcial [hm³]'] = np.nan
+            calculado_df_dvs = df_editado_dvs.copy()
+            calculado_df_dvs['Evolución Media [m]'] = np.nan
+            calculado_df_dvs['Volumen Parcial [hm³]'] = np.nan
 
             if filas_completas.any():
                 ev_media = np.where(l2[filas_completas].isna(), l1[filas_completas],
                                     (l1[filas_completas] + l2[filas_completas]) / 2.0)
                 vol_parcial = ev_media * area[filas_completas] * sy[filas_completas]
-                df_calculado_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
-                df_calculado_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
+                calculado_df_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
+                calculado_df_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
 
-            DVS_t = df_calculado_dvs['Volumen Parcial [hm³]'].sum(skipna=True)
+            DVS_t = calculado_df_dvs['Volumen Parcial [hm³]'].sum(skipna=True)
             dvs_anualizado = DVS_t / RDA
             st.session_state.dvs_anualizado = dvs_anualizado
-            st.session_state.df_calculado_dvs = df_calculado_dvs.reset_index(drop=True)
-            st.session_state.table_dvs = df_calculado_dvs.reset_index(drop=True)
+            st.session_state.calculado_df_dvs = calculado_df_dvs.reset_index(drop=True)
+            st.session_state.table_dvs = calculado_df_dvs.reset_index(drop=True)
             st.session_state["mensaje_dvs"] = f"**Cambio de Almacenamiento Anualizado ΔV(S):** {dvs_anualizado:,.1f} hm³/año"
             st.rerun()
         else:
@@ -841,7 +871,7 @@ with tab3:
         st.error("🛑 El Año Tope debe ser estrictamente mayor al Año Base.")
         st.session_state["bloqueo_dvs"] = True
         dvs_anualizado = 0.0
-        st.session_state.df_calculado_dvs = pd.DataFrame()
+        st.session_state.calculado_df_dvs = pd.DataFrame()
 
 # --- PESTAÑA 4: DNC y Recargas ---
 with tab4:
@@ -893,7 +923,27 @@ with tab4:
         etiqueta_rv = "Recarga Vertical Resultante (Rv)"
 
     with st.container(border=True):
+        # Mostramos el número real (aunque sea negativo) para que vean la magnitud del error
         st.metric(etiqueta_rv, f"{val_rv_calc:,.1f} hm³/año")
+        
+        # --- NUEVO: ASISTENTE DE DIAGNÓSTICO ---
+        if val_rv_calc < 0 and not st.session_state.get("modo_historico", False):
+            st.error("🚨 **¡Alerta de Incongruencia!** La Recarga Vertical es negativa.")
+            
+            # Calculamos los subtotales para mostrárselos
+            suma_entradas = eh_acumulado + eas_acumulado + rr_val
+            suma_salidas = bombeo_calc + etr_acumulado + sh_acumulado + val_ssb + val_dfb + val_dm + dvs_anualizado
+            diferencia = abs(val_rv_calc)
+            
+            st.info(f"""
+            **¿Por qué ocurre esto?**  
+            Matemáticamente, tus otras Entradas Conocidas (**{suma_entradas:,.1f} hm³**) ya superan a todas tus Salidas y Cambio de Almacenamiento juntos (**{suma_salidas:,.1f} hm³**) por una diferencia de **{diferencia:,.1f} hm³**.
+            
+            **🛠️ Dónde corregir el balance:**
+            *   **📥 Pestaña 1:** Revisa si sobreestimaste las Entradas Horizontales (Eh).
+            *   **📤 Pestaña 2:** Revisa si sobreestimaste la Evapotranspiración (ETR) o las Salidas Horizontales (Sh).
+            *   **📊 Pestaña 3:** Revisa que el Cambio de Almacenamiento (ΔV) tenga los años y niveles correctos.
+            """)
 
     st.markdown("---")
     p_ri = st.number_input("¿Qué porcentaje (%) de la Rv constituye la Recarga Incidental (Ri)?",
@@ -982,36 +1032,51 @@ with tab5:
 
         dvs_excel = df_editado_dvs.copy() if 'df_editado_dvs' in locals() else pd.DataFrame()
         modo_hist_excel = st.session_state.get("modo_historico", False)
-
-        bytes_excel = generar_excel_matriz(
-            df_resumen=df_resumen_excel,
-            df_eh=calcular_flujo_vectorizado(df_editado_eh, modo_hist_excel),
-            df_usos=df_editado_usos.copy(),
-            df_sh=calcular_flujo_vectorizado(df_editado_sh, modo_hist_excel),
-            df_etr=df_editado_etr.copy(),
-            df_dvs=dvs_excel,
-            df_eas=calcular_flujo_vectorizado(df_editado_eas, modo_hist_excel),
-            dvs_anualizado=dvs_anualizado,
-            fuente_b=fuente_b,
-            anio_b=anio_b,
-            a_base=a_base,
-            a_tope=a_tope,
-            rda=RDA if 'RDA' in locals() else 5,
-            dnc_detalle=[DNC_ETR, DNC_Sh, DNC_Ssb, DNC_Dfb, DNC_Dm],
-            pme=PME  
-        )
-
         error_critico = st.session_state.get("bloqueo_dvs", False)
 
-        st.download_button(
-            "📊 Descargar Matriz de Cálculo (Excel)",
-            data=bytes_excel,
-            file_name=f"Matriz_Calculo_{clave_actual}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-            disabled=error_critico
-        )
+        # La matriz Excel solo se genera cuando se pide (antes se reconstruía en CADA interacción).
+        # La firma detecta cambios en los datos para no entregar un Excel desactualizado.
+        _firma_excel = hashlib.md5("|".join([
+            str(clave_actual), str(fuente_b), str(anio_b), str(a_base), str(a_tope), str(PME),
+            str(dvs_anualizado), str(modo_hist_excel), str([DNC_ETR, DNC_Sh, DNC_Ssb, DNC_Dfb, DNC_Dm]),
+            df_resumen_excel.to_json(), df_editado_eh.to_json(), df_editado_usos.to_json(),
+            df_editado_sh.to_json(), df_editado_etr.to_json(), dvs_excel.to_json(), df_editado_eas.to_json(),
+        ]).encode("utf-8")).hexdigest()
+        if st.session_state.get("firma_excel_balance") != _firma_excel:
+            st.session_state.pop("bytes_excel_balance", None)
+
+        if st.session_state.get("bytes_excel_balance") is None:
+            if st.button("📊 Preparar Matriz de Cálculo (Excel)", use_container_width=True,
+                         disabled=error_critico, key=f"btn_prep_excel_{clave_actual}"):
+                st.session_state["bytes_excel_balance"] = generar_excel_matriz(
+                    df_resumen=df_resumen_excel,
+                    df_eh=calcular_flujo_vectorizado(df_editado_eh, modo_hist_excel),
+                    df_usos=df_editado_usos.copy(),
+                    df_sh=calcular_flujo_vectorizado(df_editado_sh, modo_hist_excel),
+                    df_etr=df_editado_etr.copy(),
+                    df_dvs=dvs_excel,
+                    df_eas=calcular_flujo_vectorizado(df_editado_eas, modo_hist_excel),
+                    dvs_anualizado=dvs_anualizado,
+                    fuente_b=fuente_b,
+                    anio_b=anio_b,
+                    a_base=a_base,
+                    a_tope=a_tope,
+                    rda=RDA if 'RDA' in locals() else 5,
+                    dnc_detalle=[DNC_ETR, DNC_Sh, DNC_Ssb, DNC_Dfb, DNC_Dm],
+                    pme=PME
+                )
+                st.session_state["firma_excel_balance"] = _firma_excel
+                st.rerun()
+        else:
+            st.download_button(
+                "📊 Descargar Matriz de Cálculo (Excel)",
+                data=st.session_state["bytes_excel_balance"],
+                file_name=f"Matriz_Calculo_{clave_actual}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+                disabled=error_critico
+            )
 
         if error_critico:
             st.error("⚠️ La descarga y el guardado están bloqueados porque hay errores en la Pestaña 3 (Años de Evaluación).")
@@ -1030,11 +1095,20 @@ with tab5:
                                             value=datetime.datetime.now().year, key=f"save_yr_{clave_actual}")
             anio_corto_guardado = str(anio_guardado)[-2:]
 
+            _existentes = [a["name"] for a in st.session_state.get("lista_archivos_nube", [])
+                           if a["name"].endswith(f"_B{anio_corto_guardado}.json")]
+            if _existentes:
+                st.warning(f"⚠️ Ya hay un balance de {anio_guardado} en Drive ({_existentes[0]}). Guardar puede sobrescribirlo o crear otra versión; el Reporte Anual usa la modificada más reciente.")
+
             if st.button("📤 Guardar en Drive", type="primary", use_container_width=True, disabled=error_critico):
                 def df_to_records(df):
                     if df.empty:
                         return []
                     return df.astype(object).where(pd.notnull(df), None).to_dict('records')
+
+                # La tabla de usos se toma del editor (la misma fuente de B_total); antes salía de la última tabla "calculada".
+                _usos_guardar = df_editado_usos[['Tipo de Uso', 'Volumen [hm³/año]']].copy()
+                _usos_guardar['Volumen [hm³/año]'] = pd.to_numeric(_usos_guardar['Volumen [hm³/año]'], errors='coerce').fillna(0.0)
 
                 diccionario_balance = {
                     "configuracion": {
@@ -1051,7 +1125,7 @@ with tab5:
                     },
                     "tablas": {
                         "eh": df_to_records(st.session_state.table_eh),
-                        "usos": df_to_records(st.session_state.table_usos),
+                        "usos": df_to_records(_usos_guardar),
                         "sh": df_to_records(st.session_state.table_sh),
                         "etr": df_to_records(st.session_state.table_etr),
                         "dvs": df_to_records(st.session_state.table_dvs),
@@ -1059,13 +1133,17 @@ with tab5:
                     }
                 }
                 with st.spinner("☁️ Subiendo a Drive..."):
-                    if guardar_balance_drive(clave_actual, nombre_actual, diccionario_balance, anio_corto_guardado):
-                        import time
-                        st.success("✅ ¡Guardado exitoso!")
-                        time.sleep(2)
-                        st.session_state.pop("lista_archivos_nube", None)
-                        st.session_state.pop("last_clave_cache", None)
-                        st.rerun()
+                    guardado_ok = guardar_balance_drive(clave_actual, nombre_actual, diccionario_balance, anio_corto_guardado)
+                if guardado_ok:
+                    listar_balances_json_cache.clear()  # si no, el historial (caché de 5 min) no mostraría el balance recién guardado
+                    st.session_state.pop("lista_archivos_nube", None)
+                    st.session_state.pop("last_clave_cache", None)
+                    st.success("✅ ¡Balance guardado exitosamente en Google Drive!")
+                    import time
+                    time.sleep(1.5) 
+                    st.rerun()
+                else:
+                    st.error("❌ No se pudo guardar el balance en Drive. Verifica que exista la carpeta del acuífero con su subcarpeta CSVS, las credenciales y la sección [drive] de secrets; el detalle quedó en el registro de la aplicación.")
 
 # Desactivar bandera de auto-cálculo para que no se repita en la siguiente interacción
 st.session_state["auto_calc"] = False
