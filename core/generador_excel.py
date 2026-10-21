@@ -167,13 +167,26 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
             lim_sup = row.get('Límite Sup [m]')
             lim_inf = row.get('Límite Inf [m]')
             
-            if pd.notna(lim_sup) and pd.notna(lim_inf) and str(lim_inf).strip() != "":
+            # Helper para validar que la celda no esté vacía ni diga "None"
+            def is_valid(v): return pd.notna(v) and str(v).strip() not in ["", "None", "nan", "<NA>"]
+            def fmt_num(v): 
+                try: val = float(v); return int(val) if val.is_integer() else val
+                except: return v
+
+            sup_ok = is_valid(lim_sup)
+            inf_ok = is_valid(lim_inf)
+
+            if sup_ok and inf_ok:
                 v_max = max(float(lim_sup), float(lim_inf))
                 v_min = min(float(lim_sup), float(lim_inf))
-                def fmt_num(v): return int(v) if v.is_integer() else v
-                rango_txt = f"{fmt_num(v_max)} A {fmt_num(v_min)}"
+                rango_txt = f"{fmt_num(v_min)} A {fmt_num(v_max)}"
+            elif sup_ok:
+                rango_txt = str(fmt_num(lim_sup))
+            elif inf_ok:
+                rango_txt = str(fmt_num(lim_inf))
             else:
-                rango_txt = str(row.get('Polígono / Zona', ''))
+                zona = str(row.get('Polígono / Zona', ''))
+                rango_txt = zona if zona not in ["None", "nan", ""] else "-"
             # -----------------------------------------------------
 
             ws.write(r, 1, rango_txt, f_val_txt)
@@ -206,23 +219,23 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
             lim1 = row.get('Límite 1 [m]')
             lim2 = row.get('Límite 2 [m]')
             
+            def is_valid(v): return pd.notna(v) and str(v).strip() not in ["", "None", "nan", "<NA>"]
             def fmt_num(v): 
-                try:
-                    val = float(v)
-                    return int(val) if val.is_integer() else val
-                except:
-                    return v
+                try: val = float(v); return int(val) if val.is_integer() else val
+                except: return v
 
-            if pd.notna(lim1) and str(lim1).strip() != "":
-                if pd.notna(lim2) and str(lim2).strip() != "":
-                    # Si hay dos límites, los concatena con "a"
-                    rango_dvs = f"{fmt_num(lim1)} a {fmt_num(lim2)}"
-                else:
-                    # Si solo hay un límite, pone el número directo
-                    rango_dvs = str(fmt_num(lim1))
+            l1_ok = is_valid(lim1)
+            l2_ok = is_valid(lim2)
+
+            if l1_ok and l2_ok:
+                rango_dvs = f"{fmt_num(lim1)} a {fmt_num(lim2)}"
+            elif l1_ok:
+                rango_dvs = str(fmt_num(lim1))
+            elif l2_ok:
+                rango_dvs = str(fmt_num(lim2))
             else:
-                # Si todo está vacío, usa el nombre del Rango
-                rango_dvs = str(row.get('Polígono / Rango', ''))
+                zona = str(row.get('Polígono / Rango', ''))
+                rango_dvs = zona if zona not in ["None", "nan", ""] else "-"
             # -----------------------------------------------------
 
             ws.write(r_d, 10, rango_dvs, f_val_txt)
@@ -287,7 +300,7 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
             'total_row': True
         })
 
-        # 4. CAMBIO DE ALMACENAMIENTO (Medio 2)
+        # 4. CAMBIO DE ALMACENAMIENTO (Medio 9)
         data_alm = [["ΔV(S)", dvs_anualizado]]
         ws.add_table(r_res, 23, r_res + len(data_alm), 24, {
             'data': data_alm,
@@ -295,7 +308,7 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
                 {'header': 'CAMBIO DE\nALMACENAMIENTO', 'header_format': f_hdr_nat_alm}, 
                 {'header': 'hm³', 'format': f_tbl_num1, 'header_format': f_hdr_nat_alm}
             ],
-            'style': 'Table Style Medium 2',
+            'style': 'Table Style Medium 9',  # <--- CAMBIADO A 9 (Familia con bordes blancos)
             'total_row': False
         })
 
