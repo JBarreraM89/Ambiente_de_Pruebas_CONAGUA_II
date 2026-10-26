@@ -1014,31 +1014,21 @@ def on_acuifero_change():
 st.sidebar.header("🔍 Panel de Control")
 
 # 🏛️ BUSCADOR POR MUNICIPIO
-idx_mun = None
-if st.session_state.get("sb_municipio") in lista_opciones_municipios:
-    idx_mun = lista_opciones_municipios.index(st.session_state["sb_municipio"])
-
 st.sidebar.selectbox(
     "🏛️ Buscar por Municipio:",
     lista_opciones_municipios,
-    index=idx_mun,
+    index=None,  # 👈 Al dejar None fijo, Streamlit muestra el círculo con la 'x' para borrar
     key="sb_municipio",
     placeholder="Teclea o elige un municipio...",
     on_change=on_municipio_change
 )
 
+
 # 🏘️ BUSCADOR POR LOCALIDAD
-idx_loc = None
-val_loc_actual = st.session_state.get("sb_localidad")
-
-# ⚡ Comprobación O(1) con diccionario hash en lugar de escanear toda la lista
-if val_loc_actual and val_loc_actual in mapa_localidades:
-    idx_loc = lista_opciones_localidades.index(val_loc_actual)
-
 st.sidebar.selectbox(
     "🏘️ Buscar por Localidad:",
     lista_opciones_localidades,
-    index=idx_loc,
+    index=None,  # 👈 Muestra el círculo con la 'x' para borrar
     key="sb_localidad",
     placeholder="Teclea o elige una localidad...",
     on_change=on_localidad_change
@@ -1915,7 +1905,7 @@ if seleccion_final:
                     ultimo_pt = marcadores[-1]
                     map_center, map_zoom = [ultimo_pt["lat"], ultimo_pt["lon"]], 13
                 else:
-                    # ⚡ Ahora Python calcula el zoom exacto del acuífero desde el frame 1
+                    # ⚡ Python calcula el zoom exacto del polígono para evitar tildeos
                     map_center = [centroide.y, centroide.x]
                     map_zoom = calcular_zoom_optimo(b)
                     
@@ -1928,6 +1918,7 @@ if seleccion_final:
                     prefer_canvas=True
                 )
                 
+                # ⚡ Encuadre inteligente con AutoCentrarMapa
                 if not marcadores:
                     limites_acuifero = [[b[1], b[0]], [b[3], b[2]]]
                     m.add_child(AutoCentrarMapa(bounds=limites_acuifero))
@@ -1958,6 +1949,15 @@ if seleccion_final:
                     .leaflet-bottom.leaflet-left { display: flex !important; flex-direction: column !important; align-items: flex-start !important; }
                     .leaflet-control-scale { order: 1 !important; margin: 0 0 4px 10px !important; }
                     .leaflet-control-mouseposition { order: 2 !important; position: static !important; transform: none !important; margin: 0 0 10px 10px !important; background-color: rgba(255, 255, 255, 0.85) !important; padding: 2px 8px !important; border: 1px solid #bbb !important; border-radius: 4px !important; font-family: 'Segoe UI', sans-serif !important; font-size: 11px !important; font-weight: 600 !important; color: #333333 !important; box-shadow: 0 1px 4px rgba(0,0,0,0.15) !important; pointer-events: auto !important; }
+                    .leaflet-tooltip.tooltip-limpio {
+                        background: transparent !important;
+                        border: none !important;
+                        box-shadow: none !important;
+                        padding: 0 !important;
+                    }
+                    .leaflet-tooltip.tooltip-limpio::before {
+                        display: none !important;
+                    }
                 </style>
                 """
                 m.get_root().header.add_child(folium.Element(estilos_arbol))
@@ -1997,8 +1997,18 @@ if seleccion_final:
                             frac_segura = frac_local.copy()
                             geom_acuifero = datos_ac.geometry.buffer(0) if not datos_ac.geometry.is_valid else datos_ac.geometry
                             
-                            # ⚡ Intersección limpia sin descarte por buffer negativo
-                            mascara_valida = frac_segura.geometry.intersects(geom_acuifero)
+                            toca_normal = frac_segura.geometry.intersects(geom_acuifero)
+
+                            # ⚡ EXCEPCIÓN: Municipios y Localidades NO se descartan por desfase
+                            if capa_visual in ["Municipios", "Localidades"]:
+                                mascara_valida = toca_normal
+                            else:
+                                # ⚡ Se mantiene la regla estricta anti-desfase para el resto de capas
+                                nucleo_acuifero = geom_acuifero.buffer(-0.001)
+                                es_punto_linea = frac_segura.geometry.geom_type.isin(['Point', 'MultiPoint', 'LineString', 'MultiLineString'])
+                                toca_nucleo = frac_segura.geometry.intersects(nucleo_acuifero)
+                                mascara_valida = (es_punto_linea & toca_normal) | (~es_punto_linea & toca_nucleo)
+
                             frac_segura = frac_segura[mascara_valida].copy()
                             if frac_segura.empty:
                                 continue 
@@ -2023,9 +2033,28 @@ if seleccion_final:
                             for nombre_unico, gdf_individual in agrupado:
                                 nom_mostrar = str(nombre_unico).strip()
                                 
-                                # ⚡ ACTIVACIÓN SELECTIVA DE MUNICIPIOS
+                                # ⚡ 1. Nombre en el árbol de capas: FECHA COMPLETA (DOF) para decretos y acuerdos
+                                # ⚡ 1. Nombre en el árbol de capas: FECHA COMPLETA (DOF) para decretos y acuerdos
+                                if capa_visual in ["Vedas", "Acuerdos Generales", "Zonas Reglamentadas", "Zonas de Reserva", "Reglamentos"]:
+                                    fecha_dof = ""
+                                    if 'FECHA_DOF' in gdf_individual.columns:
+                                        val = gdf_individual.iloc[0]['FECHA_DOF']
+                                        if pd.notna(val) and str(val).strip() != "":
+                                            try: fecha_dof = pd.to_datetime(val).strftime('%d-%m-%Y')
+                                            except: fecha_dof = str(val).strip()[:10] 
+                                    nom_mostrar = f"{fecha_dof}" if fecha_dof else "Sin Fecha"
+                                else:
+                                    if len(nom_mostrar) > 30: nom_mostrar = nom_mostrar[:27] + "..."
+
+                                # ⚡ 2. Texto limpio para el cursor al pasar por el polígono
+                                if capa_visual in ["Vedas", "Acuerdos Generales", "Zonas Reglamentadas", "Zonas de Reserva", "Reglamentos"]:
+                                    texto_hover = f"<b>{capa_visual.upper()}</b><br>Fecha DOF: {nom_mostrar}"
+                                else:
+                                    texto_hover = f"<b>{capa_visual.upper()}</b><br>{nom_mostrar}"
+
+                                # ⚡ 3. Activación selectiva y estilos de capas
                                 if capa_visual == "Municipios" and municipio_buscado:
-                                    coincide_mun = nombres_coinciden(nom_mostrar, municipio_buscado)
+                                    coincide_mun = nombres_coinciden(str(nombre_unico), municipio_buscado)
                                     mostrar_inicial = coincide_mun
                                     if coincide_mun:
                                         estilo_actual = {'fillColor': '#e67e22', 'color': '#d35400', 'weight': 3, 'fillOpacity': 0.50}
@@ -2034,9 +2063,8 @@ if seleccion_final:
                                         estilo_actual = {'fillColor': color_hex, 'color': color_hex, 'weight': 2, 'fillOpacity': 0.25}
                                         resaltado_actual = {'fillColor': color_hex, 'color': '#FFD700', 'weight': 3, 'fillOpacity': 0.85}
 
-                                # ⚡ ACTIVACIÓN SELECTIVA DE LOCALIDADES
                                 elif capa_visual == "Localidades" and localidad_buscada:
-                                    coincide_loc = nombres_coinciden(nom_mostrar, localidad_buscada)
+                                    coincide_loc = nombres_coinciden(str(nombre_unico), localidad_buscada)
                                     mostrar_inicial = coincide_loc
                                     if coincide_loc:
                                         estilo_actual = {'fill': True, 'fillColor': '#e67e22', 'fillOpacity': 0.55, 'color': '#9F2241', 'weight': 3.5, 'opacity': 1.0}
@@ -2060,7 +2088,8 @@ if seleccion_final:
                                     show=mostrar_inicial,
                                     style_function=lambda feature, est=estilo_actual: est,
                                     highlight_function=lambda x, res=resaltado_actual: res,
-                                    tooltip=folium.GeoJsonTooltip(fields=[col_nombre_final], aliases=[f"<b>{capa_visual.upper()}</b><br>"], localize=True, sticky=True, labels=True, style=estilo_tooltip)
+                                    # ⚡ Añadimos class_name="tooltip-limpio"
+                                    tooltip=folium.Tooltip(texto_hover, style=estilo_tooltip, sticky=True, class_name="tooltip-limpio")
                                 ).add_to(m)
                                 
                                 hijos_de_esta_capa.append({"label": f"{nom_mostrar}", "layer": capa_individual})
