@@ -7,6 +7,7 @@ from folium import plugins
 import geopandas as gpd
 import streamlit as st
 import pandas as pd
+import unicodedata
 import requests
 import tempfile
 import zipfile
@@ -32,11 +33,9 @@ from core.drive_api import descargar_imagen_drive_bytes
 # =======================================================
 # 🚀 1. CARGA DE DATOS MAESTROS Y ACCESO BAJO DEMANDA (LAZY)
 # =======================================================
-# Objeto compartido entre sesiones y SIN copia por interacción. Solo lectura:
-# si hay que modificarlo, usar .copy() (esta página nunca lo modifica).
 gdf_maestro = obtener_datos_maestros_compartidos()
 if gdf_maestro is None:
-    st.stop()  # el cargador ya mostró el mensaje de error
+    st.stop()
 
 @st.cache_data(show_spinner=False)
 def get_df_repda(): return cargar_excel("REPDA.xlsx", "Clave de acuífero")
@@ -76,9 +75,132 @@ banner_institucional()
 # =======================================================
 # ⚙️ 3. FUNCIONES AUXILIARES Y CACHÉ ESPACIAL OPTIMIZADO
 # =======================================================
+def nombres_coinciden(nombre1, nombre2):
+    """Compara nombres de municipios ignorando acentos, mayúsculas y caracteres especiales."""
+    if not nombre1 or not nombre2: return False
+    def norm(txt):
+        t = unicodedata.normalize('NFKD', str(txt)).encode('ASCII', 'ignore').decode('utf-8')
+        return re.sub(r'[^a-z0-9]', '', t.lower())
+    c1, c2 = norm(nombre1), norm(nombre2)
+    return c1 == c2 or (len(c1) >= 4 and len(c2) >= 4 and (c1 in c2 or c2 in c1))
+
+def normalizar_nombre_municipio(nombre_crudo):
+    if not nombre_crudo: return ""
+    s = str(nombre_crudo).strip()
+    s = re.sub(r"^[\[\(\'\"\s]+|[\]\)\'\"\s]+$", "", s)
+    return s.title().strip()
+
+@st.cache_data(show_spinner=False)
+def obtener_catalogo_municipios_maestro(_gdf_m):
+    """Construye un índice ultrarrápido de Municipios -> Acuífero y Estado."""
+    mapa = {}
+    for _, row in _gdf_m.iterrows():
+        cve_raw = row.get('CLV_ACUI')
+        if pd.isna(cve_raw): continue
+        try: cve_acui = str(int(float(cve_raw))).zfill(4)
+        except Exception: cve_acui = str(cve_raw).strip().zfill(4)
+            
+        nom_acui = limpiar_texto(row.get('NOM_ACUI', ''))
+        nom_edo = limpiar_texto(row.get('NOM_EDO', ''))
+        if not nom_acui or not nom_edo: continue
+            
+        label_acui = f"{cve_acui} - {nom_acui}"
+        
+        lista_cruda = []
+        for col in ['municipios_TOTAL', 'municipios_PARCIAL']:
+            val_col = row.get(col)
+            if pd.notna(val_col) and str(val_col).strip() not in ['', 'nan', 'None', '[]']:
+                s = str(val_col).strip()
+                if (s.startswith('[') and s.endswith(']')) or (s.startswith('(') and s.endswith(')')):
+                    try:
+                        res = ast.literal_eval(s)
+                        if isinstance(res, (list, tuple, set)):
+                            lista_cruda.extend([str(x) for x in res if x])
+                            continue
+                    except Exception: pass
+                partes = re.split(r'\s*\|\s*|\s*;\s*|\n+|\s*,\s*', s)
+                lista_cruda.extend(partes)
+        
+        muns_vistos = set()
+        for m_raw in lista_cruda:
+            m_limpio = normalizar_nombre_municipio(m_raw)
+            if len(m_limpio) >= 2 and m_limpio.lower() not in ['nan', 'none', 'sin informacion', 'null']:
+                if m_limpio not in muns_vistos:
+                    muns_vistos.add(m_limpio)
+                    etiqueta = f"{m_limpio} ({nom_edo}) — Acuífero: {cve_acui} - {nom_acui}"
+                    mapa[etiqueta] = {
+                        "municipio": m_limpio,
+                        "estado": nom_edo,
+                        "clave_acui": cve_acui,
+                        "nombre_acui": nom_acui,
+                        "label_busqueda": label_acui
+                    }
+                    
+    lista_opciones = sorted(list(mapa.keys()))
+    return lista_opciones, mapa
+
+@st.cache_data(show_spinner=False)
+def obtener_catalogo_localidades_maestro(_gdf_m):
+    """Construye un catálogo en memoria de Localidades -> Acuífero y Estado."""
+    gdf_loc = cargar_localidades_parquet()
+    if gdf_loc is None or gdf_loc.empty:
+        return [], {}
+    
+    gdf = gdf_loc.copy()
+    
+    # Detectamos la columna que tiene el nombre de la localidad
+    col_nom = None
+    for c in ['NOMGEO', 'NOM_LOC', 'NOMBRE', 'LOC']:
+        if c in gdf.columns:
+            col_nom = c
+            break
+    if not col_nom:
+        col_nom = gdf.columns[0]
+        
+    # Verificamos si ya cuenta con clave de acuífero o requiere cruce espacial
+    if 'CLV_ACUI' not in gdf.columns:
+        if gdf.crs != _gdf_m.crs:
+            gdf = gdf.to_crs(_gdf_m.crs)
+        cols_m = ['CLV_ACUI', 'NOM_ACUI', 'NOM_EDO', 'geometry']
+        gdf_candidatos = gpd.sjoin(gdf[[col_nom, 'geometry']], _gdf_m[cols_m], how='inner', predicate='intersects')
+    else:
+        gdf['CLV_ACUI_NORM'] = gdf['CLV_ACUI'].astype(str).str.strip().str.zfill(4)
+        _dict_m = _gdf_m.drop_duplicates(subset=['CLV_ACUI']).set_index(_gdf_m['CLV_ACUI'].astype(str).str.strip().str.zfill(4))
+        gdf_candidatos = gdf.copy()
+        gdf_candidatos['NOM_ACUI'] = gdf_candidatos['CLV_ACUI_NORM'].map(_dict_m['NOM_ACUI'])
+        gdf_candidatos['NOM_EDO'] = gdf_candidatos['CLV_ACUI_NORM'].map(_dict_m['NOM_EDO'])
+        gdf_candidatos['CLV_ACUI'] = gdf_candidatos['CLV_ACUI_NORM']
+
+    mapa = {}
+    for _, row in gdf_candidatos.iterrows():
+        nom_loc = limpiar_texto(row.get(col_nom, ''))
+        if not nom_loc or nom_loc.lower() in ['nan', 'none', 'null', '']:
+            continue
+        nom_loc = nom_loc.title().strip()
+        
+        cve_ac = str(row.get('CLV_ACUI', '')).strip().zfill(4)
+        nom_ac = limpiar_texto(row.get('NOM_ACUI', ''))
+        nom_ed = limpiar_texto(row.get('NOM_EDO', ''))
+        
+        if not cve_ac or not nom_ac or not nom_ed:
+            continue
+            
+        label_acui = f"{cve_ac} - {nom_ac}"
+        etiqueta = f"{nom_loc} ({nom_ed}) — Acuífero: {cve_ac} - {nom_ac}"
+        
+        mapa[etiqueta] = {
+            "localidad": nom_loc,
+            "estado": nom_ed,
+            "clave_acui": cve_ac,
+            "nombre_acui": nom_ac,
+            "label_busqueda": label_acui
+        }
+        
+    lista_opciones = sorted(list(mapa.keys()))
+    return lista_opciones, mapa
+
 @st.cache_data(show_spinner=False)
 def cargar_localidades_parquet():
-    from pathlib import Path
     rutas = [
         DIRECTORIO_RAIZ / "localidades_2025.parquet",
         DIRECTORIO_RAIZ / "data" / "localidades_2025.parquet",
@@ -96,15 +218,12 @@ def cargar_localidades_parquet():
 @st.cache_data(show_spinner=False)
 def obtener_capa_exacta_cache(id_archivo, clave_ac):
     cve_norm = str(clave_ac).strip().zfill(4)
-    
     if id_archivo == "localidades":
-        # Las localidades a veces no tienen clave, aquí sí usamos el cruce espacial
         gdf_frac = cargar_localidades_parquet()
         if gdf_frac is None or gdf_frac.empty: return None
         if 'CLV_ACUI' in gdf_frac.columns:
             return gdf_frac[gdf_frac['CLV_ACUI'].astype(str).str.zfill(4) == cve_norm].copy()
             
-        # Intersección espacial SOLO para localidades sin clave
         gdf_m = obtener_datos_maestros_compartidos()
         geom_acuifero = gdf_m[gdf_m['CLV_ACUI'].astype(str).str.zfill(4) == cve_norm].iloc[0].geometry
         minx, miny, maxx, maxy = geom_acuifero.bounds
@@ -114,18 +233,9 @@ def obtener_capa_exacta_cache(id_archivo, clave_ac):
         posibles = candidatos.iloc[posibles_idx]
         res = posibles[posibles.geometry.intersects(geom_acuifero)].copy()
         return res if not res.empty else None
-        
     else:
-        # ⚡ MODO ESTRICTO PARA EL RESTO DE CAPAS (COTAS, VEDAS, ETC.)
-        # Solo extrae lo que coincida exactamente con la clave en el disco duro.
-        # Si la clave no existe, devuelve vacío y NO dibuja nada.
         gdf_frac = cargar_fraccion(id_archivo, cve_norm)
-        
-        if gdf_frac is not None and not gdf_frac.empty:
-            return gdf_frac
-        
-        # Si no encontró la clave, retorna None (No activa ningún paracaídas espacial)
-        return None
+        return gdf_frac if gdf_frac is not None and not gdf_frac.empty else None
 
 def exportar_acuifero_a_kmz(clave_ac, nom_ac, datos_ac, capas_seleccionadas, diccionario_capas, marcadores):
     def reparar_mojibake(texto):
@@ -310,10 +420,8 @@ def exportar_acuifero_a_kmz(clave_ac, nom_ac, datos_ac, capas_seleccionadas, dic
 
 @st.cache_data(show_spinner="Empaquetando KMZ con geometrías exactas...")
 def obtener_kmz_cacheado(clave_ac, nom_ac, _datos_ac, capas_seleccionadas_tuple, marcadores_str, _diccionario_capas):
-    try:
-        marcadores_lista = ast.literal_eval(marcadores_str) if marcadores_str else []
-    except (ValueError, SyntaxError):
-        marcadores_lista = []
+    try: marcadores_lista = ast.literal_eval(marcadores_str) if marcadores_str else []
+    except (ValueError, SyntaxError): marcadores_lista = []
     return exportar_acuifero_a_kmz(clave_ac, nom_ac, _datos_ac, list(capas_seleccionadas_tuple), _diccionario_capas, marcadores_lista)
 
 def mostrar_dato(titulo, valor):
@@ -361,7 +469,7 @@ def mostrar_pares_en_parrafo(titulo_seccion, nombres, extras, prefijo_extra="", 
         st.write(f"**{titulo_seccion}:** {', '.join(formateados)}")
 
 def mostrar_desde_fraccion_vertical(titulo_seccion, clave_ac, id_capa, campo_nombre, campo_fecha, prefijo_fecha="DOF: ", formato_titulo=False):
-    fraccion = cargar_fraccion(id_capa, clave_ac) # ⚡ Carga filtrada
+    fraccion = cargar_fraccion(id_capa, clave_ac)
     if fraccion is not None and not fraccion.empty:
         unicos = fraccion.drop_duplicates(subset=[campo_nombre])
         pares = []
@@ -384,7 +492,7 @@ def mostrar_desde_fraccion_vertical(titulo_seccion, clave_ac, id_capa, campo_nom
     st.write(f"**{titulo_seccion}:** Sin información")
 
 def mostrar_desde_fraccion_en_linea(titulo_seccion, clave_ac, id_capa, campo_nombre, campo_fecha, prefijo_fecha="DOF: ", formato_titulo=False):
-    fraccion = cargar_fraccion(id_capa, clave_ac) # ⚡ Carga filtrada
+    fraccion = cargar_fraccion(id_capa, clave_ac)
     if fraccion is not None and not fraccion.empty:
         unicos = fraccion.drop_duplicates(subset=[campo_nombre])
         pares = []
@@ -415,7 +523,7 @@ def mostrar_municipios_agrupados_y_condicion(clave_ac, str_total, str_parcial):
         for sep in [' | ', '|', ';', '\n']: t = t.replace(sep, ',')
         return [limpiar_acentos(x.strip()) for x in t.split(',') if x.strip()]
 
-    fraccion = cargar_fraccion("municipios", clave_ac) # ⚡ Carga filtrada
+    fraccion = cargar_fraccion("municipios", clave_ac)
     if fraccion is not None and not fraccion.empty and 'CVE_ENT' in fraccion.columns and 'NOMGEO' in fraccion.columns:
         lista_totales = normalizar_lista(str_total)
         lista_parciales = normalizar_lista(str_parcial)
@@ -460,9 +568,8 @@ def buscar_valor(df, palabra_clave, columna='VOLUMEN_hm3', es_total=False):
             except: return 0.0            
     return 0.0
 
-
 # =======================================================
-# 💬 MODAL DE CHAT EN LA NUBE (LÓGICA EXACTA DE LA PÁG. 4)
+# 💬 MODAL DE CHAT EN LA NUBE
 # =======================================================
 @st.cache_resource(show_spinner=False)
 def obtener_modelo_activo_visor(api_key):
@@ -488,7 +595,6 @@ def obtener_modelo_activo_visor(api_key):
         ))
         for modelo_test in candidatos:
             try:
-                # 🚀 ESTE ES EL PING TEST QUE HABÍAMOS OMITIDO
                 cliente_ia.chat.completions.create(model=modelo_test, messages=[{"role": "user", "content": "1"}], max_tokens=1)
                 return modelo_test
             except Exception:
@@ -523,8 +629,6 @@ def modal_chat_local(clave_ac, nombre_ac, contexto_global_str):
                         return
                         
                     cliente_ia = OpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
-                    
-                    # Usamos tu función testeada y probada
                     modelo_activo = obtener_modelo_activo_visor(api_key)
                     
                     instrucciones = (
@@ -534,8 +638,6 @@ def modal_chat_local(clave_ac, nombre_ac, contexto_global_str):
                     )
                     
                     mensajes_ia = [{"role": "system", "content": instrucciones}]
-                    
-                    # Memoria reciente
                     for m in st.session_state[chat_key][-4:]: 
                         mensajes_ia.append({"role": m["role"], "content": m["content"]})
                     
@@ -559,7 +661,7 @@ def modal_chat_local(clave_ac, nombre_ac, contexto_global_str):
 # 🧠 CONSTRUCTOR DE CONTEXTO GLOBAL HÍDRICO (RAG ENTERPRISE)
 # =======================================================
 def obtener_resumen_fraccion(id_capa, clave_ac, campo_nombre, campo_fecha=None, prefijo_fecha="DOF: "):
-    fraccion = cargar_fraccion(id_capa, clave_ac) # ⚡ Carga filtrada
+    fraccion = cargar_fraccion(id_capa, clave_ac)
     if fraccion is None or fraccion.empty: return "Sin registros aplicables."
         
     unicos = fraccion.drop_duplicates(subset=[campo_nombre])
@@ -576,7 +678,7 @@ def obtener_resumen_fraccion(id_capa, clave_ac, campo_nombre, campo_fecha=None, 
 
 def obtener_texto_municipios_ia(clave_ac):
     from core.config import DICCIONARIO_ESTADOS
-    fraccion = cargar_fraccion("municipios", clave_ac) # ⚡ Carga filtrada
+    fraccion = cargar_fraccion("municipios", clave_ac)
     if fraccion is None or fraccion.empty or 'CVE_ENT' not in fraccion.columns or 'NOMGEO' not in fraccion.columns:
         return "Sin municipios registrados."
     
@@ -590,7 +692,6 @@ def obtener_texto_municipios_ia(clave_ac):
         if muns: resumen_mun.append(f"  * {edo}: {', '.join([m.title() for m in muns])}")
             
     return "\n".join(resumen_mun) if resumen_mun else "Sin información detallada."
-
 
 def construir_contexto_completo(clave_ac, nombre_ac, estado, datos_ac, 
                                  parrafo_vol, parrafo_aprov, parrafo_dma,
@@ -783,7 +884,6 @@ def modal_tablas_calculo(clave_ac, tabla_tipo):
         df_fuente = cargar_parquet(config["archivo"])
         if df_fuente is not None:
             df_base = df_fuente[df_fuente['CLV_ACUI'] == clave_ac].copy()
-            
             if not df_base.empty:
                 df_mostrar = df_base.drop(columns=['CLV_ACUI'])
                 col_texto = df_mostrar.columns[0]
@@ -844,14 +944,119 @@ def modal_tablas_calculo(clave_ac, tabla_tipo):
         st.error("Configuración de tabla no válida.")
 
 # =======================================================
-# 🎛️ 4. INTERFAZ PRINCIPAL
+# 🎛️ 4. INTERFAZ PRINCIPAL Y PANEL DE CONTROL
 # =======================================================
-if "filtro_estado_sel" not in st.session_state:
-    st.session_state["filtro_estado_sel"] = None
-if "filtro_acuifero_sel" not in st.session_state:
+# Variables de estado
+if "filtro_estado_sel" not in st.session_state: st.session_state["filtro_estado_sel"] = None
+if "filtro_acuifero_sel" not in st.session_state: st.session_state["filtro_acuifero_sel"] = None
+if "sb_municipio" not in st.session_state: st.session_state["sb_municipio"] = None
+if "municipio_buscado_activo" not in st.session_state: st.session_state["municipio_buscado_activo"] = None
+if "sb_localidad" not in st.session_state: st.session_state["sb_localidad"] = None
+if "localidad_buscada_activa" not in st.session_state: st.session_state["localidad_buscada_activa"] = None
+if "origen_seleccion" not in st.session_state: st.session_state["origen_seleccion"] = None
+
+# Catálogos globales en memoria
+lista_opciones_municipios, mapa_municipios = obtener_catalogo_municipios_maestro(gdf_maestro)
+lista_opciones_localidades, mapa_localidades = obtener_catalogo_localidades_maestro(gdf_maestro)
+
+# --- CALLBACKS SINCRONIZADOS ---
+def on_municipio_change():
+    sel_mun = st.session_state.get("sb_municipio")
+    if not sel_mun:
+        st.session_state["municipio_buscado_activo"] = None
+        return
+    info = mapa_municipios.get(sel_mun)
+    if info:
+        st.session_state["filtro_estado_sel"] = info["estado"]
+        st.session_state["sb_estado"] = info["estado"]
+        st.session_state["filtro_acuifero_sel"] = info["label_busqueda"]
+        st.session_state["sb_acuifero"] = info["label_busqueda"]
+        st.session_state["municipio_buscado_activo"] = info["municipio"]
+        # Limpiamos búsqueda por localidad para evitar conflicto
+        st.session_state["sb_localidad"] = None
+        st.session_state["localidad_buscada_activa"] = None
+        st.session_state["origen_seleccion"] = "municipio"
+        st.session_state["selector_capas_visuales"] = ["Municipios"]
+
+def on_localidad_change():
+    sel_loc = st.session_state.get("sb_localidad")
+    if not sel_loc:
+        st.session_state["localidad_buscada_activa"] = None
+        return
+    info = mapa_localidades.get(sel_loc)
+    if info:
+        st.session_state["filtro_estado_sel"] = info["estado"]
+        st.session_state["sb_estado"] = info["estado"]
+        st.session_state["filtro_acuifero_sel"] = info["label_busqueda"]
+        st.session_state["sb_acuifero"] = info["label_busqueda"]
+        st.session_state["localidad_buscada_activa"] = info["localidad"]
+        # Limpiamos búsqueda por municipio para evitar conflicto
+        st.session_state["sb_municipio"] = None
+        st.session_state["municipio_buscado_activo"] = None
+        st.session_state["origen_seleccion"] = "localidad"
+        st.session_state["selector_capas_visuales"] = ["Localidades"]
+
+def on_estado_change():
+    nuevo_edo = st.session_state.get("sb_estado")
+    st.session_state["filtro_estado_sel"] = nuevo_edo
     st.session_state["filtro_acuifero_sel"] = None
+    st.session_state["sb_acuifero"] = None
+    # Limpieza total de buscadores y capas
+    st.session_state["sb_municipio"] = None
+    st.session_state["municipio_buscado_activo"] = None
+    st.session_state["sb_localidad"] = None
+    st.session_state["localidad_buscada_activa"] = None
+    st.session_state["selector_capas_visuales"] = []
+    st.session_state["origen_seleccion"] = "manual"
+
+def on_acuifero_change():
+    nuevo_ac = st.session_state.get("sb_acuifero")
+    st.session_state["filtro_acuifero_sel"] = nuevo_ac
+    # Limpieza inmediata al seleccionar acuífero manualmente
+    st.session_state["sb_municipio"] = None
+    st.session_state["municipio_buscado_activo"] = None
+    st.session_state["sb_localidad"] = None
+    st.session_state["localidad_buscada_activa"] = None
+    st.session_state["selector_capas_visuales"] = []
+    st.session_state["origen_seleccion"] = "manual"
 
 st.sidebar.header("🔍 Panel de Control")
+
+# 🏛️ BUSCADOR POR MUNICIPIO
+idx_mun = None
+if st.session_state.get("sb_municipio") in lista_opciones_municipios:
+    idx_mun = lista_opciones_municipios.index(st.session_state["sb_municipio"])
+
+st.sidebar.selectbox(
+    "🏛️ Buscar por Municipio:",
+    lista_opciones_municipios,
+    index=idx_mun,
+    key="sb_municipio",
+    placeholder="Teclea o elige un municipio...",
+    on_change=on_municipio_change
+)
+
+# 🏘️ BUSCADOR POR LOCALIDAD
+idx_loc = None
+if st.session_state.get("sb_localidad") in lista_opciones_localidades:
+    idx_loc = lista_opciones_localidades.index(st.session_state["sb_localidad"])
+
+st.sidebar.selectbox(
+    "🏘️ Buscar por Localidad:",
+    lista_opciones_localidades,
+    index=idx_loc,
+    key="sb_localidad",
+    placeholder="Teclea o elige una localidad...",
+    on_change=on_localidad_change
+)
+
+st.sidebar.markdown("""
+    <div style="font-size: 11px; color: #666; margin-top: -4px; margin-bottom: 12px;">
+        O filtra manualmente por Estado y Acuífero:
+    </div>
+""", unsafe_allow_html=True)
+
+# 🗺️ 2. SELECTOR DE ESTADO
 lista_estados = sorted(gdf_maestro['NOM_EDO'].dropna().astype(str).apply(limpiar_texto).unique())
 
 idx_edo = None
@@ -863,10 +1068,12 @@ estado_seleccionado = st.sidebar.selectbox(
     lista_estados, 
     index=idx_edo,
     key="sb_estado",
-    placeholder="Elige un estado..."
+    placeholder="Elige un estado...",
+    on_change=on_estado_change
 )
 st.session_state["filtro_estado_sel"] = estado_seleccionado
 
+# 🗺️ 3. SELECTOR DE ACUÍFERO
 seleccion_final, file_id_geo = None, None
 if estado_seleccionado:
     gdf_filtrado_estado = gdf_maestro[gdf_maestro['NOM_EDO'].astype(str).apply(limpiar_texto) == estado_seleccionado].copy()
@@ -885,7 +1092,8 @@ if estado_seleccionado:
         opciones_acuiferos, 
         index=idx_ac,
         key="sb_acuifero",
-        placeholder="Teclea la clave o nombre..."
+        placeholder="Teclea la clave o nombre...",
+        on_change=on_acuifero_change
     )
     st.session_state["filtro_acuifero_sel"] = seleccion_final
     if seleccion_final:
@@ -894,7 +1102,14 @@ if estado_seleccionado:
             if not st.session_state.get("puntos_recien_cargados", False):
                 st.session_state["lista_marcadores"] = []
             st.session_state["puntos_recien_cargados"] = False
-            st.session_state["selector_capas_visuales"] = []
+            
+            if st.session_state.get("municipio_buscado_activo"):
+                st.session_state["selector_capas_visuales"] = ["Municipios"]
+            elif st.session_state.get("localidad_buscada_activa"):
+                st.session_state["selector_capas_visuales"] = ["Localidades"]
+            else:
+                st.session_state["selector_capas_visuales"] = []
+                
             st.session_state["acuifero_en_pantalla_sig"] = clave_actual
     
     datos_ac, clave_sel, nombre_ac = None, None, None
@@ -904,7 +1119,7 @@ if estado_seleccionado:
         nombre_ac = limpiar_texto(datos_ac['NOM_ACUI'])
 
     # =======================================================
-    # 🗺️ CAPAS VISUALES Y COORDENADAS (NIVEL RAÍZ)
+    # 🗺️ CAPAS VISUALES Y COORDENADAS
     # =======================================================
     st.sidebar.markdown("---")
     st.sidebar.subheader("🗺️ Capas Visuales (Mapa)")
@@ -926,6 +1141,14 @@ if estado_seleccionado:
         "Zonas de Reserva": ("zonas_reserva", "#e74c3c", "NOM_OFI"),
         "Zonas Reglamentadas": ("zonas_reglamentadas", "#9b59b6", "NOM_OFI")
     }
+
+    # Si hay un municipio buscado activo, aseguramos que "Municipios" esté en la selección
+    if st.session_state.get("municipio_buscado_activo"):
+        capas_actuales = list(st.session_state.get("selector_capas_visuales", []))
+        if "Municipios" not in capas_actuales:
+            capas_actuales.append("Municipios")
+            st.session_state["selector_capas_visuales"] = capas_actuales
+
     capas_seleccionadas = st.sidebar.multiselect(
         "Selecciona qué fracciones ver en el mapa:", 
         list(diccionario_capas.keys()),
@@ -979,7 +1202,6 @@ st.sidebar.markdown("""
             box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
         }
 
-        /* ✨ AQUÍ RECUPERAMOS EL COLOR GUINDA INSTITUCIONAL */
         section[data-testid="stSidebar"] button[kind="primary"] {
             border-radius: 6px !important;
             min-height: 38px !important;
@@ -1096,6 +1318,8 @@ def auto_identificar_acuifero(lat, lon):
                 st.session_state["sb_acuifero"] = label
                 st.session_state["filtro_estado_sel"] = edo
                 st.session_state["filtro_acuifero_sel"] = label
+                st.session_state["sb_municipio"] = None
+                st.session_state["municipio_buscado_activo"] = None
                 st.session_state["puntos_recien_cargados"] = True
             return True
     except Exception: pass
@@ -1106,95 +1330,198 @@ def agregar_punto():
     lon = st.session_state.get("visor_lon_punto", 0.0)
     nom = st.session_state.get("visor_nombre_punto", "").strip()
     tipo = st.session_state.get("visor_tipo_punto", "Pozo existente")
+    
     if lat != 0.0 and lon != 0.0:
         lon_final = -abs(float(lon))
-        st.session_state["lista_marcadores"].append({"lat": float(lat), "lon": lon_final, "nombre": nom if nom else f"Punto {len(st.session_state['lista_marcadores'])+1}", "tipo": tipo})
+        nuevo_pto = {
+            "lat": float(lat), 
+            "lon": lon_final, 
+            "nombre": nom if nom else f"Punto {len(st.session_state['lista_marcadores'])+1}", 
+            "tipo": tipo
+        }
+        st.session_state["puntos_recien_cargados"] = True
+        st.session_state["lista_marcadores"].append(nuevo_pto)
+        
+        # Identificar si pertenece a otro acuífero
         auto_identificar_acuifero(lat, lon_final)
+        
+        # Limpiamos los campos (legal porque estamos dentro del callback on_click)
         st.session_state["visor_lat_punto"] = 0.0
         st.session_state["visor_lon_punto"] = 0.0
         st.session_state["visor_nombre_punto"] = ""
+    else:
+        st.toast("⚠️ Ingresa coordenadas válidas de Latitud y Longitud distintas de 0.", icon="⚠️")
 
 def limpiar_coords():
     st.session_state["lista_marcadores"] = []
     st.session_state["visor_lat_punto"] = 0.0
     st.session_state["visor_lon_punto"] = 0.0
     st.session_state["visor_nombre_punto"] = ""
-    st.session_state["csv_uploader_key"] += 1
+    st.session_state["csv_uploader_key"] = st.session_state.get("csv_uploader_key", 0) + 1
+    st.session_state["puntos_recien_cargados"] = False
 
-# =======================================================
-# 📍 CONTROLES DE PUNTOS AISLADOS (NO BLOQUEAN LA APP)
-# =======================================================
+if "form_pts_version" not in st.session_state:
+    st.session_state["form_pts_version"] = 0
+
 @st.fragment
 def renderizar_controles_puntos():
+    v = st.session_state.get("form_pts_version", 0)
     tab_manual, tab_csv = st.tabs(["✍️ Manual", "📁 Carga CSV"])
     
     with tab_manual:
-        st.text_input("Identificador:", key="visor_nombre_punto", placeholder="Ej. Pozo San Bernardo")
-        tipo_infra = st.selectbox("Tipo de Infraestructura:", ["Pozo existente", "Pozo requerido", "PTAR existente", "PTAR requerido", "Tanque existente", "Tanque requerido"], key="visor_tipo_punto")
+        # Los inputs usan la versión dinámica para limpiarse sin colisionar en session_state
+        nom_val = st.text_input("Identificador:", key=f"visor_nombre_punto_{v}", placeholder="Ej. Pozo San Bernardo")
+        tipo_infra = st.selectbox(
+            "Tipo de Infraestructura:", 
+            ["Pozo existente", "Pozo requerido", "PTAR existente", "PTAR requerido", "Tanque existente", "Tanque requerido"], 
+            key=f"visor_tipo_punto_{v}"
+        )
         col_lat, col_lon = st.columns(2)
-        col_lat.number_input("Latitud (N):", value=0.0, format="%.5f", key="visor_lat_punto")
-        col_lon.number_input("Longitud (W):", value=0.0, format="%.5f", key="visor_lon_punto")
+        lat_val = col_lat.number_input("Latitud (N):", value=0.0, format="%.5f", key=f"visor_lat_punto_{v}")
+        lon_val = col_lon.number_input("Longitud (W):", value=0.0, format="%.5f", key=f"visor_lon_punto_{v}")
         c_btn1, c_btn2 = st.columns(2)
         
-        c_btn1.button("➕ Agregar", on_click=agregar_punto, use_container_width=True, type="primary")
-        c_btn2.button("🧹 Limpiar", on_click=limpiar_coords, use_container_width=True, type="secondary", key="btn_limpiar_manual")
+        # ➕ BOTÓN AGREGAR
+        if c_btn1.button("➕ Agregar", use_container_width=True, type="primary", key="btn_agregar_manual"):
+            if lat_val != 0.0 and lon_val != 0.0:
+                lon_final = -abs(float(lon_val))
+                nuevo_pto = {
+                    "lat": float(lat_val), 
+                    "lon": lon_final, 
+                    "nombre": nom_val.strip() if nom_val.strip() else f"Punto {len(st.session_state['lista_marcadores'])+1}", 
+                    "tipo": tipo_infra
+                }
+                st.session_state["puntos_recien_cargados"] = True
+                st.session_state["lista_marcadores"].append(nuevo_pto)
+                
+                # Autoidentificar si cae en otro acuífero
+                auto_identificar_acuifero(lat_val, lon_final)
+                
+                # Incrementamos versión para resetear los inputs sin tocar claves bloqueadas
+                st.session_state["form_pts_version"] = v + 1
+                
+                # Avisamos a la app completa que actualice el mapa
+                try:
+                    st.rerun(scope="app")
+                except TypeError:
+                    st.rerun()
+            else:
+                st.warning("⚠️ Ingresa coordenadas válidas de Latitud y Longitud distintas de 0.")
+
+        # 🧹 BOTÓN LIMPIAR
+        if c_btn2.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_manual"):
+            st.session_state["lista_marcadores"] = []
+            st.session_state["puntos_recien_cargados"] = False
+            st.session_state["form_pts_version"] = v + 1
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
 
     with tab_csv:
-        st.markdown("""<div style="background-color: #f8f9fa; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;">Requisitos: columnas <b>Latitud</b> y <b>Longitud</b>. <i>(Nombre opcional)</i></div>""", unsafe_allow_html=True)
+        st.markdown("""<div style="background-color: #f8f9fa; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;">Requisitos por archivo: columnas <b>Latitud</b> y <b>Longitud</b>. <i>(Puedes seleccionar varios CSV)</i></div>""", unsafe_allow_html=True)
         
         uploader_key = f"file_uploader_{st.session_state.get('csv_uploader_key', 0)}"
-        archivo_csv = st.file_uploader("Seleccionar archivo CSV", type=['csv'], label_visibility="collapsed", key=uploader_key)
+        
+        # ⚡ accept_multiple_files=True permite arrastrar o seleccionar 2 o más CSVs a la vez
+        archivos_csv = st.file_uploader(
+            "Seleccionar archivos CSV", 
+            type=['csv'], 
+            accept_multiple_files=True, 
+            label_visibility="collapsed", 
+            key=uploader_key
+        )
         
         c_csv1, c_csv2 = st.columns(2)
-        c_csv2.button("🧹 Limpiar", on_click=limpiar_coords, use_container_width=True, type="secondary", key="btn_limpiar_csv")
         
-        if archivo_csv is not None:
-            if c_csv1.button("🚀 Cargar", use_container_width=True, type="primary", key="btn_cargar_csv"):
-                try:
-                    archivo_csv.seek(0)
-                    try: 
-                        df_puntos = pd.read_csv(archivo_csv, sep=None, engine='python', encoding='utf-8-sig')
-                    except Exception: 
-                        archivo_csv.seek(0)
-                        df_puntos = pd.read_csv(archivo_csv, sep=';', encoding='latin1')
-                        
-                    df_puntos.columns = df_puntos.columns.astype(str).str.strip()
-                    cols_upper = [c.upper() for c in df_puntos.columns]
-                    
-                    col_lat_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['LATITUD', 'LAT', 'Y', 'NORTE'])), None)
-                    col_lon_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['LONGITUD', 'LON', 'LONG', 'X', 'OESTE'])), None)
-                    col_infra_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['INFRAESTRUCTURA', 'INFRA', 'TIPO', 'CATEGORIA'])), None)
-                    col_nom_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['NOMBRE/SITIO', 'NOMBRE', 'SITIO', 'NOM', 'ID', 'ESTACION'])), None)
-                    col_color_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['COLOR', 'HEX'])), None)
+        # 🧹 Botón Limpiar
+        if c_csv2.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_csv"):
+            st.session_state["lista_marcadores"] = []
+            st.session_state["puntos_recien_cargados"] = False
+            st.session_state["csv_uploader_key"] = st.session_state.get("csv_uploader_key", 0) + 1
+            st.session_state["form_pts_version"] = v + 1
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
+        
+        # 🚀 Botón Cargar Múltiples Archivos
+        if archivos_csv:
+            if c_csv1.button(f"🚀 Cargar ({len(archivos_csv)})", use_container_width=True, type="primary", key="btn_cargar_csv"):
+                total_nuevos_puntos = []
+                archivos_exitosos = 0
+                avisos_errores = []
 
-                    if col_lat_csv and col_lon_csv:
-                        nuevos_puntos = []
-                        for _, row in df_puntos.iterrows():
-                            lat_val = pd.to_numeric(str(row[col_lat_csv]).replace(',', '.').strip(), errors='coerce')
-                            lon_val = pd.to_numeric(str(row[col_lon_csv]).replace(',', '.').strip(), errors='coerce')
+                for archivo in archivos_csv:
+                    try:
+                        archivo.seek(0)
+                        try:
+                            df_puntos = pd.read_csv(archivo, sep=None, engine='python', encoding='utf-8-sig')
+                        except Exception:
+                            archivo.seek(0)
+                            df_puntos = pd.read_csv(archivo, sep=';', encoding='latin1')
                             
-                            if pd.notna(lat_val) and pd.notna(lon_val):
-                                infra_val = str(row[col_infra_csv]).strip() if col_infra_csv and pd.notna(row[col_infra_csv]) else "Pozo existente"
-                                nom_val = str(row[col_nom_csv]).strip() if col_nom_csv and pd.notna(row[col_nom_csv]) else infra_val
-                                color_val = str(row[col_color_csv]).strip() if col_color_csv and pd.notna(row[col_color_csv]) else None
-                                nuevos_puntos.append({"lat": float(lat_val), "lon": -abs(float(lon_val)), "nombre": nom_val, "tipo": infra_val, "color_hex": color_val})
+                        df_puntos.columns = df_puntos.columns.astype(str).str.strip()
+                        cols_upper = [c.upper() for c in df_puntos.columns]
                         
-                        if nuevos_puntos:
-                            st.session_state["puntos_recien_cargados"] = True
-                            st.session_state["lista_marcadores"].extend(nuevos_puntos)
+                        col_lat_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['LATITUD', 'LAT', 'Y', 'NORTE'])), None)
+                        col_lon_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['LONGITUD', 'LON', 'LONG', 'X', 'OESTE'])), None)
+                        col_infra_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['INFRAESTRUCTURA', 'INFRA', 'TIPO', 'CATEGORIA'])), None)
+                        col_nom_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['NOMBRE/SITIO', 'NOMBRE', 'SITIO', 'NOM', 'ID', 'ESTACION'])), None)
+                        col_color_csv = next((c for c, u in zip(df_puntos.columns, cols_upper) if any(k in u for k in ['COLOR', 'HEX'])), None)
+
+                        if col_lat_csv and col_lon_csv:
+                            pts_archivo = 0
+                            for _, row in df_puntos.iterrows():
+                                lat_raw = pd.to_numeric(str(row[col_lat_csv]).replace(',', '.').strip(), errors='coerce')
+                                lon_raw = pd.to_numeric(str(row[col_lon_csv]).replace(',', '.').strip(), errors='coerce')
+                                
+                                if pd.notna(lat_raw) and pd.notna(lon_raw):
+                                    infra_val = str(row[col_infra_csv]).strip() if col_infra_csv and pd.notna(row[col_infra_csv]) else "Pozo existente"
+                                    nom_item = str(row[col_nom_csv]).strip() if col_nom_csv and pd.notna(row[col_nom_csv]) else infra_val
+                                    color_val = str(row[col_color_csv]).strip() if col_color_csv and pd.notna(row[col_color_csv]) else None
+                                    total_nuevos_puntos.append({
+                                        "lat": float(lat_raw), 
+                                        "lon": -abs(float(lon_raw)), 
+                                        "nombre": nom_item, 
+                                        "tipo": infra_val, 
+                                        "color_hex": color_val
+                                    })
+                                    pts_archivo += 1
                             
-                            for pt in nuevos_puntos:
-                                if auto_identificar_acuifero(pt["lat"], pt["lon"]): break
-                            
-                            st.success(f"✅ {len(nuevos_puntos)} puntos cargados correctamente.")
-                            time.sleep(1)
-                            st.rerun()
+                            if pts_archivo > 0:
+                                archivos_exitosos += 1
+                            else:
+                                avisos_errores.append(f"'{archivo.name}': sin coordenadas numéricas válidas.")
                         else:
-                            st.error("❌ No se encontraron coordenadas numéricas válidas en las filas.")
-                    else: 
-                        st.error(f"❌ Faltan columnas de Latitud/Longitud. Columnas detectadas: {', '.join(df_puntos.columns)}")
-                except Exception as e: 
-                    st.error(f"❌ Error al procesar el archivo: {e}")
+                            avisos_errores.append(f"'{archivo.name}': faltan columnas de Latitud/Longitud.")
+                    except Exception as e:
+                        avisos_errores.append(f"'{archivo.name}': error al procesar ({e})")
+
+                if total_nuevos_puntos:
+                    st.session_state["puntos_recien_cargados"] = True
+                    st.session_state["lista_marcadores"].extend(total_nuevos_puntos)
+                    
+                    # Autoidentificar acuífero con el primer punto válido si aplica
+                    for pt in total_nuevos_puntos:
+                        if auto_identificar_acuifero(pt["lat"], pt["lon"]):
+                            break
+                    
+                    st.success(f"✅ Se cargaron {len(total_nuevos_puntos)} puntos desde {archivos_exitosos} archivo(s).")
+                    if avisos_errores:
+                        for aviso in avisos_errores:
+                            st.warning(f"⚠️ {aviso}")
+                    
+                    time.sleep(1)
+                    try:
+                        st.rerun(scope="app")
+                    except TypeError:
+                        st.rerun()
+                else:
+                    st.error("❌ No se encontraron coordenadas válidas en los archivos seleccionados.")
+                    if avisos_errores:
+                        for aviso in avisos_errores:
+                            st.warning(f"⚠️ {aviso}")
         else:
             c_csv1.button("🚀 Cargar", use_container_width=True, type="primary", disabled=True, key="btn_cargar_csv_dis")
 
@@ -1207,22 +1534,34 @@ def renderizar_controles_puntos():
 with st.sidebar:
     renderizar_controles_puntos()
 
-if seleccion_final and datos_ac is not None:
-    # El KMZ se genera SOLO cuando el usuario lo pide (antes se construía en cada interacción).
+# =======================================================
+# 🌍 MÓDULO KMZ AISLADO (SIN REINICIOS DE MAPA NI PÁGINA)
+# =======================================================
+@st.fragment
+def renderizar_modulo_kmz(clave_sel, nombre_ac, datos_ac, capas_seleccionadas, diccionario_capas):
     _firma_kmz = (clave_sel, tuple(capas_seleccionadas), str(st.session_state.get("lista_marcadores", [])))
+    
+    # Si cambian capas, puntos o acuífero, se invalida el archivo previo
     if st.session_state.get("kmz_firma") != _firma_kmz:
-        st.session_state.pop("kmz_bytes", None)  # cambió el acuífero, las capas o los puntos
+        st.session_state.pop("kmz_bytes", None)
         st.session_state["kmz_firma"] = None
+        
     if st.session_state.get("kmz_bytes") is None:
-        if st.sidebar.button("🌍 Preparar KMZ (Acuífero y Capas)", use_container_width=True, key="btn_preparar_kmz"):
-            st.session_state["kmz_bytes"] = obtener_kmz_cacheado(
-                clave_sel, nombre_ac, datos_ac, tuple(capas_seleccionadas),
-                str(st.session_state.get("lista_marcadores", [])), diccionario_capas
-            )
-            st.session_state["kmz_firma"] = _firma_kmz
-            st.rerun()
+        if st.button("🌍 Preparar KMZ (Acuífero y Capas)", use_container_width=True, key="btn_preparar_kmz"):
+            with st.spinner("Empaquetando KMZ..."):
+                st.session_state["kmz_bytes"] = obtener_kmz_cacheado(
+                    clave_sel, nombre_ac, datos_ac, tuple(capas_seleccionadas),
+                    str(st.session_state.get("lista_marcadores", [])), diccionario_capas
+                )
+                st.session_state["kmz_firma"] = _firma_kmz
+                # ⚡ Solo refresca este botón para cambiar a descarga (no recarga el mapa)
+                try:
+                    st.rerun(scope="fragment")
+                except TypeError:
+                    st.rerun()
     else:
-        st.sidebar.download_button(
+        # ⚡ Al estar en el fragmento, el clic de descarga no reinicia la página
+        st.download_button(
             label="⬇️ Descargar KMZ (Acuífero y Capas)",
             data=st.session_state["kmz_bytes"],
             file_name=f"{clave_sel}_{(nombre_ac or clave_sel).replace(' ', '_')}.kmz",
@@ -1231,6 +1570,10 @@ if seleccion_final and datos_ac is not None:
             key="btn_descargar_kmz"
         )
 
+# Ejecutamos el módulo dentro de la barra lateral
+if seleccion_final and datos_ac is not None:
+    with st.sidebar:
+        renderizar_modulo_kmz(clave_sel, nombre_ac, datos_ac, capas_seleccionadas, diccionario_capas)
 
 # =======================================================
 # 🟢 SINCRONIZACIÓN Y PROCESAMIENTO BAJO DEMANDA (LAZY)
@@ -1242,7 +1585,6 @@ if seleccion_final:
             st.session_state["puntos_recien_cargados"] = False
         else:
             st.session_state["lista_marcadores"] = []
-            
         st.session_state["acuifero_en_pantalla_sig"] = clave_sel
     
     st.session_state["clave_sig"] = clave_sel
@@ -1272,8 +1614,7 @@ if seleccion_final:
                         type="secondary",
                         use_container_width=True,
                     )
-                else:
-                    st.sidebar.warning("⚠️ No se pudo descargar el archivo de Drive.")
+                else: st.sidebar.warning("⚠️ No se pudo descargar el archivo de Drive.")
         else: st.sidebar.info("📂 Mapa geológico próximamente disponible.")
     
     parrafo_vol_ia, vol_total, df_resumen = "No hay información de volúmenes REPDA disponible.", 0.0, pd.DataFrame()
@@ -1466,6 +1807,8 @@ if seleccion_final:
             except: return str(val).strip().zfill(4)
 
         clave_sel_norm = normalizar_clave_geo(datos_ac['CLV_ACUI'])
+        municipio_buscado = st.session_state.get("municipio_buscado_activo")
+        localidad_buscada = st.session_state.get("localidad_buscada_activa")
 
         if file_id_geo: 
             tab_visor, tab_geo = st.tabs(["🗺️ Visor Interactivo (SIG)", "⛰️ Mapa Geológico Estático"])
@@ -1545,19 +1888,14 @@ if seleccion_final:
                 with st.spinner("Procesando información espacial..."):
                     for capa_visual in capas_seleccionadas:
                         id_archivo, color_hex, campo_nombre = diccionario_capas[capa_visual]
-                        
                         frac_local = obtener_capa_exacta_cache(id_archivo, clave_sel_norm)
                         
                         if frac_local is not None and not frac_local.empty:
                             frac_segura = frac_local.copy()
-                            geom_acuifero = datos_ac.geometry.buffer(0)
-                            nucleo_acuifero = geom_acuifero.buffer(-0.001)
-                            es_punto_linea = frac_segura.geometry.geom_type.isin(['Point', 'MultiPoint', 'LineString', 'MultiLineString'])
-                            toca_normal = frac_segura.geometry.intersects(geom_acuifero)
-                            toca_nucleo = frac_segura.geometry.intersects(nucleo_acuifero)
+                            geom_acuifero = datos_ac.geometry.buffer(0) if not datos_ac.geometry.is_valid else datos_ac.geometry
                             
-                            mascara_valida = (es_punto_linea & toca_normal) | (~es_punto_linea & toca_nucleo)
-                            
+                            # ⚡ Intersección limpia sin descarte por buffer negativo
+                            mascara_valida = frac_segura.geometry.intersects(geom_acuifero)
                             frac_segura = frac_segura[mascara_valida].copy()
                             if frac_segura.empty:
                                 continue 
@@ -1570,7 +1908,6 @@ if seleccion_final:
                                         col_nombre_final = frac_segura.columns[cols_upper.index(candidato)]
                                         break
 
-                            # Limpiar textos y evitar errores de codificación
                             cols = [c for c in frac_segura.columns if c not in ['geometry', 'CLV_TEMP', 'CLV_ACUI']]
                             for c in cols: frac_segura[c] = frac_segura[c].apply(lambda x: limpiar_texto(x) if pd.notna(x) else "")
                             frac_segura[cols] = frac_segura[cols].astype(str)
@@ -1578,36 +1915,46 @@ if seleccion_final:
                             estilo_tooltip = f"background-color: #ffffff; border: 1px solid #e0e0e0; border-left: 4px solid {color_hex}; border-radius: 6px; color: #2c3e50; font-family: 'Segoe UI', sans-serif; font-size: 13px; max-width: 85vw; padding: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);"
                             
                             hijos_de_esta_capa = []
-                            
-                            # 🚀 OPTIMIZACIÓN EXTREMA 1: Usar groupby en lugar de iterar y filtrar el DataFrame
                             agrupado = frac_segura.groupby(col_nombre_final)
                             
                             for nombre_unico, gdf_individual in agrupado:
                                 nom_mostrar = str(nombre_unico).strip()
                                 
-                                if capa_visual in ["Vedas", "Zonas Reglamentadas", "Zonas de Reserva"]:
-                                    fecha_dof = ""
-                                    if 'FECHA_DOF' in gdf_individual.columns:
-                                        val = gdf_individual.iloc[0]['FECHA_DOF']
-                                        if pd.notna(val) and str(val).strip() != "":
-                                            try: fecha_dof = pd.to_datetime(val).strftime('%d-%m-%Y')
-                                            except: fecha_dof = str(val).strip()[:10] 
-                                    nom_mostrar = f"{fecha_dof}" if fecha_dof else "Sin Fecha"
-                                else:
-                                    if len(nom_mostrar) > 30: nom_mostrar = nom_mostrar[:27] + "..."
-                                
-                                if capa_visual == "Localidades":
-                                    estilo_actual = {'fill': False, 'fillOpacity': 0.0, 'color': '#000000', 'weight': 2.5, 'dashArray': '8, 6', 'opacity': 1.0}
-                                    resaltado_actual = {'color': '#2980b9', 'weight': 3.5, 'dashArray': '8, 6', 'fillOpacity': 0.0}
-                                else:
-                                    estilo_actual = {'fillColor': color_hex, 'color': color_hex, 'weight': 2, 'fillOpacity': 0.35}
-                                    resaltado_actual = {'fillColor': color_hex, 'color': '#FFD700', 'weight': 3, 'fillOpacity': 0.85}
+                                # ⚡ ACTIVACIÓN SELECTIVA DE MUNICIPIOS
+                                if capa_visual == "Municipios" and municipio_buscado:
+                                    coincide_mun = nombres_coinciden(nom_mostrar, municipio_buscado)
+                                    mostrar_inicial = coincide_mun
+                                    if coincide_mun:
+                                        estilo_actual = {'fillColor': '#e67e22', 'color': '#d35400', 'weight': 3, 'fillOpacity': 0.50}
+                                        resaltado_actual = {'fillColor': '#f39c12', 'color': '#c0392b', 'weight': 4, 'fillOpacity': 0.80}
+                                    else:
+                                        estilo_actual = {'fillColor': color_hex, 'color': color_hex, 'weight': 2, 'fillOpacity': 0.25}
+                                        resaltado_actual = {'fillColor': color_hex, 'color': '#FFD700', 'weight': 3, 'fillOpacity': 0.85}
 
-                                # 🚀 OPTIMIZACIÓN EXTREMA 2: Usar __geo_interface__ evita que Folium serialice el DataFrame desde cero
+                                # ⚡ ACTIVACIÓN SELECTIVA DE LOCALIDADES
+                                elif capa_visual == "Localidades" and localidad_buscada:
+                                    coincide_loc = nombres_coinciden(nom_mostrar, localidad_buscada)
+                                    mostrar_inicial = coincide_loc
+                                    if coincide_loc:
+                                        estilo_actual = {'fill': True, 'fillColor': '#e67e22', 'fillOpacity': 0.55, 'color': '#9F2241', 'weight': 3.5, 'opacity': 1.0}
+                                        resaltado_actual = {'fill': True, 'fillColor': '#f39c12', 'fillOpacity': 0.80, 'color': '#691C32', 'weight': 4.5}
+                                    else:
+                                        estilo_actual = {'fill': False, 'fillOpacity': 0.0, 'color': '#666666', 'weight': 1.8, 'dashArray': '6, 6', 'opacity': 0.6}
+                                        resaltado_actual = {'color': '#2980b9', 'weight': 3.0, 'dashArray': '6, 6', 'fillOpacity': 0.0}
+
+                                else:
+                                    mostrar_inicial = True
+                                    if capa_visual == "Localidades":
+                                        estilo_actual = {'fill': False, 'fillOpacity': 0.0, 'color': '#000000', 'weight': 2.5, 'dashArray': '8, 6', 'opacity': 1.0}
+                                        resaltado_actual = {'color': '#2980b9', 'weight': 3.5, 'dashArray': '8, 6', 'fillOpacity': 0.0}
+                                    else:
+                                        estilo_actual = {'fillColor': color_hex, 'color': color_hex, 'weight': 2, 'fillOpacity': 0.35}
+                                        resaltado_actual = {'fillColor': color_hex, 'color': '#FFD700', 'weight': 3, 'fillOpacity': 0.85}
+
                                 capa_individual = folium.GeoJson(
                                     data=gdf_individual.__geo_interface__, 
                                     name=nom_mostrar,
-                                    show=True,
+                                    show=mostrar_inicial,
                                     style_function=lambda feature, est=estilo_actual: est,
                                     highlight_function=lambda x, res=resaltado_actual: res,
                                     tooltip=folium.GeoJsonTooltip(fields=[col_nombre_final], aliases=[f"<b>{capa_visual.upper()}</b><br>"], localize=True, sticky=True, labels=True, style=estilo_tooltip)
@@ -1616,13 +1963,16 @@ if seleccion_final:
                                 hijos_de_esta_capa.append({"label": f"{nom_mostrar}", "layer": capa_individual})
                                 
                             if hijos_de_esta_capa:
-                                # Ordenamos los hijos alfabéticamente para que el árbol se vea perfecto
                                 hijos_de_esta_capa = sorted(hijos_de_esta_capa, key=lambda x: x["label"])
+                                colapsar_nodo = False if (
+                                    (capa_visual == "Municipios" and municipio_buscado) or 
+                                    (capa_visual == "Localidades" and localidad_buscada)
+                                ) else True
                                 
                                 nodos_capas.append({
                                     "label": f"<span style='color: #691C32; font-weight: bold;'>{capa_visual.upper()}</span>",
                                     "select_all_checkbox": "<span style='font-size: 0.9em; color: #2980b9;'>Seleccionar todo</span>", 
-                                    "collapsed": True,
+                                    "collapsed": colapsar_nodo,
                                     "children": hijos_de_esta_capa
                                 })
 
@@ -1658,7 +2008,7 @@ if seleccion_final:
                     for pt in marcadores:
                         nom_pt = pt.get('nombre', 'Punto')
                         tipo_pt = pt.get('tipo', nom_pt)
-                        nom_pt_h, tipo_pt_h = _html.escape(str(nom_pt)), _html.escape(str(tipo_pt))  # HTML seguro
+                        nom_pt_h, tipo_pt_h = _html.escape(str(nom_pt)), _html.escape(str(tipo_pt))
                         html_texto = f"""<div style="font-family: 'Segoe UI', sans-serif; min-width: 140px;"><h4 style="margin: 0 0 4px 0; color: #691C32; font-size: 13px; border-bottom: 1px solid #ccc; padding-bottom: 2px;">{nom_pt_h}</h4><div style="font-size: 11px; color: #333; line-height: 1.4;"><b>Tipo:</b> {tipo_pt_h}<br><b>Lat:</b> {pt['lat']:.5f}<br><b>Lon:</b> {pt['lon']:.5f}</div></div>"""
                         marcador = folium.Marker([pt['lat'], pt['lon']], icon=obtener_icono_infraestructura(tipo_pt, pt.get('color_hex')))
                         marcador.add_child(folium.Popup(html_texto, max_width=300, auto_close=False, close_on_click=False))
@@ -1667,9 +2017,10 @@ if seleccion_final:
                         marcador.add_to(m)
                     m.add_child(ElementoControlLeyenda(marcadores))
 
-                hash_capas = "_".join([c[:3] for c in capas_seleccionadas])
                 num_pts = len(marcadores)
-                llave_dinamica = f"visor_mapa_estatico_{clave_sel_norm}"
+                hash_pts = f"{num_pts}_" + "_".join([f"{p['lat']:.4f},{p['lon']:.4f}" for p in marcadores[-3:]]) if marcadores else "0"
+                hash_capas = "_".join([c[:3] for c in capas_seleccionadas])
+                llave_dinamica = f"visor_mapa_{clave_sel_norm}_{hash_pts}_{hash_capas}"
 
                 st_folium(
                     m, 
@@ -1694,7 +2045,6 @@ if seleccion_final:
                         use_container_width=True,
                     )
                 else:
-                    # Fallback 1: enlace con formato de visualización moderno de Drive
                     url_vista = f"https://drive.google.com/file/d/{file_id_geo}/view"
                     st.warning(
                         "No fue posible renderizar la previsualización directa debido a las directivas de seguridad de Google Drive."
@@ -1864,15 +2214,9 @@ if seleccion_final:
     )
     
     def renderizar_boton_ia_flotante(c_ac, n_ac, edo_sel, d_ac, p_vol, p_aprov, p_dma, df_res, c_usos, d_zona):
-        
-        # 1. Creamos una columna "fantasma" que Streamlit sí respeta como contenedor
         col_vacia, col_flotante = st.columns([0.99, 0.01])
-        
         with col_flotante:
-            # Inyectamos una marca invisible DENTRO de la columna
             st.markdown('<span id="marcador-ia-flotante"></span>', unsafe_allow_html=True)
-            
-            # El botón de la IA
             if st.button("✨", type="primary", key=f"btn_ia_{c_ac}"):
                 contexto_global_str = construir_contexto_completo(
                     clave_ac=c_ac, nombre_ac=n_ac, estado=edo_sel,
@@ -1884,11 +2228,9 @@ if seleccion_final:
                 )
                 modal_chat_local(c_ac, n_ac, contexto_global_str)
 
-        # 2. El CSS que manda a volar a la COLUMNA ENTERA
         st.markdown(
             """
             <style>
-            /* Encontramos la columna de Streamlit que tiene nuestra marca y la hacemos flotar */
             div[data-testid="stColumn"]:has(#marcador-ia-flotante) {
                 position: fixed !important;
                 bottom: 70px !important;
@@ -1897,8 +2239,6 @@ if seleccion_final:
                 height: 60px !important;
                 z-index: 999999 !important;
             }
-
-            /* Le damos el estilo redondo y guinda al botón que está dentro de esa columna */
             div[data-testid="stColumn"]:has(#marcador-ia-flotante) button {
                 width: 60px !important;
                 height: 60px !important;
@@ -1916,14 +2256,10 @@ if seleccion_final:
                 justify-content: center !important;
                 transition: transform 0.2s ease, background-color 0.2s ease !important;
             }
-
-            /* Efecto hover */
             div[data-testid="stColumn"]:has(#marcador-ia-flotante) button:hover {
                 transform: scale(1.15) !important;
                 background-color: #691C32 !important;
             }
-
-            /* Tamaño del emoji grande */
             div[data-testid="stColumn"]:has(#marcador-ia-flotante) button p {
                 font-size: 28px !important;
                 line-height: 1 !important;
