@@ -141,62 +141,53 @@ def obtener_catalogo_municipios_maestro(_gdf_m):
 
 @st.cache_data(show_spinner=False)
 def obtener_catalogo_localidades_maestro(_gdf_m):
-    """Construye un catálogo en memoria de Localidades -> Acuífero y Estado."""
+    """Construye un catálogo en memoria vectorizado ultrarrápido de Localidades -> Acuífero y Estado."""
     gdf_loc = cargar_localidades_parquet()
     if gdf_loc is None or gdf_loc.empty:
         return [], {}
     
-    gdf = gdf_loc.copy()
+    # 1. Identificar columna con el nombre de la localidad
+    col_nom = next((c for c in ['NOMGEO', 'NOM_LOC', 'NOMBRE', 'LOC'] if c in gdf_loc.columns), gdf_loc.columns[0])
     
-    # Detectamos la columna que tiene el nombre de la localidad
-    col_nom = None
-    for c in ['NOMGEO', 'NOM_LOC', 'NOMBRE', 'LOC']:
-        if c in gdf.columns:
-            col_nom = c
-            break
-    if not col_nom:
-        col_nom = gdf.columns[0]
-        
-    # Verificamos si ya cuenta con clave de acuífero o requiere cruce espacial
-    if 'CLV_ACUI' not in gdf.columns:
-        if gdf.crs != _gdf_m.crs:
-            gdf = gdf.to_crs(_gdf_m.crs)
+    # 2. Relación con acuífero
+    if 'CLV_ACUI' not in gdf_loc.columns:
+        if gdf_loc.crs != _gdf_m.crs:
+            gdf_loc = gdf_loc.to_crs(_gdf_m.crs)
         cols_m = ['CLV_ACUI', 'NOM_ACUI', 'NOM_EDO', 'geometry']
-        gdf_candidatos = gpd.sjoin(gdf[[col_nom, 'geometry']], _gdf_m[cols_m], how='inner', predicate='intersects')
+        df_candidatos = gpd.sjoin(gdf_loc[[col_nom, 'geometry']], _gdf_m[cols_m], how='inner', predicate='intersects')
     else:
-        gdf['CLV_ACUI_NORM'] = gdf['CLV_ACUI'].astype(str).str.strip().str.zfill(4)
-        _dict_m = _gdf_m.drop_duplicates(subset=['CLV_ACUI']).set_index(_gdf_m['CLV_ACUI'].astype(str).str.strip().str.zfill(4))
-        gdf_candidatos = gdf.copy()
-        gdf_candidatos['NOM_ACUI'] = gdf_candidatos['CLV_ACUI_NORM'].map(_dict_m['NOM_ACUI'])
-        gdf_candidatos['NOM_EDO'] = gdf_candidatos['CLV_ACUI_NORM'].map(_dict_m['NOM_EDO'])
-        gdf_candidatos['CLV_ACUI'] = gdf_candidatos['CLV_ACUI_NORM']
+        df_candidatos = gdf_loc.copy()
+        df_candidatos['CLV_ACUI'] = df_candidatos['CLV_ACUI'].astype(str).str.strip().str.zfill(4)
+        mapeo_m = _gdf_m.drop_duplicates(subset=['CLV_ACUI']).set_index(_gdf_m['CLV_ACUI'].astype(str).str.strip().str.zfill(4))
+        df_candidatos['NOM_ACUI'] = df_candidatos['CLV_ACUI'].map(mapeo_m['NOM_ACUI'])
+        df_candidatos['NOM_EDO'] = df_candidatos['CLV_ACUI'].map(mapeo_m['NOM_EDO'])
 
-    mapa = {}
-    for _, row in gdf_candidatos.iterrows():
-        nom_loc = limpiar_texto(row.get(col_nom, ''))
-        if not nom_loc or nom_loc.lower() in ['nan', 'none', 'null', '']:
-            continue
-        nom_loc = nom_loc.title().strip()
-        
-        cve_ac = str(row.get('CLV_ACUI', '')).strip().zfill(4)
-        nom_ac = limpiar_texto(row.get('NOM_ACUI', ''))
-        nom_ed = limpiar_texto(row.get('NOM_EDO', ''))
-        
-        if not cve_ac or not nom_ac or not nom_ed:
-            continue
-            
-        label_acui = f"{cve_ac} - {nom_ac}"
-        etiqueta = f"{nom_loc} ({nom_ed}) — Acuífero: {cve_ac} - {nom_ac}"
-        
-        mapa[etiqueta] = {
-            "localidad": nom_loc,
-            "estado": nom_ed,
-            "clave_acui": cve_ac,
-            "nombre_acui": nom_ac,
-            "label_busqueda": label_acui
-        }
-        
+    # 3. Limpieza y filtrado vectorizado (sin bucles 'for' lentos)
+    df_validos = df_candidatos.dropna(subset=[col_nom, 'CLV_ACUI', 'NOM_ACUI', 'NOM_EDO']).copy()
+    
+    # Descartamos registros con nombres nulos o vacíos
+    df_validos = df_validos[~df_validos[col_nom].astype(str).str.lower().isin(['nan', 'none', 'null', '', 'sin nombre'])]
+
+    # Operaciones vectorizadas en C
+    nom_loc = df_validos[col_nom].astype(str).str.strip().str.title()
+    nom_edo = df_validos['NOM_EDO'].astype(str).str.strip()
+    cve_ac = df_validos['CLV_ACUI'].astype(str).str.strip().str.zfill(4)
+    nom_ac = df_validos['NOM_ACUI'].astype(str).str.strip()
+
+    df_validos['etiqueta'] = nom_loc + " (" + nom_edo + ") — Acuífero: " + cve_ac + " - " + nom_ac
+    df_validos['localidad'] = nom_loc
+    df_validos['label_busqueda'] = cve_ac + " - " + nom_ac
+    df_validos['clave_acui'] = cve_ac
+    df_validos['nombre_acui'] = nom_ac
+    df_validos['estado'] = nom_edo
+
+    # Eliminamos etiquetas duplicadas
+    df_unicos = df_validos.drop_duplicates(subset=['etiqueta'])
+
+    # Construcción de diccionario instantánea
+    mapa = df_unicos.set_index('etiqueta')[['localidad', 'estado', 'clave_acui', 'nombre_acui', 'label_busqueda']].to_dict(orient='index')
     lista_opciones = sorted(list(mapa.keys()))
+    
     return lista_opciones, mapa
 
 @st.cache_data(show_spinner=False)
@@ -1038,8 +1029,11 @@ st.sidebar.selectbox(
 
 # 🏘️ BUSCADOR POR LOCALIDAD
 idx_loc = None
-if st.session_state.get("sb_localidad") in lista_opciones_localidades:
-    idx_loc = lista_opciones_localidades.index(st.session_state["sb_localidad"])
+val_loc_actual = st.session_state.get("sb_localidad")
+
+# ⚡ Comprobación O(1) con diccionario hash en lugar de escanear toda la lista
+if val_loc_actual and val_loc_actual in mapa_localidades:
+    idx_loc = lista_opciones_localidades.index(val_loc_actual)
 
 st.sidebar.selectbox(
     "🏘️ Buscar por Localidad:",
@@ -1049,7 +1043,6 @@ st.sidebar.selectbox(
     placeholder="Teclea o elige una localidad...",
     on_change=on_localidad_change
 )
-
 st.sidebar.markdown("""
     <div style="font-size: 11px; color: #666; margin-top: -4px; margin-bottom: 12px;">
         O filtra manualmente por Estado y Acuífero:
@@ -1800,6 +1793,104 @@ if seleccion_final:
     # =======================================================
     st.subheader("🗺️ Visores Espaciales")
     
+    # =======================================================
+    # 🌐 MACRO DE AJUSTE ESPACIAL ESTABILIZADO (ANTI-DESFASE DE ZOOM)
+    # =======================================================
+    
+    def calcular_zoom_optimo(bounds):
+        """Calcula el zoom inicial perfecto según el tamaño del acuífero para evitar brincos visuales."""
+        try:
+            minx, miny, maxx, maxy = bounds
+            dx, dy = abs(maxx - minx), abs(maxy - miny)
+            max_dim = max(dx, dy)
+            if max_dim <= 0.08: return 13
+            elif max_dim <= 0.18: return 12
+            elif max_dim <= 0.38: return 11
+            elif max_dim <= 0.75: return 10
+            elif max_dim <= 1.50: return 9
+            elif max_dim <= 3.00: return 8
+            else: return 7
+        except Exception:
+            return 10
+    
+    class AutoCentrarMapa(MacroElement):
+        def __init__(self, bounds=None, centro=None, zoom=None):
+            super().__init__()
+            self.bounds = bounds
+            self.centro = centro
+            self.zoom = zoom
+            self._template = Template("""
+                {% macro script(this, kwargs) %}
+                (function() {
+                    var map = {{this._parent.get_name()}};
+                    var bounds = {{this.bounds if this.bounds else 'null'}};
+                    var centro = {{this.centro if this.centro else 'null'}};
+                    var zoom = {{this.zoom if this.zoom else 'null'}};
+    
+                    if (!map) return;
+    
+                    var timerAjuste = null;
+    
+                    function aplicarEncuadreEstable() {
+                        var container = map.getContainer();
+                        if (!container) return false;
+    
+                        var w = container.clientWidth || container.offsetWidth;
+                        var h = container.clientHeight || container.offsetHeight;
+    
+                        // Si el contenedor mide 0 (pestaña oculta), no ajustamos aún
+                        if (w < 320 || h < 200) {
+                            return false;
+                        }
+    
+                        map.invalidateSize({animate: false});
+    
+                        if (bounds && bounds.length === 2) {
+                            map.fitBounds(bounds, {
+                                padding: [20, 20],
+                                maxZoom: 13,
+                                animate: false
+                            });
+                        } else if (centro && centro.length === 2 && zoom) {
+                            map.setView(centro, zoom, {animate: false});
+                        }
+                        return true;
+                    }
+    
+                    function programarAjuste() {
+                        clearTimeout(timerAjuste);
+                        timerAjuste = setTimeout(function() {
+                            aplicarEncuadreEstable();
+                        }, 80);
+                    }
+    
+                    // ⚡ 1. SI EL CONTENEDOR YA ESTÁ VISIBLE, SE EJECUTA DE INMEDIATO (0 ms, sin tildeo)
+                    var aplicadoAlInstante = aplicarEncuadreEstable();
+    
+                    // ⚡ 2. SI ESTABA OCULTO, SOLO ENTONCES ESPERAMOS A QUE SE ABRA LA PESTAÑA
+                    if (!aplicadoAlInstante) {
+                        programarAjuste();
+                    }
+    
+                    if (window.ResizeObserver) {
+                        var ro = new ResizeObserver(function(entries) {
+                            for (var i = 0; i < entries.length; i++) {
+                                var wActual = entries[i].contentRect.width;
+                                var hActual = entries[i].contentRect.height;
+                                if (wActual >= 320 && hActual >= 200) {
+                                    programarAjuste();
+                                }
+                            }
+                        });
+                        var el = map.getContainer();
+                        if (el) ro.observe(el);
+                    }
+    
+                    window.addEventListener('resize', programarAjuste);
+                })();
+                {% endmacro %}
+            """)
+    
     @st.fragment
     def renderizar_modulo_mapa(datos_ac, nombre_acuifero, capas_seleccionadas, diccionario_capas, file_id_geo, marcadores):
         def normalizar_clave_geo(val):
@@ -1818,18 +1909,30 @@ if seleccion_final:
         with tab_visor:
             try:
                 centroide = datos_ac.geometry.centroid
+                b = datos_ac.geometry.bounds
                 
                 if marcadores:
                     ultimo_pt = marcadores[-1]
                     map_center, map_zoom = [ultimo_pt["lat"], ultimo_pt["lon"]], 13
                 else:
-                    map_center, map_zoom = [centroide.y, centroide.x], 10
+                    # ⚡ Ahora Python calcula el zoom exacto del acuífero desde el frame 1
+                    map_center = [centroide.y, centroide.x]
+                    map_zoom = calcular_zoom_optimo(b)
                     
-                m = folium.Map(location=map_center, zoom_start=map_zoom, tiles=None, control_scale=True, prefer_canvas=True)
+                m = folium.Map(
+                    location=map_center, 
+                    zoom_start=map_zoom, 
+                    min_zoom=5, 
+                    tiles=None, 
+                    control_scale=True, 
+                    prefer_canvas=True
+                )
                 
                 if not marcadores:
-                    b = datos_ac.geometry.bounds
-                    m.fit_bounds([[b[1], b[0]], [b[3], b[2]]])
+                    limites_acuifero = [[b[1], b[0]], [b[3], b[2]]]
+                    m.add_child(AutoCentrarMapa(bounds=limites_acuifero))
+                else:
+                    m.add_child(AutoCentrarMapa(centro=map_center, zoom=map_zoom))
                 
                 estilos_arbol = """
                 <style>
