@@ -1949,13 +1949,13 @@ if seleccion_final:
                     .leaflet-bottom.leaflet-left { display: flex !important; flex-direction: column !important; align-items: flex-start !important; }
                     .leaflet-control-scale { order: 1 !important; margin: 0 0 4px 10px !important; }
                     .leaflet-control-mouseposition { order: 2 !important; position: static !important; transform: none !important; margin: 0 0 10px 10px !important; background-color: rgba(255, 255, 255, 0.85) !important; padding: 2px 8px !important; border: 1px solid #bbb !important; border-radius: 4px !important; font-family: 'Segoe UI', sans-serif !important; font-size: 11px !important; font-weight: 600 !important; color: #333333 !important; box-shadow: 0 1px 4px rgba(0,0,0,0.15) !important; pointer-events: auto !important; }
-                    .leaflet-tooltip.tooltip-limpio {
+                    .leaflet-tooltip {
                         background: transparent !important;
                         border: none !important;
                         box-shadow: none !important;
                         padding: 0 !important;
                     }
-                    .leaflet-tooltip.tooltip-limpio::before {
+                    .leaflet-tooltip::before {
                         display: none !important;
                     }
                 </style>
@@ -1983,7 +1983,7 @@ if seleccion_final:
                 capa_acuifero = folium.GeoJson(
                     gdf_acuifero_ligero, name="Límite del Acuífero",
                     style_function=lambda x: {'fillColor': '#3186cc', 'color': '#1a5276', 'weight': 3, 'fillOpacity': 0.10},
-                    tooltip=folium.Tooltip(f"Acuífero: {nombre_acuifero}", style=estilo_acuifero, sticky=True)
+                    tooltip=folium.Tooltip(f"Acuífero: {nombre_acuifero}", style=estilo_acuifero, sticky=True, class_name="tooltip-limpio")
                 ).add_to(m)
 
                 nodos_capas = [] 
