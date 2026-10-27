@@ -431,6 +431,78 @@ def calcular_flujo_vectorizado(df_in, modo_historico=False):
     return df
 
 # ==========================================
+# Funciones de cálculo vectorizado para ETR y ΔV(S)
+# ==========================================
+def calcular_etr_vectorizado(df_in, pme):
+    """Calcula la evapotranspiración real (ETR) por zona considerando la profundidad de extinción."""
+    df = df_in.copy()
+    cols_numericas = ['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']
+    for c in cols_numericas:
+        if c not in df.columns:
+            df[c] = np.nan
+        else:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+    
+    if 'Límite Inf [m]' in df.columns:
+        df['Límite Inf [m]'] = pd.to_numeric(df['Límite Inf [m]'], errors='coerce')
+    else:
+        df['Límite Inf [m]'] = np.nan
+
+    lsup = df['Límite Sup [m]']
+    linf = df['Límite Inf [m]']
+    area_etr = df['Área [km²]']
+    lamina = df['Lámina ETR [m]']
+    filas_completas = df[['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']].notna().all(axis=1)
+
+    df['Prof. Media (PM) [m]'] = np.nan
+    df['% ETR'] = np.nan
+    df['Volumen [hm³/año]'] = np.nan
+
+    if filas_completas.any():
+        lsup_c = lsup[filas_completas]
+        linf_c = linf[filas_completas]
+        pm = np.where(linf_c.isna(), lsup_c, (lsup_c + linf_c) / 2.0)
+        pct_etr = np.where((pm < pme) & (pme > 0), ((pme - pm) / pme) * 100.0, 0.0)
+        vol = area_etr[filas_completas] * lamina[filas_completas] * (pct_etr / 100.0)
+        df.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
+        df.loc[filas_completas, '% ETR'] = pct_etr
+        df.loc[filas_completas, 'Volumen [hm³/año]'] = vol
+
+    return df
+
+def calcular_dvs_vectorizado(df_in):
+    """Calcula el cambio de almacenamiento volumétrico por polígono o rango de evolución."""
+    df = df_in.copy()
+    cols_numericas = ['Límite 1 [m]', 'Área [km²]', 'Sy']
+    for c in cols_numericas:
+        if c not in df.columns:
+            df[c] = np.nan
+        else:
+            df[c] = pd.to_numeric(df[c], errors='coerce')
+            
+    if 'Límite 2 [m]' in df.columns:
+        df['Límite 2 [m]'] = pd.to_numeric(df['Límite 2 [m]'], errors='coerce')
+    else:
+        df['Límite 2 [m]'] = np.nan
+
+    l1 = df['Límite 1 [m]']
+    l2 = df['Límite 2 [m]']
+    area = df['Área [km²]']
+    sy = df['Sy']
+    filas_completas = df[['Límite 1 [m]', 'Área [km²]', 'Sy']].notna().all(axis=1)
+
+    df['Evolución Media [m]'] = np.nan
+    df['Volumen Parcial [hm³]'] = np.nan
+
+    if filas_completas.any():
+        ev_media = np.where(l2[filas_completas].isna(), l1[filas_completas], (l1[filas_completas] + l2[filas_completas]) / 2.0)
+        vol_parcial = ev_media * area[filas_completas] * sy[filas_completas]
+        df.loc[filas_completas, 'Evolución Media [m]'] = ev_media
+        df.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
+
+    return df
+
+# ==========================================
 # Función para editor de tabla de flujo
 # ==========================================
 def editor_tabla_flujo(df_guardado, widget_key, titulo, modo_hist, tabla_session_key):
@@ -475,9 +547,12 @@ def editor_tabla_flujo(df_guardado, widget_key, titulo, modo_hist, tabla_session
         st.rerun()
 
     mensaje_key = f"mensaje_{tabla_session_key}"
+    sufijo = tabla_session_key.split("_")[-1]
+    acumulado_val = st.session_state.get(f"{sufijo}_acumulado", 0.0)
     if mensaje_key in st.session_state:
         st.success(st.session_state[mensaje_key])
-        del st.session_state[mensaje_key]
+    elif acumulado_val > 0:
+        st.success(f"**Total {titulo}: {acumulado_val:,.1f} hm³/año**")
 
     return df_editado, st.session_state.get(f'{tabla_session_key.split("_")[-1]}_acumulado', 0.0)
 
@@ -494,9 +569,15 @@ with tab1:
 
     c_rr, c_info = st.columns([1, 2])
     rr_val = c_rr.number_input(
-        "Recarga por lluvia (Rr) [hm³/año]:",
-        min_value=0.0, value=rr_init, format="%.2f", key=f"rr_field_{clave_actual}"
+        "Retornos por riego (Rr) [hm³/año]:",
+        min_value=0.0, value=rr_init, format="%.2f", key=f"rr_field_{clave_actual}",
+        help="Volumen de agua excedente aplicada en el riego agrícola que se infiltra hacia el acuífero (NOM-011-CONAGUA-2015)."
     )
+    c_info.markdown("""
+        <div style="font-size: 13px; color: #555; margin-top: 25px; line-height: 1.4;">
+            💡 <b>Retornos por Riego (Rr):</b> Fracción de las láminas de riego agrícola que percola hacia el manto freático.
+        </div>
+    """, unsafe_allow_html=True)
 
     modo_hist = st.session_state.get("modo_historico", False)
 
@@ -634,24 +715,7 @@ with tab2:
                           value=pme_init, key=f"etr_pme_{clave_actual}")
 
     key_etr = f"editor_reactivo_etr_{clave_actual}"
-    df_base_etr = st.session_state.table_etr.copy()
-    lsup = pd.to_numeric(df_base_etr['Límite Sup [m]'], errors='coerce')
-    linf = pd.to_numeric(df_base_etr['Límite Inf [m]'], errors='coerce')
-    area_etr = pd.to_numeric(df_base_etr['Área [km²]'], errors='coerce')
-    lamina = pd.to_numeric(df_base_etr['Lámina ETR [m]'], errors='coerce')
-    filas_completas = df_base_etr[['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']].notna().all(axis=1)
-    df_base_etr['Prof. Media (PM) [m]'] = np.nan
-    df_base_etr['% ETR'] = np.nan
-    df_base_etr['Volumen [hm³/año]'] = np.nan
-    if filas_completas.any():
-        lsup_c = lsup[filas_completas]
-        linf_c = linf[filas_completas]
-        pm = np.where(linf_c.isna(), lsup_c, (lsup_c + linf_c) / 2.0)
-        pct_etr = np.where((pm < PME) & (PME > 0), ((PME - pm) / PME) * 100, 0.0)
-        vol = area_etr[filas_completas] * lamina[filas_completas] * (pct_etr / 100.0)
-        df_base_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
-        df_base_etr.loc[filas_completas, '% ETR'] = pct_etr
-        df_base_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
+    df_base_etr = calcular_etr_vectorizado(st.session_state.table_etr, PME)
 
     df_editado_etr = st.data_editor(
         df_base_etr,
@@ -673,28 +737,7 @@ with tab2:
     if st.session_state.get("auto_calc", False):
         cols_guardar_etr = ['Polígono / Zona', 'Límite Sup [m]', 'Límite Inf [m]', 'Área [km²]', 'Lámina ETR [m]']
         st.session_state.table_etr = df_editado_etr[cols_guardar_etr].copy().reset_index(drop=True)
-
-        lsup = pd.to_numeric(df_editado_etr['Límite Sup [m]'], errors='coerce')
-        linf = pd.to_numeric(df_editado_etr['Límite Inf [m]'], errors='coerce')
-        area_etr = pd.to_numeric(df_editado_etr['Área [km²]'], errors='coerce')
-        lamina = pd.to_numeric(df_editado_etr['Lámina ETR [m]'], errors='coerce')
-        filas_completas = df_editado_etr[['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']].notna().all(axis=1)
-
-        calculado_df_etr = df_editado_etr.copy()
-        calculado_df_etr['Prof. Media (PM) [m]'] = np.nan
-        calculado_df_etr['% ETR'] = np.nan
-        calculado_df_etr['Volumen [hm³/año]'] = np.nan
-
-        if filas_completas.any():
-            lsup_c = lsup[filas_completas]
-            linf_c = linf[filas_completas]
-            pm = np.where(linf_c.isna(), lsup_c, (lsup_c + linf_c) / 2.0)
-            pct_etr = np.where((pm < PME) & (PME > 0), ((PME - pm) / PME) * 100, 0.0)
-            vol = area_etr[filas_completas] * lamina[filas_completas] * (pct_etr / 100.0)
-            calculado_df_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
-            calculado_df_etr.loc[filas_completas, '% ETR'] = pct_etr
-            calculado_df_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
-
+        calculado_df_etr = calcular_etr_vectorizado(df_editado_etr, PME)
         etr_acumulado_tabla = calculado_df_etr['Volumen [hm³/año]'].sum(skipna=True)
         hist_res = st.session_state.get("historico_resultados", {}) if st.session_state.get("modo_historico", False) else {}        
         if st.session_state.get("modo_historico", False) and etr_acumulado_tabla == 0:
@@ -709,28 +752,7 @@ with tab2:
     if st.button("Calcular ETR", key=f"btn_calc_etr_{clave_actual}", type="primary"):
         cols_guardar_etr = ['Polígono / Zona', 'Límite Sup [m]', 'Límite Inf [m]', 'Área [km²]', 'Lámina ETR [m]']
         st.session_state.table_etr = df_editado_etr[cols_guardar_etr].copy().reset_index(drop=True)
-
-        lsup = pd.to_numeric(df_editado_etr['Límite Sup [m]'], errors='coerce')
-        linf = pd.to_numeric(df_editado_etr['Límite Inf [m]'], errors='coerce')
-        area_etr = pd.to_numeric(df_editado_etr['Área [km²]'], errors='coerce')
-        lamina = pd.to_numeric(df_editado_etr['Lámina ETR [m]'], errors='coerce')
-        filas_completas = df_editado_etr[['Límite Sup [m]', 'Área [km²]', 'Lámina ETR [m]']].notna().all(axis=1)
-
-        calculado_df_etr = df_editado_etr.copy()
-        calculado_df_etr['Prof. Media (PM) [m]'] = np.nan
-        calculado_df_etr['% ETR'] = np.nan
-        calculado_df_etr['Volumen [hm³/año]'] = np.nan
-
-        if filas_completas.any():
-            lsup_c = lsup[filas_completas]
-            linf_c = linf[filas_completas]
-            pm = np.where(linf_c.isna(), lsup_c, (lsup_c + linf_c) / 2.0)
-            pct_etr = np.where((pm < PME) & (PME > 0), ((PME - pm) / PME) * 100, 0.0)
-            vol = area_etr[filas_completas] * lamina[filas_completas] * (pct_etr / 100.0)
-            calculado_df_etr.loc[filas_completas, 'Prof. Media (PM) [m]'] = pm
-            calculado_df_etr.loc[filas_completas, '% ETR'] = pct_etr
-            calculado_df_etr.loc[filas_completas, 'Volumen [hm³/año]'] = vol
-
+        calculado_df_etr = calcular_etr_vectorizado(df_editado_etr, PME)
         etr_acumulado_tabla = calculado_df_etr['Volumen [hm³/año]'].sum(skipna=True)
         hist_res = st.session_state.get("historico_resultados", {}) if st.session_state.get("modo_historico", False) else {}        
         if st.session_state.get("modo_historico", False) and etr_acumulado_tabla == 0:
@@ -743,15 +765,28 @@ with tab2:
         st.session_state["mensaje_etr"] = f"**Total Evapotranspiración (ETR): {etr_acumulado:,.1f} hm³/año**"
         st.rerun()
 
+    etr_actual_val = st.session_state.get("etr_acumulado", 0.0)
     if "mensaje_etr" in st.session_state:
         st.success(st.session_state["mensaje_etr"])
-        del st.session_state["mensaje_etr"]
+    elif etr_actual_val > 0:
+        st.success(f"**Total Evapotranspiración (ETR): {etr_actual_val:,.1f} hm³/año**")
 
     st.markdown("---")
     st.subheader("4. Otras Salidas Naturales")
     col_oa1, col_oa2, col_oa3 = st.columns(3)
-    val_ssb = col_oa1.number_input("Salidas Subterráneas (Ssb) [hm³/año]:", min_value=0.0,
-                                   value=ssb_init, key=f"oa_ssb_{clave_actual}")
+    
+    eas_actual = float(st.session_state.get("eas_acumulado", 0.0))
+    val_ssb_def = eas_actual if eas_actual > 0 else ssb_init
+    val_ssb = col_oa1.number_input(
+        "Salidas de Agua Salobre (Sas) [hm³/año]:",
+        min_value=0.0,
+        value=val_ssb_def,
+        key=f"oa_ssb_{clave_actual}",
+        help="Por balance salino en equilibrio estacionario Sas = Eas. Se sincroniza con las Entradas Salobres (Eas)."
+    )
+    if eas_actual > 0:
+        val_ssb = eas_actual
+
     val_dfb = col_oa2.number_input("Descarga Flujo Base (Dfb) [hm³/año]:", min_value=0.0,
                                    value=dfb_init, key=f"oa_dfb_{clave_actual}")
     val_dm = col_oa3.number_input("Descarga Manantiales (Dm) [hm³/año]:", min_value=0.0,
@@ -770,23 +805,14 @@ with tab3:
 
     if RDA > 0:
         st.write(f"**Años de evaluación (RDA):** {RDA}")
-        st.info("💡 **Nota:** Si el rango no tiene Límite 2, déjelo en blanco. El sistema tomará el Límite 1 como promedio directo.")
+        st.info(r"""
+        💡 **Instrucciones para la captura de evolución piezométrica:**
+        * **Regla de signos (Evolución $\Delta h$):** Ingrese valores **negativos ($-$)** para zonas con **abatimiento o descenso** del nivel freático (pérdida de almacenamiento), y valores **positivos ($+$)** para zonas con **recuperación o ascenso**.
+        * **Rango sin Límite 2:** Si el polígono tiene una sola isolínea o valor representativo, déjelo en blanco (*None*); el sistema tomará el *Límite 1* como promedio directo.
+        """)
 
         key_dvs = f"editor_reactivo_dvs_{clave_actual}"
-        df_base_dvs = st.session_state.table_dvs.copy()
-        l1 = pd.to_numeric(df_base_dvs['Límite 1 [m]'], errors='coerce')
-        l2 = pd.to_numeric(df_base_dvs['Límite 2 [m]'], errors='coerce')
-        area = pd.to_numeric(df_base_dvs['Área [km²]'], errors='coerce')
-        sy = pd.to_numeric(df_base_dvs['Sy'], errors='coerce')
-        filas_completas = df_base_dvs[['Límite 1 [m]', 'Área [km²]', 'Sy']].notna().all(axis=1)
-        df_base_dvs['Evolución Media [m]'] = np.nan
-        df_base_dvs['Volumen Parcial [hm³]'] = np.nan
-        if filas_completas.any():
-            ev_media = np.where(l2[filas_completas].isna(), l1[filas_completas],
-                                (l1[filas_completas] + l2[filas_completas]) / 2.0)
-            vol_parcial = ev_media * area[filas_completas] * sy[filas_completas]
-            df_base_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
-            df_base_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
+        df_base_dvs = calcular_dvs_vectorizado(st.session_state.table_dvs)
 
         df_editado_dvs = st.data_editor(
             df_base_dvs,
@@ -807,24 +833,7 @@ with tab3:
         if st.session_state.get("auto_calc", False):
             cols_guardar_dvs = ['Polígono / Rango', 'Límite 1 [m]', 'Límite 2 [m]', 'Área [km²]', 'Sy']
             st.session_state.table_dvs = df_editado_dvs[cols_guardar_dvs].copy().reset_index(drop=True)
-
-            l1 = pd.to_numeric(df_editado_dvs['Límite 1 [m]'], errors='coerce')
-            l2 = pd.to_numeric(df_editado_dvs['Límite 2 [m]'], errors='coerce')
-            area = pd.to_numeric(df_editado_dvs['Área [km²]'], errors='coerce')
-            sy = pd.to_numeric(df_editado_dvs['Sy'], errors='coerce')
-            filas_completas = df_editado_dvs[['Límite 1 [m]', 'Área [km²]', 'Sy']].notna().all(axis=1)
-
-            calculado_df_dvs = df_editado_dvs.copy()
-            calculado_df_dvs['Evolución Media [m]'] = np.nan
-            calculado_df_dvs['Volumen Parcial [hm³]'] = np.nan
-
-            if filas_completas.any():
-                ev_media = np.where(l2[filas_completas].isna(), l1[filas_completas],
-                                    (l1[filas_completas] + l2[filas_completas]) / 2.0)
-                vol_parcial = ev_media * area[filas_completas] * sy[filas_completas]
-                calculado_df_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
-                calculado_df_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
-
+            calculado_df_dvs = calcular_dvs_vectorizado(df_editado_dvs)
             DVS_t = calculado_df_dvs['Volumen Parcial [hm³]'].sum(skipna=True)
             dvs_anualizado = DVS_t / RDA
             st.session_state.dvs_anualizado = dvs_anualizado
@@ -835,24 +844,7 @@ with tab3:
         if st.button("Calcular ΔV(S)", key=f"btn_calc_dvs_{clave_actual}", type="primary"):
             cols_guardar_dvs = ['Polígono / Rango', 'Límite 1 [m]', 'Límite 2 [m]', 'Área [km²]', 'Sy']
             st.session_state.table_dvs = df_editado_dvs[cols_guardar_dvs].copy().reset_index(drop=True)
-
-            l1 = pd.to_numeric(df_editado_dvs['Límite 1 [m]'], errors='coerce')
-            l2 = pd.to_numeric(df_editado_dvs['Límite 2 [m]'], errors='coerce')
-            area = pd.to_numeric(df_editado_dvs['Área [km²]'], errors='coerce')
-            sy = pd.to_numeric(df_editado_dvs['Sy'], errors='coerce')
-            filas_completas = df_editado_dvs[['Límite 1 [m]', 'Área [km²]', 'Sy']].notna().all(axis=1)
-
-            calculado_df_dvs = df_editado_dvs.copy()
-            calculado_df_dvs['Evolución Media [m]'] = np.nan
-            calculado_df_dvs['Volumen Parcial [hm³]'] = np.nan
-
-            if filas_completas.any():
-                ev_media = np.where(l2[filas_completas].isna(), l1[filas_completas],
-                                    (l1[filas_completas] + l2[filas_completas]) / 2.0)
-                vol_parcial = ev_media * area[filas_completas] * sy[filas_completas]
-                calculado_df_dvs.loc[filas_completas, 'Evolución Media [m]'] = ev_media
-                calculado_df_dvs.loc[filas_completas, 'Volumen Parcial [hm³]'] = vol_parcial
-
+            calculado_df_dvs = calcular_dvs_vectorizado(df_editado_dvs)
             DVS_t = calculado_df_dvs['Volumen Parcial [hm³]'].sum(skipna=True)
             dvs_anualizado = DVS_t / RDA
             st.session_state.dvs_anualizado = dvs_anualizado
@@ -863,9 +855,11 @@ with tab3:
         else:
             dvs_anualizado = st.session_state.get('dvs_anualizado', 0.0)
 
+        dvs_actual_val = st.session_state.get("dvs_anualizado", 0.0)
         if "mensaje_dvs" in st.session_state:
             st.success(st.session_state["mensaje_dvs"])
-            del st.session_state["mensaje_dvs"]
+        elif dvs_actual_val != 0.0:
+            st.success(f"**Cambio de Almacenamiento Anualizado ΔV(S):** {dvs_actual_val:,.1f} hm³/año")
 
     else:
         st.error("🛑 El Año Tope debe ser estrictamente mayor al Año Base.")
@@ -876,18 +870,14 @@ with tab3:
 # --- PESTAÑA 4: DNC y Recargas ---
 with tab4:
     st.header("Descarga Natural Comprometida (DNC)")
-    st.caption("Ajuste los porcentajes aplicables para el cálculo de la DNC.")
+    st.caption("Ajuste los porcentajes aplicables a cada salida para determinar la DNC. Cada porcentaje aplica de manera independiente sobre su respectivo volumen (NOM-011-CONAGUA-2015).")
 
     cp1, cp2, cp3, cp4, cp5 = st.columns(5)
-    p_etr = cp1.number_input("% DNC ETR", value=p_dnc_init[0], key=f"p_dnc_etr_{clave_actual}")
-    p_sh  = cp2.number_input("% DNC Sh", value=p_dnc_init[1], key=f"p_dnc_sh_{clave_actual}")
-    p_ssb = cp3.number_input("% DNC Ssb", value=p_dnc_init[2], key=f"p_dnc_ssb_{clave_actual}")
-    p_dfb = cp4.number_input("% DNC Dfb", value=p_dnc_init[3], key=f"p_dnc_dfb_{clave_actual}")
-    p_dm  = cp5.number_input("% DNC Dm", value=p_dnc_init[4], key=f"p_dnc_dm_{clave_actual}")
-
-    suma_porcentajes = p_etr + p_sh + p_ssb + p_dfb + p_dm
-    if suma_porcentajes > 100:
-        st.warning(f"⚠️ La suma de porcentajes de DNC es {suma_porcentajes:.1f}%, lo cual excede el 100%. Revise los valores.")
+    p_etr = cp1.number_input("% DNC ETR", min_value=0.0, max_value=100.0, value=p_dnc_init[0], key=f"p_dnc_etr_{clave_actual}")
+    p_sh  = cp2.number_input("% DNC Sh", min_value=0.0, max_value=100.0, value=p_dnc_init[1], key=f"p_dnc_sh_{clave_actual}")
+    p_ssb = cp3.number_input("% DNC Ssb", min_value=0.0, max_value=100.0, value=p_dnc_init[2], key=f"p_dnc_ssb_{clave_actual}")
+    p_dfb = cp4.number_input("% DNC Dfb", min_value=0.0, max_value=100.0, value=p_dnc_init[3], key=f"p_dnc_dfb_{clave_actual}")
+    p_dm  = cp5.number_input("% DNC Dm", min_value=0.0, max_value=100.0, value=p_dnc_init[4], key=f"p_dnc_dm_{clave_actual}")
 
     etr_acumulado = st.session_state.get('etr_acumulado', 0.0)
     sh_acumulado = st.session_state.get('sh_acumulado', 0.0)
@@ -914,12 +904,24 @@ with tab4:
     st.markdown("---")
     st.subheader("Cálculo Automático de Recarga Vertical (Rv) por Balance")
 
+    # Homologación estricta de componentes a 1 decimal para evitar discrepancias por redondeo independiente
+    b_1d = round(float(bombeo_calc), 1)
+    etr_1d = round(float(etr_acumulado), 1)
+    sh_1d = round(float(sh_acumulado), 1)
+    ssb_1d = round(float(val_ssb), 1)
+    dfb_1d = round(float(val_dfb), 1)
+    dm_1d = round(float(val_dm), 1)
+    dvs_1d = round(float(dvs_anualizado), 1)
+    eh_1d = round(float(eh_acumulado), 1)
+    eas_1d = round(float(eas_acumulado), 1)
+    rr_1d = round(float(rr_val), 1)
+
     if st.session_state.get("modo_historico", False) and hist_res:
         val_rv_calc = hist_res.get("Rv", 0.0)
         etiqueta_rv = "Recarga Vertical (Rv) (Histórico Oficial)"
     else:
-        val_rv_calc = (bombeo_calc + etr_acumulado + sh_acumulado + val_ssb + val_dfb + val_dm +
-                       dvs_anualizado - eh_acumulado - eas_acumulado - rr_val)
+        val_rv_calc = round(b_1d + etr_1d + sh_1d + ssb_1d + dfb_1d + dm_1d +
+                            dvs_1d - eh_1d - eas_1d - rr_1d, 1)
         etiqueta_rv = "Recarga Vertical Resultante (Rv)"
 
     with st.container(border=True):
@@ -930,10 +932,10 @@ with tab4:
         if val_rv_calc < 0 and not st.session_state.get("modo_historico", False):
             st.error("🚨 **¡Alerta de Incongruencia!** La Recarga Vertical es negativa.")
             
-            # Calculamos los subtotales para mostrárselos
-            suma_entradas = eh_acumulado + eas_acumulado + rr_val
-            suma_salidas = bombeo_calc + etr_acumulado + sh_acumulado + val_ssb + val_dfb + val_dm + dvs_anualizado
-            diferencia = abs(val_rv_calc)
+            # Calculamos los subtotales para mostrárselos con precisión estricta
+            suma_entradas = round(eh_1d + eas_1d + rr_1d, 1)
+            suma_salidas = round(b_1d + etr_1d + sh_1d + ssb_1d + dfb_1d + dm_1d + dvs_1d, 1)
+            diferencia = round(abs(val_rv_calc), 1)
             
             st.info(f"""
             **¿Por qué ocurre esto?**  
@@ -963,8 +965,8 @@ with tab4:
 with tab5:
     st.header("⚖️ Balance Final y Disponibilidad")
 
-    Recarga_Total = round(rr_val + eh_acumulado + val_rv_calc + val_ri_calc, 1)
-    Descarga_Total = round(bombeo_calc + sh_acumulado + etr_acumulado + val_ssb + val_dfb + val_dm, 1)
+    Recarga_Total = round(rr_1d + eh_1d + val_rv_calc, 1)
+    Descarga_Total = round(b_1d + sh_1d + etr_1d + ssb_1d + dfb_1d + dm_1d, 1)
     Disponibilidad = round(Recarga_Total - dnc_total_calc - veas_calc, 6)
 
     with st.container(border=True):
@@ -1012,20 +1014,20 @@ with tab5:
         st.subheader("📑 Documentación")
 
         df_resumen_excel = pd.DataFrame([
-            {"Concepto": "Recarga Vertical por Lluvia (Rr)", "Volumen (hm³)": rr_val},
-            {"Concepto": "Entradas Horizontales (Eh)", "Volumen (hm³)": eh_acumulado},
-            {"Concepto": "Entradas de Agua Salobre (Eas)", "Volumen (hm³)": eas_acumulado},
+            {"Concepto": "Retornos por Riego (Rr)", "Volumen (hm³)": rr_1d},
+            {"Concepto": "Entradas Horizontales (Eh)", "Volumen (hm³)": eh_1d},
+            {"Concepto": "Entradas de Agua Salobre (Eas)", "Volumen (hm³)": eas_1d},
             {"Concepto": "Recarga Vertical Resultante (Rv)", "Volumen (hm³)": val_rv_calc},
             {"Concepto": "Recarga Incidental (Ri)", "Volumen (hm³)": val_ri_calc},
             {"Concepto": "RECARGA TOTAL (R)", "Volumen (hm³)": Recarga_Total},
-            {"Concepto": "Extracción / Bombeo (B)", "Volumen (hm³)": bombeo_calc},
-            {"Concepto": "Salidas Horizontales (Sh)", "Volumen (hm³)": sh_acumulado},
-            {"Concepto": "Evapotranspiración (ETR)", "Volumen (hm³)": etr_acumulado},
-            {"Concepto": "Salidas Subterráneas (Ssb)", "Volumen (hm³)": val_ssb},
-            {"Concepto": "Descarga Flujo Base (Dfb)", "Volumen (hm³)": val_dfb},
-            {"Concepto": "Descarga Manantiales (Dm)", "Volumen (hm³)": val_dm},
+            {"Concepto": "Extracción / Bombeo (B)", "Volumen (hm³)": b_1d},
+            {"Concepto": "Salidas Horizontales (Sh)", "Volumen (hm³)": sh_1d},
+            {"Concepto": "Evapotranspiración (ETR)", "Volumen (hm³)": etr_1d},
+            {"Concepto": "Salidas de Agua Salobre (Sas)", "Volumen (hm³)": ssb_1d},
+            {"Concepto": "Descarga Flujo Base (Dfb)", "Volumen (hm³)": dfb_1d},
+            {"Concepto": "Descarga Manantiales (Dm)", "Volumen (hm³)": dm_1d},
             {"Concepto": "DESCARGA TOTAL (S)", "Volumen (hm³)": Descarga_Total},
-            {"Concepto": "Cambio de Almacenamiento ΔV(S)", "Volumen (hm³)": dvs_anualizado},
+            {"Concepto": "Cambio de Almacenamiento ΔV(S)", "Volumen (hm³)": dvs_1d},
             {"Concepto": "Descarga Natural Comprometida (DNC)", "Volumen (hm³)": dnc_total_calc},
             {"Concepto": "DISPONIBILIDAD MEDIA ANUAL (DMA)", "Volumen (hm³)": Disponibilidad}
         ])
@@ -1038,7 +1040,7 @@ with tab5:
         # La firma detecta cambios en los datos para no entregar un Excel desactualizado.
         _firma_excel = hashlib.md5("|".join([
             str(clave_actual), str(fuente_b), str(anio_b), str(a_base), str(a_tope), str(PME),
-            str(dvs_anualizado), str(modo_hist_excel), str([DNC_ETR, DNC_Sh, DNC_Ssb, DNC_Dfb, DNC_Dm]),
+            str(dvs_1d), str(modo_hist_excel), str([DNC_ETR, DNC_Sh, DNC_Ssb, DNC_Dfb, DNC_Dm]),
             df_resumen_excel.to_json(), df_editado_eh.to_json(), df_editado_usos.to_json(),
             df_editado_sh.to_json(), df_editado_etr.to_json(), dvs_excel.to_json(), df_editado_eas.to_json(),
         ]).encode("utf-8")).hexdigest()
@@ -1056,7 +1058,7 @@ with tab5:
                     df_etr=df_editado_etr.copy(),
                     df_dvs=dvs_excel,
                     df_eas=calcular_flujo_vectorizado(df_editado_eas, modo_hist_excel),
-                    dvs_anualizado=dvs_anualizado,
+                    dvs_anualizado=dvs_1d,
                     fuente_b=fuente_b,
                     anio_b=anio_b,
                     a_base=a_base,
@@ -1112,16 +1114,16 @@ with tab5:
 
                 diccionario_balance = {
                     "configuracion": {
-                        "rr_val": rr_val, "PME": PME,
+                        "rr_val": rr_1d, "PME": PME,
                         "periodo_dvs": {"a_base": a_base, "a_tope": a_tope},
-                        "otras_salidas": {"Ssb": val_ssb, "Dfb": val_dfb, "Dm": val_dm},
+                        "otras_salidas": {"Ssb": ssb_1d, "Dfb": dfb_1d, "Dm": dm_1d},
                         "dnc_params": {"p_etr": p_etr, "p_sh": p_sh, "p_ssb": p_ssb, "p_dfb": p_dfb, "p_dm": p_dm},
                         "p_ri": p_ri, "fuente_b": fuente_b, "anio_b": anio_b
                     },
                     "resultados": {
                         "Rv": val_rv_calc, "Ri": val_ri_calc, "Recarga_Total": Recarga_Total,
-                        "B_total": bombeo_calc, "DNC_total": dnc_total_calc, "VEAS": veas_calc,
-                        "DVS": dvs_anualizado, "ETR": etr_acumulado, "Disponibilidad_Oficial": Disponibilidad
+                        "B_total": b_1d, "DNC_total": dnc_total_calc, "VEAS": veas_calc,
+                        "DVS": dvs_1d, "ETR": etr_1d, "Disponibilidad_Oficial": Disponibilidad
                     },
                     "tablas": {
                         "eh": df_to_records(st.session_state.table_eh),
