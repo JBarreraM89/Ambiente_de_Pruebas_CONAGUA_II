@@ -187,37 +187,59 @@ def worker_generar_excel(f_maestra, anio_procesado, user_dir):
             df_dvs = pd.DataFrame(columns=['Polígono / Rango', 'Límite 1 [m]', 'Límite 2 [m]', 'Evolución Media [m]', 'Área [km²]', 'Sy', 'Volumen Parcial [hm³]'])
             DVS_t = 0.0
 
-        rr_val = float(conf.get("rr_val", 0.0))
-        o_sal = conf.get("otras_salidas", {})
-        val_ssb = float(o_sal.get("Ssb", 0.0))
-        val_dfb = float(o_sal.get("Dfb", 0.0))
-        val_dm = float(o_sal.get("Dm", 0.0))
-        val_rv_calc = float(res.get("Rv", 0.0))
-        val_ri_calc = float(res.get("Ri", 0.0))
-        dnc_total_calc = float(res.get("DNC_total", 0.0))
-        veas_calc = float(res.get("VEAS", 0.0))
-        disponibilidad_calc = float(res.get("Disponibilidad_Oficial", 0.0))
+        rr_val = round(float(conf.get("rr_val") or 0.0), 1)
+        o_sal = conf.get("otras_salidas") or {}
+        val_ssb = round(float(o_sal.get("Ssb") or 0.0), 1)
+        val_dfb = round(float(o_sal.get("Dfb") or 0.0), 1)
+        val_dm = round(float(o_sal.get("Dm") or 0.0), 1)
+        val_rv_calc = round(float(res.get("Rv") or 0.0), 1)
+        val_ri_calc = round(float(res.get("Ri") or 0.0), 1)
+        dnc_total_calc = round(float(res.get("DNC_total") or 0.0), 1)
+        veas_calc = float(res.get("VEAS") or 0.0)
+        disponibilidad_calc = float(res.get("Disponibilidad_Oficial") or 0.0)
 
-        periodo_dvs = conf.get("periodo_dvs", {})
-        a_base = int(periodo_dvs.get("a_base", 2020))
-        a_tope = int(periodo_dvs.get("a_tope", 2025))
+        periodo_dvs = conf.get("periodo_dvs") or {}
+        a_base = int(periodo_dvs.get("a_base") or 2020)
+        a_tope = int(periodo_dvs.get("a_tope") or 2025)
         rda = a_tope - a_base
-        dvs_anualizado = float(res.get("DVS", DVS_t / rda if rda > 0 else 0.0))
+        dvs_anualizado = round(float(res.get("DVS", DVS_t / rda if rda > 0 else 0.0)), 1)
 
-        recarga_t = round(rr_val + eh_acumulado + eas_acumulado + val_rv_calc + val_ri_calc, 1)
-        descarga_t = round(bombeo_calc + sh_acumulado + etr_acumulado + val_ssb + val_dfb + val_dm, 1)
+        bombeo_1d = round(float(bombeo_calc), 1)
+        sh_1d = round(float(sh_acumulado), 1)
+        etr_1d = round(float(etr_acumulado), 1)
+        eh_1d = round(float(eh_acumulado), 1)
+        eas_1d = round(float(eas_acumulado), 1)
+
+        recarga_t = float(res.get("Recarga_Total", round(rr_val + eh_1d + val_rv_calc, 1)))
+        descarga_t = round(bombeo_1d + sh_1d + etr_1d + val_ssb + val_dfb + val_dm, 1)
+
+        # Detalle de DNC por componente oficial (NOM-011-CONAGUA)
+        dnc_params = conf.get("dnc_params") or {}
+        p_etr = float(dnc_params.get("p_etr") or 0.0)
+        p_sh = float(dnc_params.get("p_sh") or 0.0)
+        p_ssb = float(dnc_params.get("p_ssb") or 0.0)
+        p_dfb = float(dnc_params.get("p_dfb") or 0.0)
+        p_dm = float(dnc_params.get("p_dm") or 0.0)
+
+        d_etr = round(etr_1d * (p_etr / 100.0), 1)
+        d_sh = round(sh_1d * (p_sh / 100.0), 1)
+        d_ssb = round(val_ssb * (p_ssb / 100.0), 1)
+        d_dfb = round(val_dfb * (p_dfb / 100.0), 1)
+        d_dm = round(val_dm * (p_dm / 100.0), 1)
+        dnc_detalle = [d_etr, d_sh, d_ssb, d_dfb, d_dm]
+        pme_val = float(conf.get("PME") or 5.0)
 
         df_ind_resumen = pd.DataFrame([
-            {"Concepto": "Recarga Vertical por Lluvia (Rr)", "Volumen (hm³)": rr_val},
-            {"Concepto": "Entradas Horizontales (Eh)", "Volumen (hm³)": eh_acumulado},
-            {"Concepto": "Entradas de Agua Salobre (Eas)", "Volumen (hm³)": eas_acumulado},
+            {"Concepto": "Retornos por Riego (Rr)", "Volumen (hm³)": rr_val},
+            {"Concepto": "Entradas Horizontales (Eh)", "Volumen (hm³)": eh_1d},
+            {"Concepto": "Entradas de Agua Salobre (Eas)", "Volumen (hm³)": eas_1d},
             {"Concepto": "Recarga Vertical Resultante (Rv)", "Volumen (hm³)": val_rv_calc},
             {"Concepto": "Recarga Incidental (Ri)", "Volumen (hm³)": val_ri_calc},
             {"Concepto": "RECARGA TOTAL (R)", "Volumen (hm³)": recarga_t},
-            {"Concepto": "Extracción / Bombeo (B)", "Volumen (hm³)": bombeo_calc},
-            {"Concepto": "Salidas Horizontales (Sh)", "Volumen (hm³)": sh_acumulado},
-            {"Concepto": "Evapotranspiración (ETR)", "Volumen (hm³)": etr_acumulado},
-            {"Concepto": "Salidas Subterráneas (Ssb)", "Volumen (hm³)": val_ssb},      
+            {"Concepto": "Extracción / Bombeo (B)", "Volumen (hm³)": bombeo_1d},
+            {"Concepto": "Salidas Horizontales (Sh)", "Volumen (hm³)": sh_1d},
+            {"Concepto": "Evapotranspiración (ETR)", "Volumen (hm³)": etr_1d},
+            {"Concepto": "Salidas de Agua Salobre (Sas)", "Volumen (hm³)": val_ssb},      
             {"Concepto": "Descarga Flujo Base (Dfb)", "Volumen (hm³)": val_dfb},
             {"Concepto": "Descarga Manantiales (Dm)", "Volumen (hm³)": val_dm},
             {"Concepto": "DESCARGA TOTAL (S)", "Volumen (hm³)": descarga_t},
@@ -233,7 +255,11 @@ def worker_generar_excel(f_maestra, anio_procesado, user_dir):
         nom_x = f"Balance_{clave_ac}_{nom_ac}_{anio_procesado}.xlsx"
         
         ruta_ind = os.path.join(user_dir, nom_x)
-        generar_excel_matriz(df_ind_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_eas, dvs_anualizado, fuente_b, anio_b, a_base, a_tope, rda, destino_salida=ruta_ind)
+        generar_excel_matriz(
+            df_ind_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_eas,
+            dvs_anualizado, fuente_b, anio_b, a_base, a_tope, rda,
+            destino_salida=ruta_ind, dnc_detalle=dnc_detalle, pme=pme_val
+        )
         
         return (ruta_ind, f"Balances_Individuales/{nom_x}")
     except Exception as e:
@@ -250,9 +276,14 @@ def extraer_datos_balance(ruta_json):
         with open(ruta_json, 'r', encoding='utf-8') as f:
             dat = json.load(f)
         
-        res = dat.get("resultados", {})
-        conf = dat.get("configuracion", {})
-        tabs = dat.get("tablas", {})
+        res = dat.get("resultados") or {}
+        conf = dat.get("configuracion") or {}
+        tabs = dat.get("tablas") or {}
+
+        def _safe_float(v, default=0.0):
+            if v is None: return default
+            try: return float(v)
+            except (ValueError, TypeError): return default
         
         df_usos = pd.DataFrame(tabs.get('usos', []))
         usos_totales = {
@@ -263,10 +294,9 @@ def extraer_datos_balance(ruta_json):
         }
         
         if not df_usos.empty and 'Volumen [hm³/año]' in df_usos.columns:
-            df_usos['Volumen [hm³/año]'] = pd.to_numeric(df_usos['Volumen [hm³/año]'], errors='coerce').fillna(0.0)
-            for _, r_uso in df_usos.iterrows():
-                tipo = str(r_uso.get('Tipo de Uso', '')).strip().upper()
-                vol = float(r_uso['Volumen [hm³/año]'])
+            vols = pd.to_numeric(df_usos['Volumen [hm³/año]'], errors='coerce').fillna(0.0)
+            tipos = df_usos.get('Tipo de Uso', pd.Series(dtype=str)).astype(str).str.strip().str.upper()
+            for tipo, vol in zip(tipos, vols):
                 if 'AGRÍCOLA' in tipo or 'AGRICOLA' in tipo: usos_totales["Uso_Agricola"] += vol
                 elif 'AGROIND' in tipo: usos_totales["Uso_Agroindustrial"] += vol
                 elif 'DOM' in tipo: usos_totales["Uso_Domestico"] += vol
@@ -281,25 +311,48 @@ def extraer_datos_balance(ruta_json):
                 elif 'ECOL' in tipo: usos_totales["Uso_Ecologica"] += vol
                 else: usos_totales["Uso_Otros"] += vol
 
+        # Extracción segura de flujos horizontales y salobres
+        tab_eh = tabs.get('eh', [])
+        vol_eh = sum(_safe_float(r.get('Volumen [hm³/año]')) for r in tab_eh) if tab_eh else 0.0
+        if vol_eh == 0.0 and tab_eh:
+            df_eh_tmp = calc_flujos_vectorizado(tab_eh, ['Volumen [hm³/año]'])
+            vol_eh = _safe_float(df_eh_tmp['Volumen [hm³/año]'].sum())
+
+        tab_sh = tabs.get('sh', [])
+        vol_sh = sum(_safe_float(r.get('Volumen [hm³/año]')) for r in tab_sh) if tab_sh else 0.0
+        if vol_sh == 0.0 and tab_sh:
+            df_sh_tmp = calc_flujos_vectorizado(tab_sh, ['Volumen [hm³/año]'])
+            vol_sh = _safe_float(df_sh_tmp['Volumen [hm³/año]'].sum())
+
+        tab_eas = tabs.get('eas', [])
+        vol_eas = sum(_safe_float(r.get('Volumen [hm³/año]')) for r in tab_eas) if tab_eas else 0.0
+        if vol_eas == 0.0 and tab_eas:
+            df_eas_tmp = calc_flujos_vectorizado(tab_eas, ['Volumen [hm³/año]'])
+            vol_eas = _safe_float(df_eas_tmp['Volumen [hm³/año]'].sum())
+
+        o_sal = conf.get("otras_salidas") or {}
         datos = {
-            "Recarga (R)": round(res.get('Recarga_Total', 0.0), 1),
-            "Rv": round(float(res.get("Rv", 0.0)), 1), 
-            "Ri": round(float(res.get("Ri", 0.0)), 1), 
-            "Rr": float(conf.get("rr_val", 0.0)),
-            "Bombeo (B)": round(res.get('B_total', 0.0), 1),
-            "DNC": round(res.get('DNC_total', 0.0), 1),
-            "ETR": round(float(res.get('ETR', 0.0)), 1),
-            "Ssb": float(conf.get("otras_salidas", {}).get("Ssb", 0.0)), 
-            "Dfb": float(conf.get("otras_salidas", {}).get("Dfb", 0.0)), 
-            "Dm": float(conf.get("otras_salidas", {}).get("Dm", 0.0)), 
-            "PME": float(conf.get("PME", 5.0)),
-            "VEAS": round(res.get('VEAS', 0.0), 6), 
-            "ΔV(S)": round(res.get('DVS', 0.0), 1),
-            "Disponibilidad (DMA)": round(res.get('Disponibilidad_Oficial', 0.0), 6)
+            "Recarga (R)": round(_safe_float(res.get('Recarga_Total')), 1),
+            "Rv": round(_safe_float(res.get("Rv")), 1), 
+            "Ri": round(_safe_float(res.get("Ri")), 1), 
+            "Rr": round(_safe_float(conf.get("rr_val")), 1),
+            "Eh": round(vol_eh, 1),
+            "Eas": round(vol_eas, 1),
+            "Bombeo (B)": round(_safe_float(res.get('B_total')), 1),
+            "Sh": round(vol_sh, 1),
+            "ETR": round(_safe_float(res.get('ETR')), 1),
+            "Ssb": round(_safe_float(o_sal.get("Ssb")), 1), 
+            "Dfb": round(_safe_float(o_sal.get("Dfb")), 1), 
+            "Dm": round(_safe_float(o_sal.get("Dm")), 1), 
+            "DNC": round(_safe_float(res.get('DNC_total')), 1),
+            "PME": round(_safe_float(conf.get("PME"), 5.0), 2),
+            "VEAS": round(_safe_float(res.get('VEAS')), 6), 
+            "ΔV(S)": round(_safe_float(res.get('DVS')), 1),
+            "Disponibilidad (DMA)": round(_safe_float(res.get('Disponibilidad_Oficial')), 6)
         }
         datos.update({k: round(v, 2) for k, v in usos_totales.items()})
         return datos
-    except (OSError, ValueError, TypeError, AttributeError):
+    except Exception:
         logger.exception("No se pudo extraer el balance de %s", ruta_json)
         return {}
 
@@ -407,9 +460,14 @@ if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
                 omitidos_errores.append(f"{fnom} - JSON ilegible o incompleto")
                 continue
             
+            tokens_nom = fnom.replace('.json', '').split('_')[1:]
+            if tokens_nom and tokens_nom[-1].upper().startswith('B') and len(tokens_nom[-1]) <= 4:
+                tokens_nom = tokens_nom[:-1]
+            nom_acuifero = " ".join(tokens_nom) if tokens_nom else "Acuífero"
+
             fila = {
                 "Clave": clave,
-                "Acuífero": " ".join(fnom.split('_')[1:-1]),
+                "Acuífero": nom_acuifero,
                 "ruta_fisica": ruta_actual 
             }
             fila.update(datos_actuales)
@@ -427,18 +485,24 @@ if st.button("🔍 Escanear Drive y Generar Reporte", type="primary"):
                 
                 # 2. Archivo Oficial (Excel): Sobrescribimos DMA y VEAS oficiales publicados
                 hist_excel = dict_historico.get(clave, {})
-                dma_hist = hist_excel.get('DMA', "N/D")
-                veas_hist = hist_excel.get('VEAS', "N/D")
+                dma_hist = hist_excel.get('DMA', np.nan)
+                veas_hist = hist_excel.get('VEAS', np.nan)
                 
-                fila[f"DMA {anio_comparacion}"] = dma_hist
-                fila[f"VEAS_{anio_comparacion}"] = veas_hist
+                try: dma_hist_num = float(dma_hist) if dma_hist != "N/D" and pd.notna(dma_hist) else np.nan
+                except (ValueError, TypeError): dma_hist_num = np.nan
+
+                try: veas_hist_num = float(veas_hist) if veas_hist != "N/D" and pd.notna(veas_hist) else np.nan
+                except (ValueError, TypeError): veas_hist_num = np.nan
                 
-                # Recalculamos la evolución usando los datos oficiales
+                fila[f"DMA {anio_comparacion}"] = dma_hist_num
+                fila[f"VEAS_{anio_comparacion}"] = veas_hist_num
+                
+                # Recalculamos la evolución usando los datos oficiales de forma numérica limpia
                 dma_act = fila.get("Disponibilidad (DMA)", 0.0)
                 veas_act = fila.get("VEAS", 0.0)
                 
-                fila[f"Evolución DMA (hm³)"] = round(dma_act - dma_hist, 6) if dma_hist != "N/D" else "N/D"
-                fila[f"Crecimiento VEAS (hm³)"] = round(veas_act - veas_hist, 6) if veas_hist != "N/D" else "N/D"
+                fila["Evolución DMA (hm³)"] = round(float(dma_act) - dma_hist_num, 6) if pd.notna(dma_hist_num) else np.nan
+                fila["Crecimiento VEAS (hm³)"] = round(float(veas_act) - veas_hist_num, 6) if pd.notna(veas_hist_num) else np.nan
                 
             datos_maestros.append(fila)
             ids_procesados.add(clave)
@@ -488,7 +552,7 @@ if "datos_reporte_nacional" in st.session_state:
         st.success(f"✅ Los {total_exitosos} balances se procesaron exitosamente.")
 
     if datos_maestros:
-        df_maestro = pd.DataFrame(datos_maestros).replace([float('inf'), float('-inf')], 0.0).fillna("N/D")
+        df_maestro = pd.DataFrame(datos_maestros).replace([float('inf'), float('-inf')], np.nan)
         df_cat = cargar_catalogo("Acuiferos_2026.csv")
         total_nacional = len(df_cat) if not df_cat.empty else 653
         
@@ -521,13 +585,14 @@ if "datos_reporte_nacional" in st.session_state:
                 df_filtrado = df_filtrado[df_filtrado["Clave"] == clave_filtro]
                 
         total_filtrado = len(df_filtrado)
-        acuiferos_deficit = len(df_filtrado[df_filtrado["Disponibilidad (DMA)"] < 0])
+        dma_filtrado_num = pd.to_numeric(df_filtrado["Disponibilidad (DMA)"], errors='coerce').fillna(0.0)
+        acuiferos_deficit = int((dma_filtrado_num < 0).sum())
         porcentaje = (total_exitosos / total_nacional) * 100 if total_nacional > 0 else 0.0
         
         col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
         col_kpi1.metric("Acuíferos Procesados", f"{total_filtrado} de {total_exitosos}") 
         col_kpi2.metric("Avance Nacional", f"{porcentaje:.1f} %")
-        col_kpi3.metric("Acuíferos con Déficit", f"{acuiferos_deficit}", delta="Sobreexplotados", delta_color="inverse")
+        col_kpi3.metric("Acuíferos con Déficit", f"{acuiferos_deficit}", delta="DMA < 0 (Déficit)", delta_color="inverse")
         
         es_acuifero_unico = (acuif_seleccionado != "Todos los del filtro actual") and (total_filtrado == 1)
         
@@ -537,9 +602,9 @@ if "datos_reporte_nacional" in st.session_state:
             val_a = df_filtrado["Disponibilidad (DMA)"].iloc[0]
             val_d = df_filtrado["Evolución DMA (hm³)"].iloc[0]
             
-            if val_h != "N/D" and val_d != "N/D":
+            if pd.notna(val_h) and pd.notna(val_d):
                 fig = go.Figure(go.Waterfall(
-                    name="20", orientation="v", measure=["absolute", "relative", "total"],
+                    name="Transición", orientation="v", measure=["absolute", "relative", "total"],
                     x=[f"DMA {anio_comparacion}", "Evolución", f"DMA {anio_procesado}"],
                     textposition="outside", text=[f"{val_h:.2f}", f"{val_d:.2f}", f"{val_a:.2f}"],
                     y=[val_h, val_d, val_a], connector={"line":{"color":"rgb(63, 63, 63)"}},
@@ -554,13 +619,13 @@ if "datos_reporte_nacional" in st.session_state:
         else:
             st.markdown("<br>", unsafe_allow_html=True)
             tab_resumen, tab_riesgo, tab_mapa, tab_distribucion, tab_espacial, tab_ejecutiva, tab_gemelo = st.tabs([
-                "📊 Resumen y Alertas", 
-                "⚠️ Matriz de Estrés", 
-                "🗺️ Radiografía Nacional", 
-                "📈 Distribución Estadística",
-                "🌎 Mapas (Antes y Después)",
-                "💼 Contabilidad y Prioridades",
-                "🔮 Gemelo Digital (Simulador)"
+                "📊 Diagnóstico General de Disponibilidad", 
+                "⚠️ Condición de Explotación Relativa (R vs DNC + VEAS)", 
+                "🗺️ Estructura de Extracción Concesionada (VEAS)", 
+                "📈 Dispersión Regional de la Disponibilidad (DMA)",
+                "🌎 Evolución Interanual de la Disponibilidad (DMA)",
+                "💼 Balance Hidrológico Consolidado y Concentración del Déficit",
+                "🔮 Simulación de Escenarios de Disponibilidad"
             ])
             
             # --- TAB 1: RESUMEN (BARRAS Y PASTEL) ---
@@ -568,13 +633,17 @@ if "datos_reporte_nacional" in st.session_state:
                 cg1, cg2 = st.columns(2)
                 with cg1:
                     if activar_tendencia and 'Evolución DMA (hm³)' in df_filtrado.columns:
-                        df_graf = df_filtrado[df_filtrado['Evolución DMA (hm³)'] != "N/D"].copy()
-                        df_graf['Evolución DMA (hm³)'] = pd.to_numeric(df_graf['Evolución DMA (hm³)'] )
+                        evol_serie = pd.to_numeric(df_filtrado['Evolución DMA (hm³)'], errors='coerce')
+                        df_graf = df_filtrado[evol_serie.notna()].copy()
+                        df_graf['Evolución DMA (hm³)'] = evol_serie[evol_serie.notna()]
                         df_def = df_graf[df_graf['Evolución DMA (hm³)'] < 0].sort_values(by='Evolución DMA (hm³)', ascending=True).head(10)
-                        tit, eje = "Top 10 Mayores Pérdidas de Agua (hm³)", 'Evolución DMA (hm³)'
+                        tit, eje = "Top 10 Acuíferos con Mayor Pérdida de Disponibilidad (hm³)", 'Evolución DMA (hm³)'
                     else:
-                        df_def = df_filtrado[df_filtrado["Disponibilidad (DMA)"] < 0].sort_values(by="Disponibilidad (DMA)", ascending=True).head(10)
-                        tit, eje = "Top 10 Déficit Hídrico más severo (hm³)", "Disponibilidad (DMA)"
+                        dma_serie = pd.to_numeric(df_filtrado["Disponibilidad (DMA)"], errors='coerce')
+                        df_graf = df_filtrado[dma_serie.notna()].copy()
+                        df_graf['Disponibilidad (DMA)'] = dma_serie[dma_serie.notna()]
+                        df_def = df_graf[df_graf["Disponibilidad (DMA)"] < 0].sort_values(by="Disponibilidad (DMA)", ascending=True).head(10)
+                        tit, eje = "Top 10 Acuíferos con Mayor Déficit Hídrico (hm³)", "Disponibilidad (DMA)"
                         
                     if not df_def.empty:
                         df_def["E"] = df_def["Clave"] + " " + df_def["Acuífero"]
@@ -588,76 +657,81 @@ if "datos_reporte_nacional" in st.session_state:
                         
                 with cg2:
                     if activar_tendencia and 'Evolución DMA (hm³)' in df_filtrado.columns:
-                        df_graf = df_filtrado[df_filtrado['Evolución DMA (hm³)'] != "N/D"].copy()
-                        df_graf['Evolución DMA (hm³)'] = pd.to_numeric(df_graf['Evolución DMA (hm³)'])
-                        p = len(df_graf[df_graf['Evolución DMA (hm³)'] < 0])
+                        evol_serie = pd.to_numeric(df_filtrado['Evolución DMA (hm³)'], errors='coerce')
+                        df_graf = df_filtrado[evol_serie.notna()].copy()
+                        p = len(df_graf[evol_serie < 0])
                         df_p = pd.DataFrame({"Tendencia": ["Recuperación / Estable", "Pérdida Hídrica"], "C": [len(df_graf)-p, p]})
-                        # Verde Inst y Rojo Inst
                         col, mapc = "Tendencia", {"Recuperación / Estable":"#285c4d", "Pérdida Hídrica":"#9f2241"}
                     else:
-                        df_p = pd.DataFrame({"E": ["Con Disponibilidad (Superávit)", "Con Déficit (Sobreexplotados)"], "C": [total_filtrado-acuiferos_deficit, acuiferos_deficit]})
-                        # Verde Inst y Rojo Inst
-                        col, mapc = "E", {"Con Disponibilidad (Superávit)":"#285c4d", "Con Déficit (Sobreexplotados)":"#9f2241"}
+                        df_p = pd.DataFrame({"Condición": ["Con Disponibilidad (Superávit)", "Sin Disponibilidad (Déficit)"], "C": [total_filtrado-acuiferos_deficit, acuiferos_deficit]})
+                        col, mapc = "Condición", {"Con Disponibilidad (Superávit)":"#285c4d", "Sin Disponibilidad (Déficit)":"#9f2241"}
                         
                     if total_filtrado > 0:
-                        fig_p = px.pie(df_p, values="C", names=col, title="Proporción Nacional / Regional", color=col, color_discrete_map=mapc, hole=0.45)
+                        fig_p = px.pie(df_p, values="C", names=col, title="Condición Administrativa Oficial de Disponibilidad", color=col, color_discrete_map=mapc, hole=0.45)
                         fig_p.update_traces(textinfo='percent+label', textposition='inside')
                         fig_p.update_layout(height=400, showlegend=False)
                         st.plotly_chart(fig_p, width="stretch")
 
             df_riesgo = df_filtrado.copy()
-            df_riesgo['Extracción_Total'] = pd.to_numeric(df_riesgo['DNC']) + pd.to_numeric(df_riesgo['VEAS'])
-            df_riesgo['DMA_Abs'] = pd.to_numeric(df_riesgo['Disponibilidad (DMA)']).abs()
-            df_riesgo['VEAS_Mapa'] = pd.to_numeric(df_riesgo['VEAS']).apply(lambda x: x if x > 0 else 0.1)
+            dnc_num = pd.to_numeric(df_riesgo['DNC'], errors='coerce').fillna(0.0)
+            veas_num = pd.to_numeric(df_riesgo['VEAS'], errors='coerce').fillna(0.0)
+            dma_num = pd.to_numeric(df_riesgo['Disponibilidad (DMA)'], errors='coerce').fillna(0.0)
+            r_num = pd.to_numeric(df_riesgo['Recarga (R)'], errors='coerce').fillna(0.0)
 
-            # --- TAB 2: MATRIZ DE ESTRÉS HÍDRICO (SCATTER PLOT) ---
+            df_riesgo['Extracción_Total'] = dnc_num + veas_num
+            df_riesgo['DMA_Abs'] = dma_num.abs()
+            df_riesgo['VEAS_Mapa'] = veas_num.apply(lambda x: x if x > 0 else 0.1)
+            df_riesgo['Recarga_Num'] = r_num
+            df_riesgo['DMA_Num'] = dma_num
+
+            # --- TAB 2: CONDICIÓN DE EXPLOTACIÓN RELATIVA (SCATTER PLOT) ---
             with tab_riesgo:
                 if not df_riesgo.empty:
                     fig_scatter = px.scatter(
                         df_riesgo, 
-                        x='Recarga (R)', 
+                        x='Recarga_Num', 
                         y='Extracción_Total', 
                         color='ESTADO',
                         size='DMA_Abs',
                         hover_name='Acuífero',
-                        hover_data={"Clave": True, "Disponibilidad (DMA)": ":.2f"},
-                        title="Matriz de Estrés: Recarga Natural (Entradas) vs Compromisos (DNC + VEAS)",
-                        labels={"Extracción_Total": "Salidas Comprometidas (hm³)", "Recarga (R)": "Recarga Total (hm³)"},
+                        hover_data={"Clave": True, "DMA_Num": ":.2f"},
+                        title="Condición de Explotación: Recarga Total (R) vs Compromisos (DNC + VEAS)",
+                        labels={"Extracción_Total": "Salidas Comprometidas (DNC + VEAS) [hm³/año]", "Recarga_Num": "Recarga Total (R) [hm³/año]", "DMA_Num": "DMA (hm³)"},
                         color_discrete_sequence=px.colors.qualitative.Prism
                     )
-                    max_val = max(df_riesgo['Recarga (R)'].max(), df_riesgo['Extracción_Total'].max()) * 1.05
+                    max_val = max(df_riesgo['Recarga_Num'].max(), df_riesgo['Extracción_Total'].max()) * 1.05
                     # Línea roja institucional
                     fig_scatter.add_shape(type="line", x0=0, y0=0, x1=max_val, y1=max_val, line=dict(color="#9f2241", dash="dash"))
-                    fig_scatter.add_annotation(x=max_val*0.8, y=max_val*0.8, text="Línea de Sobreexplotación", showarrow=False, yshift=15, font=dict(color="#9f2241"))
+                    fig_scatter.add_annotation(x=max_val*0.8, y=max_val*0.8, text="Línea de Equilibrio Hidrogeológico (R = DNC + VEAS)", showarrow=False, yshift=15, font=dict(color="#9f2241"))
                     fig_scatter.update_layout(height=500)
                     st.plotly_chart(fig_scatter, use_container_width=True)
 
-            # --- TAB 3: RADIOGRAFÍA NACIONAL (TREEMAP JERÁRQUICO) ---
+            # --- TAB 3: ESTRUCTURA DE EXTRACCIÓN CONCESIONADA (TREEMAP) ---
             with tab_mapa:
                 if not df_riesgo.empty:
                     fig_tree = px.treemap(
                         df_riesgo, 
                         path=[px.Constant("México"), 'ESTADO', 'Acuífero'], 
                         values='VEAS_Mapa', 
-                        color='Disponibilidad (DMA)', 
+                        color='DMA_Num', 
                         color_continuous_scale="RdBu", 
                         color_continuous_midpoint=0,
                         hover_name='Acuífero',
-                        title="Tamaño = Volumen Concesionado (VEAS) | Color = Salud del Acuífero (Azul: Sano / Rojo: Crítico)"
+                        title="Tamaño = Volumen Concesionado (VEAS) | Color = Disponibilidad Media Anual (Azul: Superávit / Rojo: Déficit)"
                     )
                     fig_tree.update_traces(root_color="lightgrey", marker=dict(line=dict(color='white', width=0.5)))
                     fig_tree.update_layout(height=600, margin=dict(t=40, l=10, r=10, b=10))
                     st.plotly_chart(fig_tree, use_container_width=True)
 
-           # --- TAB 4: DISTRIBUCIÓN ESTADÍSTICA (BOXPLOT) ---
+           # --- TAB 4: DISPERSIÓN REGIONAL (BOXPLOT) ---
             with tab_distribucion:
                 if not df_riesgo.empty:
                     fig_box = px.box(
                         df_riesgo, 
                         x='ESTADO', 
-                        y='Disponibilidad (DMA)', 
+                        y='DMA_Num', 
                         color='ESTADO',
-                        title="Dispersión y Mediana de Disponibilidad por Estado",
+                        title="Dispersión y Mediana de la Disponibilidad Media Anual (DMA) por Entidad Federativa",
                         points="all", 
                         hover_name="Acuífero",
                         color_discrete_sequence=px.colors.qualitative.Prism
@@ -666,42 +740,60 @@ if "datos_reporte_nacional" in st.session_state:
                     fig_box.update_layout(height=500, showlegend=False, xaxis_title="", yaxis_title="Disponibilidad (DMA) hm³")
                     st.plotly_chart(fig_box, use_container_width=True)
             
-            # --- TAB 5: MAPAS SINCRONIZADOS (ANTES Y DESPUÉS) ---
+            # --- TAB 5: MAPAS SINCRONIZADOS (EVOLUCIÓN INTERANUAL) ---
             with tab_espacial:
-                if not activar_tendencia:
-                    st.info("💡 Para ver la comparativa de mapas (Antes y Después), necesitas habilitar la casilla 'Análisis de Tendencia' al inicio de la página.")
-                else:
-                    st.write(f"**Comparativa Espacial:** Disponibilidad en {anio_comparacion} (Izquierda) vs {anio_procesado} (Derecha).")
-                    st.caption("Pinta de rojo 🔴 los acuíferos sobreexplotados (Déficit) y de azul 🔵 los que tienen superávit. ¡Mueve un mapa y el otro te seguirá!")
+                @st.fragment
+                def _renderizar_mapas_dual(df_riesgo, anio_comparacion, anio_procesado, activar_tendencia):
+                    if not activar_tendencia:
+                        st.info("💡 Para ver la comparativa de mapas (Evolución Interanual), necesitas habilitar la casilla 'Análisis de Tendencia' al inicio de la página.")
+                        return
+
+                    st.write(f"**Comparativa Geoespacial:** Disponibilidad en {anio_comparacion} (Izquierda) vs {anio_procesado} (Derecha).")
+                    st.caption("Pinta de rojo 🔴 los acuíferos en condición de déficit (DMA < 0) y de verde 🟢 los acuíferos con disponibilidad (DMA > 0). ¡Mueve un mapa y el otro te seguirá!")
                     
-                    if st.checkbox("🗺️ Cargar mapas comparativos (pueden tardar unos segundos)", key="chk_mapas_comparativos"):
-                        with st.spinner("Cargando geometrías oficiales de CONAGUA..."):
+                    cargar_mapas = st.checkbox(
+                        "🗺️ Cargar mapas comparativos (pueden tardar unos segundos)", 
+                        key="chk_mapas_comparativos"
+                    )
+
+                    if cargar_mapas:
+                        with st.spinner("Construyendo visualización geográfica de alta velocidad..."):
                             gdf_maestro = obtener_datos_maestros_compartidos()
                         
                             if gdf_maestro is not None and not df_riesgo.empty:
-                                # Normalizamos claves para el cruce (assign devuelve una copia: el objeto compartido NO se modifica)
                                 gdf_maestro = gdf_maestro.assign(CLV_ACUI=normalizar_serie_clave(gdf_maestro['CLV_ACUI']))
-                                df_riesgo['Clave_Str'] = df_riesgo['Clave'].astype(str).str.zfill(4)
+                                df_riesgo_local = df_riesgo.copy()
+                                df_riesgo_local['Clave_Str'] = df_riesgo_local['Clave'].astype(str).str.zfill(4)
                             
-                                gdf_mapa = gdf_maestro.merge(df_riesgo, left_on='CLV_ACUI', right_on='Clave_Str', how='inner')
+                                gdf_mapa = gdf_maestro.merge(df_riesgo_local, left_on='CLV_ACUI', right_on='Clave_Str', how='inner')
                             
                                 if not gdf_mapa.empty:
-                                    # SANITIZAR DATOS PARA FOLIUM
+                                    # Optimización: Simplificación geométrica para escala nacional (acelera render)
+                                    try:
+                                        gdf_mapa['geometry'] = gdf_mapa['geometry'].simplify(tolerance=0.005)
+                                    except Exception:
+                                        pass
+
+                                    # Sanitizar textos para evitar errores en JavaScript
                                     for col in gdf_mapa.columns:
                                         if col != 'geometry':
                                             gdf_mapa[col] = gdf_mapa[col].astype(str)
 
                                     def semaforo_hidrico(valor):
-                                        if pd.isna(valor) or valor == "N/D" or valor == "nan": return "#9e9d9e" # Gris institucional
+                                        if pd.isna(valor) or valor in ("N/D", "nan", "None", ""): 
+                                            return "#9e9d9e"  # Gris institucional
                                         try:
-                                            # Rojo Institucional si es Déficit, Verde Institucional si es Superávit
                                             return "#9f2241" if float(valor) < 0 else "#285c4d"
-                                        except: return "#9e9d9e"
+                                        except (ValueError, TypeError):
+                                            return "#9e9d9e"
 
-                                    centroide = gdf_mapa.geometry.unary_union.centroid
+                                    # Centroide instantáneo sin sobrecargar CPU
+                                    minx, miny, maxx, maxy = gdf_mapa.total_bounds
+                                    centro_lat = (miny + maxy) / 2.0
+                                    centro_lon = (minx + maxx) / 2.0
                                 
                                     m_dual = plugins.DualMap(
-                                        location=[centroide.y, centroide.x], 
+                                        location=[centro_lat, centro_lon], 
                                         zoom_start=6, 
                                         layout='horizontal',
                                         tiles=None 
@@ -717,25 +809,25 @@ if "datos_reporte_nacional" in st.session_state:
                                         <div style="position: absolute; top: 15px; left: 25%; transform: translateX(-50%); z-index: 9999; 
                                                     background-color: white; padding: 6px 20px; border-radius: 20px; 
                                                     box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-family: 'Segoe UI', sans-serif; 
-                                                    font-size: 15px; font-weight: bold; color: #691C32; border: 2px solid #691C32;">
+                                                    font-size: 14px; font-weight: bold; color: #691C32; border: 2px solid #691C32;">
                                             Disponibilidad {anio_comparacion}
                                         </div>
                                         <div style="position: absolute; top: 15px; left: 75%; transform: translateX(-50%); z-index: 9999; 
                                                     background-color: white; padding: 6px 20px; border-radius: 20px; 
                                                     box-shadow: 0 4px 6px rgba(0,0,0,0.3); font-family: 'Segoe UI', sans-serif; 
-                                                    font-size: 15px; font-weight: bold; color: #244062; border: 2px solid #244062;">
+                                                    font-size: 14px; font-weight: bold; color: #244062; border: 2px solid #244062;">
                                             Disponibilidad {anio_procesado}
                                         </div>
                                     """
                                     m_dual.get_root().html.add_child(folium.Element(titulos_flotantes))
 
-                                    # 6. MAPA IZQUIERDO (AÑO HISTÓRICO)
+                                    # Capa Mapa Izquierdo (Histórico)
                                     folium.GeoJson(
                                         gdf_mapa,
                                         name=f"Año {anio_comparacion}",
                                         style_function=lambda feature: {
                                             'fillColor': semaforo_hidrico(feature['properties'].get(f'DMA {anio_comparacion}')),
-                                            'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
+                                            'color': '#333333', 'weight': 0.7, 'fillOpacity': 0.75
                                         },
                                         tooltip=folium.GeoJsonTooltip(
                                             fields=['NOM_ACUI', f'DMA {anio_comparacion}'], 
@@ -743,13 +835,13 @@ if "datos_reporte_nacional" in st.session_state:
                                         )
                                     ).add_to(m_dual.m1)
 
-                                    # 7. MAPA DERECHO (AÑO PROCESADO)
+                                    # Capa Mapa Derecho (Procesado)
                                     folium.GeoJson(
                                         gdf_mapa,
                                         name=f"Año {anio_procesado}",
                                         style_function=lambda feature: {
                                             'fillColor': semaforo_hidrico(feature['properties'].get('Disponibilidad (DMA)')),
-                                            'color': 'black', 'weight': 0.5, 'fillOpacity': 0.7
+                                            'color': '#333333', 'weight': 0.7, 'fillOpacity': 0.75
                                         },
                                         tooltip=folium.GeoJsonTooltip(
                                             fields=['NOM_ACUI', 'Disponibilidad (DMA)'], 
@@ -757,28 +849,32 @@ if "datos_reporte_nacional" in st.session_state:
                                         )
                                     ).add_to(m_dual.m2)
 
-                                    # Renderizar en Streamlit
-                                    st_folium(m_dual, use_container_width=True, height=600, returned_objects=[])
+                                    # Renderizado unidireccional directo (sin eventos de retorno que causen reruns)
+                                    import streamlit.components.v1 as _components
+                                    mapa_html = m_dual.get_root().render()
+                                    _components.html(mapa_html, height=620)
                                 else:
                                     st.warning("No se encontraron coincidencias geográficas para estos acuíferos.")
 
-            # --- TAB 6: RESUMEN EJECUTIVO (MACRO-BALANCE Y PARETO) ---
+                _renderizar_mapas_dual(df_riesgo, anio_comparacion, anio_procesado, activar_tendencia)
+
+            # --- TAB 6: BALANCE HIDROLÓGICO CONSOLIDADO Y CONCENTRACIÓN DEL DÉFICIT ---
             with tab_ejecutiva:
-                st.write("Visión Estratégica: Balance Hídrico Global y Focalización de la Sobreexplotación.")
+                st.write("Visión Estratégica: Balance Hidrológico Consolidado y Concentración del Déficit.")
                 
                 col_exec1, col_exec2 = st.columns(2)
                 
                 with col_exec1:
-                    # 1. MACRO-WATERFALL (Contabilidad del Agua)
-                    r_tot = df_filtrado['Recarga (R)'].sum()
-                    dnc_tot = df_filtrado['DNC'].sum()
-                    veas_tot = df_filtrado['VEAS'].sum()
-                    dma_tot = df_filtrado['Disponibilidad (DMA)'].sum()
+                    # 1. MACRO-WATERFALL (Contabilidad del Agua Oficial)
+                    r_tot = pd.to_numeric(df_filtrado['Recarga (R)'], errors='coerce').sum()
+                    dnc_tot = pd.to_numeric(df_filtrado['DNC'], errors='coerce').sum()
+                    veas_tot = pd.to_numeric(df_filtrado['VEAS'], errors='coerce').sum()
+                    dma_tot = pd.to_numeric(df_filtrado['Disponibilidad (DMA)'], errors='coerce').sum()
                     
                     fig_macro = go.Figure(go.Waterfall(
                         orientation="v",
                         measure=["relative", "relative", "relative", "total"],
-                        x=["1. Recarga (Ingresos)", "2. DNC (Naturaleza)", "3. VEAS (Concesiones)", "4. Saldo Neto (DMA)"],
+                        x=["1. Recarga Total Media Anual (R)", "2. Descarga Natural Comprometida (DNC)", "3. Volumen Concesionado (VEAS)", "4. Disponibilidad Media Anual (DMA)"],
                         textposition="outside",
                         text=[f"+{r_tot:,.1f}", f"-{dnc_tot:,.1f}", f"-{veas_tot:,.1f}", f"{dma_tot:,.1f}"],
                         y=[r_tot, -dnc_tot, -veas_tot, dma_tot],
@@ -788,17 +884,18 @@ if "datos_reporte_nacional" in st.session_state:
                         totals={"marker": {"color": "#b38e5d" if dma_tot >= 0 else "#691c32"}} # Dorado o Guinda Oscuro
                     ))
                     fig_macro.update_layout(
-                        title="Contabilidad Hídrica Global (Suma del Filtro Actual)",
+                        title="Balance Hidrológico Consolidado (Suma del Filtro Actual)",
                         height=500, margin=dict(t=75, b=50)
                     )
                     st.plotly_chart(fig_macro, use_container_width=True)
                     
                 with col_exec2:
                     # 2. CURVA DE PARETO (Focalización del Déficit)
-                    df_deficit = df_filtrado[df_filtrado['Disponibilidad (DMA)'] < 0].copy()
+                    dma_serie_p = pd.to_numeric(df_filtrado['Disponibilidad (DMA)'], errors='coerce')
+                    df_deficit = df_filtrado[dma_serie_p < 0].copy()
                     
                     if not df_deficit.empty:
-                        df_deficit['Deficit_Abs'] = df_deficit['Disponibilidad (DMA)'].abs()
+                        df_deficit['Deficit_Abs'] = dma_serie_p[dma_serie_p < 0].abs()
                         df_deficit = df_deficit.sort_values(by='Deficit_Abs', ascending=False)
                         df_deficit['Porcentaje_Acumulado'] = (df_deficit['Deficit_Abs'].cumsum() / df_deficit['Deficit_Abs'].sum()) * 100
                         
@@ -814,10 +911,10 @@ if "datos_reporte_nacional" in st.session_state:
                         )
                         
                         fig_pareto.update_layout(
-                            title="Curva de Pareto: ¿Qué acuíferos concentran la sobreexplotación?",
+                            title="Concentración Acumulada del Déficit (Análisis de Pareto)",
                             height=500, margin=dict(t=75, b=50), showlegend=False
                         )
-                        fig_pareto.update_yaxes(title_text="Déficit Absoluto (hm³)", secondary_y=False)
+                        fig_pareto.update_yaxes(title_text="Volumen de Déficit |DMA| (hm³)", secondary_y=False)
                         fig_pareto.update_yaxes(title_text="Porcentaje Acumulado (%)", range=[0, 105], secondary_y=True)
                         
                         st.plotly_chart(fig_pareto, use_container_width=True)
@@ -827,55 +924,59 @@ if "datos_reporte_nacional" in st.session_state:
             with tab_gemelo:
                 @st.fragment
                 def _renderizar_gemelo(df_filtrado):
-                    st.write("### 🔮 Simulador de Escenarios (What-If)")
-                    st.caption("Ajusta las variables climáticas y de demanda para predecir el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
+                    st.write("### 🔮 Simulación de Escenarios de Disponibilidad")
+                    st.caption("Ajusta las variables hidroclimáticas y de extracción para proyectar el impacto en la disponibilidad futura de la región seleccionada. (Los cambios son simulados y no afectan la base de datos oficial).")
                 
                     with st.container(border=True):
                         col_sim1, col_sim2 = st.columns(2)
                         var_clima = col_sim1.slider(
-                            "🌧️ Efecto Cambio Climático en Recarga (%)", 
+                            "🌧️ Variación en la Recarga Total (R) [%]", 
                             min_value=-50, max_value=50, value=0, step=1, 
                             help="Simula periodos de sequía prolongada (valores negativos) o años atípicamente húmedos (valores positivos)."
                         )
                         var_demanda = col_sim2.slider(
-                            "🏭 Crecimiento de Concesiones / Bombeo (%)", 
+                            "🏭 Variación en el Volumen de Extracción (VEAS) [%]", 
                             min_value=-50, max_value=100, value=0, step=1, 
-                            help="Simula el impacto del crecimiento industrial, agrícola o poblacional aumentando las extracciones (VEAS)."
+                            help="Simula el impacto del incremento en concesiones del REPDA o mayor demanda de bombeo."
                         )
 
                     # ==========================================
-                    # MOTOR MATEMÁTICO DEL GEMELO DIGITAL
+                    # MOTOR MATEMÁTICO DEL SIMULADOR
                     # ==========================================
                     df_sim = df_filtrado.copy()
+                    r_orig = pd.to_numeric(df_sim['Recarga (R)'], errors='coerce').fillna(0.0)
+                    veas_orig = pd.to_numeric(df_sim['VEAS'], errors='coerce').fillna(0.0)
+                    dma_orig = pd.to_numeric(df_sim['Disponibilidad (DMA)'], errors='coerce').fillna(0.0)
+                    dnc_orig = pd.to_numeric(df_sim['DNC'], errors='coerce').fillna(0.0)
                 
                     # 1. Calculamos el volumen diferencial (Delta) exacto generado por los sliders
-                    delta_recarga = df_sim['Recarga (R)'] * (var_clima / 100.0)
-                    delta_veas = df_sim['VEAS'] * (var_demanda / 100.0)
+                    delta_recarga = r_orig * (var_clima / 100.0)
+                    delta_veas = veas_orig * (var_demanda / 100.0)
                 
                     # 2. Aplicamos el Delta a los totales para visualización
-                    df_sim['Recarga_Simulada'] = df_sim['Recarga (R)'] + delta_recarga
-                    df_sim['VEAS_Simulado'] = df_sim['VEAS'] + delta_veas
+                    df_sim['Recarga_Simulada'] = r_orig + delta_recarga
+                    df_sim['VEAS_Simulado'] = veas_orig + delta_veas
                 
                     # 3. Sumamos/Restamos el Delta directamente a la DMA original (Evita errores de redondeo)
-                    df_sim['DMA_Simulada'] = (df_sim['Disponibilidad (DMA)'] + delta_recarga - delta_veas).round(6)
+                    df_sim['DMA_Simulada'] = (dma_orig + delta_recarga - delta_veas).round(6)
                 
                     # Calcular Impactos Macro
                     r_tot_sim = df_sim['Recarga_Simulada'].sum()
-                    dnc_tot = df_sim['DNC'].sum() 
+                    dnc_tot = dnc_orig.sum() 
                     veas_tot_sim = df_sim['VEAS_Simulado'].sum()
                     dma_tot_sim = df_sim['DMA_Simulada'].sum()
-                    dma_tot_original = df_filtrado['Disponibilidad (DMA)'].sum()
+                    dma_tot_original = dma_orig.sum()
                 
                     diferencia_neta = dma_tot_sim - dma_tot_original
 
                     # Encontrar acuíferos críticos (Nuevos) y Agravados (Peores)
-                    df_sim['Estado_Original'] = np.where(df_sim['Disponibilidad (DMA)'] < 0, 'Déficit', 'Superávit')
+                    df_sim['Estado_Original'] = np.where(dma_orig < 0, 'Déficit', 'Superávit')
                     df_sim['Estado_Simulado'] = np.where(df_sim['DMA_Simulada'] < 0, 'Déficit', 'Superávit')
                 
                     # 1. Los que acaban de pasar a números rojos
                     cond_nuevos = (df_sim['Estado_Original'] == 'Superávit') & (df_sim['Estado_Simulado'] == 'Déficit')
                     # 2. Los que ya estaban en rojo y perdieron AÚN MÁS agua
-                    cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < df_sim['Disponibilidad (DMA)'])
+                    cond_agravados = (df_sim['Estado_Original'] == 'Déficit') & (df_sim['DMA_Simulada'] < dma_orig)
                 
                     df_sim['Categoria_Alerta'] = "Sin peligro crítico"
                     df_sim.loc[cond_nuevos, 'Categoria_Alerta'] = "🚨 Nuevo Déficit"
@@ -897,7 +998,7 @@ if "datos_reporte_nacional" in st.session_state:
                 
                     col_res2.metric("Total Acuíferos en Déficit", f"{total_deficit_sim}", f"+{nuevos_count} nuevos | {agravados_count} agravados", delta_color="inverse")
                 
-                    diferencia_recarga = r_tot_sim - df_filtrado['Recarga (R)'].sum()
+                    diferencia_recarga = r_tot_sim - r_orig.sum()
                     col_res3.metric("Impacto en Recarga", f"{r_tot_sim:,.1f} hm³", f"{diferencia_recarga:,.1f} hm³", delta_color="normal")
 
                     st.divider()
@@ -908,7 +1009,7 @@ if "datos_reporte_nacional" in st.session_state:
                         fig_sim_macro = go.Figure(go.Waterfall(
                             orientation="v",
                             measure=["relative", "relative", "relative", "total"],
-                            x=["1. Recarga Simulada", "2. DNC", "3. Concesiones Simuladas", "4. DMA Proyectada"],
+                            x=["1. Recarga Total Simulada", "2. DNC", "3. VEAS Simulado", "4. DMA Proyectada"],
                             textposition="outside",
                             text=[f"+{r_tot_sim:,.1f}", f"-{dnc_tot:,.1f}", f"-{veas_tot_sim:,.1f}", f"{dma_tot_sim:,.1f}"],
                             y=[r_tot_sim, -dnc_tot, -veas_tot_sim, dma_tot_sim],
@@ -946,7 +1047,7 @@ if "datos_reporte_nacional" in st.session_state:
         st.subheader(f"📑 Resumen de Balances ({anio_procesado})")
         
         def color_semaforo(val):
-            if isinstance(val, (int, float)):
+            if isinstance(val, (int, float)) and not pd.isna(val):
                 # Fondo muy suave: Rosado institucional para negativo, Verde claro para positivo
                 return f"background-color: {'#f5e6e8' if val < 0 else '#e8f0ec'}; color: {'#691c32' if val < 0 else '#1a3b32'}; font-weight: bold;"
             return ""
@@ -955,7 +1056,8 @@ if "datos_reporte_nacional" in st.session_state:
         if activar_tendencia and 'Evolución DMA (hm³)' in df_filtrado.columns:
             col_c.append('Evolución DMA (hm³)')
             
-        st.dataframe(df_filtrado.drop(columns=["Etiqueta_Busqueda", "ruta_fisica"], errors='ignore').style.map(color_semaforo, subset=col_c), width="stretch", hide_index=True)
+        df_mostrar = df_filtrado.drop(columns=["Etiqueta_Busqueda", "ruta_fisica"], errors='ignore').copy().fillna("N/D")
+        st.dataframe(df_mostrar.style.map(color_semaforo, subset=col_c), width="stretch", hide_index=True)
 
         # -----------------------------------------------------------
         # 🚀 DESCARGAS ENTERPRISE: MULTITHREADING A DISCO
@@ -979,9 +1081,12 @@ if "datos_reporte_nacional" in st.session_state:
                                 
                                 # 1. Resumen Maestro Nacional a disco temporal
                                 ruta_resumen = os.path.join(USER_TEMP_DIR, f"00_Resumen_Nacional_{anio_procesado}.xlsx")
-                                df_maestro.drop(columns=['Etiqueta_Busqueda', 'ruta_fisica'], errors='ignore').to_excel(ruta_resumen, index=False, sheet_name="Resumen_Nacional")
+                                df_maestro.drop(columns=['Etiqueta_Busqueda', 'ruta_fisica'], errors='ignore').fillna("N/D").to_excel(ruta_resumen, index=False, sheet_name="Resumen_Nacional")
                                 z.write(ruta_resumen, arcname=f"00_Resumen_Nacional_{anio_procesado}.xlsx")
-                                #os.remove(ruta_resumen)
+                                try:
+                                    os.remove(ruta_resumen)
+                                except OSError:
+                                    pass
                                 
                                 # 2. Generación Multi-hilo de Excels (Velocidad x8)
                                 st.write("⚡ Calculando matrices en paralelo...")
