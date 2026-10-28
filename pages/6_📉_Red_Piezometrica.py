@@ -670,6 +670,105 @@ if df_ac.empty:
 pozos_disponibles = sorted(df_ac['Pozo'].astype(str).unique().tolist())
 
 # =======================================================
+# ⏱️ 4.2 MOTOR DE SINCRONIZACIÓN TEMPORAL E INTERPOLACIÓN
+# =======================================================
+def obtener_red_sincronizada(df_ac_completo, anio_objetivo, var_nombre='Carga_Hidraulica', modo="interpolado", ventana_tolerancia=3):
+    """
+    Sincroniza temporalmente la red de pozos para un año objetivo.
+    - modo 'interpolado': Si el pozo tiene dato en el año, lo usa. Si no, interpola o proyecta por tendencia si el dato más reciente está a <= ventana_tolerancia años.
+    - modo 'estricto': Solo pozos con medición en el año exacto.
+    """
+    filas_sincronizadas = []
+    pozos_unicos = df_ac_completo['Pozo'].unique()
+    
+    for pz in pozos_unicos:
+        df_pz = df_ac_completo[df_ac_completo['Pozo'] == pz].sort_values(by='Año').dropna(subset=['Año', 'Latitud', 'Longitud'])
+        if df_pz.empty:
+            continue
+        
+        lat = float(df_pz.iloc[0]['Latitud'])
+        lon = float(df_pz.iloc[0]['Longitud'])
+        elev = float(df_pz.iloc[0]['Elev.Terr']) if ('Elev.Terr' in df_pz.columns and pd.notna(df_pz.iloc[0]['Elev.Terr'])) else np.nan
+        
+        # 1. Comprobar si existe medición exacta en anio_objetivo
+        df_exacto = df_pz[df_pz['Año'] == anio_objetivo].dropna(subset=[var_nombre])
+        if not df_exacto.empty:
+            val = float(df_exacto.iloc[0][var_nombre])
+            pne = float(df_exacto.iloc[0]['Profundidad_NE']) if ('Profundidad_NE' in df_exacto.columns and pd.notna(df_exacto.iloc[0]['Profundidad_NE'])) else np.nan
+            ch = float(df_exacto.iloc[0]['Carga_Hidraulica']) if ('Carga_Hidraulica' in df_exacto.columns and pd.notna(df_exacto.iloc[0]['Carga_Hidraulica'])) else np.nan
+            filas_sincronizadas.append({
+                'Pozo': pz,
+                'Latitud': lat,
+                'Longitud': lon,
+                'Elev.Terr': elev,
+                'Año': int(anio_objetivo),
+                'Año_Medido': int(anio_objetivo),
+                'Profundidad_NE': pne,
+                'Carga_Hidraulica': ch,
+                var_nombre: val,
+                'Tipo_Dato': 'Medición Real'
+            })
+            continue
+            
+        # Si el modo es estricto, no se interpola
+        if modo == "estricto":
+            continue
+            
+        # 2. Si el modo es interpolado, verificar si se puede interpolar o proyectar
+        df_validos = df_pz.dropna(subset=['Año', var_nombre])
+        if len(df_validos) < 1:
+            continue
+            
+        anios = df_validos['Año'].values
+        vals = df_validos[var_nombre].values
+        min_a, max_a = int(anios.min()), int(anios.max())
+        
+        # A. Interpolación entre dos años existentes
+        if min_a <= anio_objetivo <= max_a:
+            val_interp = float(np.interp(anio_objetivo, anios, vals))
+            pne_interp = (elev - val_interp) if (pd.notna(elev) and var_nombre == 'Carga_Hidraulica') else (val_interp if var_nombre == 'Profundidad_NE' else np.nan)
+            ch_interp = val_interp if var_nombre == 'Carga_Hidraulica' else ((elev - val_interp) if pd.notna(elev) else np.nan)
+            filas_sincronizadas.append({
+                'Pozo': pz,
+                'Latitud': lat,
+                'Longitud': lon,
+                'Elev.Terr': elev,
+                'Año': int(anio_objetivo),
+                'Año_Medido': int(anios[np.abs(anios - anio_objetivo).argmin()]),
+                'Profundidad_NE': pne_interp,
+                'Carga_Hidraulica': ch_interp,
+                var_nombre: val_interp,
+                'Tipo_Dato': 'Interpolación Temporal'
+            })
+        # B. Proyección temporal hacia adelante o hacia atrás si está dentro de la ventana de tolerancia
+        elif abs(anio_objetivo - max_a) <= ventana_tolerancia or abs(anio_objetivo - min_a) <= ventana_tolerancia:
+            if len(df_validos) >= 2:
+                z_coef = np.polyfit(anios, vals, 1)
+                val_proy = float(np.polyval(z_coef, anio_objetivo))
+            else:
+                val_proy = float(vals[-1] if anio_objetivo > max_a else vals[0])
+                
+            pne_proy = (elev - val_proy) if (pd.notna(elev) and var_nombre == 'Carga_Hidraulica') else (val_proy if var_nombre == 'Profundidad_NE' else np.nan)
+            ch_proy = val_proy if var_nombre == 'Carga_Hidraulica' else ((elev - val_proy) if pd.notna(elev) else np.nan)
+            filas_sincronizadas.append({
+                'Pozo': pz,
+                'Latitud': lat,
+                'Longitud': lon,
+                'Elev.Terr': elev,
+                'Año': int(anio_objetivo),
+                'Año_Medido': int(max_a if anio_objetivo > max_a else min_a),
+                'Profundidad_NE': pne_proy,
+                'Carga_Hidraulica': ch_proy,
+                var_nombre: val_proy,
+                'Tipo_Dato': 'Proyección por Tendencia'
+            })
+            
+    df_sync = pd.DataFrame(filas_sincronizadas)
+    if not df_sync.empty:
+        df_sync = df_sync.dropna(subset=[var_nombre, 'Latitud', 'Longitud'])
+    return df_sync
+
+# =======================================================
 # 🗺️ 5. POLÍGONO OFICIAL Y GEOLOGÍA
 # =======================================================
 @st.cache_resource(show_spinner=False)
@@ -781,9 +880,9 @@ def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None
     if not PYKRIGE_INSTALADO:
         return None, "Falta instalar 'pykrige' (pip install pykrige)", None, None, None, None, None, None, None, None, None
         
-    x = df_puntos['Longitud'].values
-    y = df_puntos['Latitud'].values
-    z = df_puntos[variable].values
+    x = np.asarray(df_puntos['Longitud'].values, dtype=np.float64)
+    y = np.asarray(df_puntos['Latitud'].values, dtype=np.float64)
+    z = np.asarray(df_puntos[variable].values, dtype=np.float64)
     
     if bounds_limite is not None:
         min_x, min_y, max_x, max_y = bounds_limite
@@ -797,32 +896,40 @@ def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None
         min_x, max_x = x.min() - margen_x, x.max() + margen_x
         min_y, max_y = y.min() - margen_y, y.max() + margen_y
     
-    grid_x = np.linspace(min_x, max_x, resolucion)
-    grid_y = np.linspace(min_y, max_y, resolucion)
+    grid_x = np.linspace(min_x, max_x, resolucion, dtype=np.float64)
+    grid_y = np.linspace(min_y, max_y, resolucion, dtype=np.float64)
     X, Y = np.meshgrid(grid_x, grid_y)
     
     props_kriging = {}
     try:
         v_model = 'linear'
         v_kwargs = {}
-        if 'Lineal' in modelo_param: v_model = 'linear'
-        elif 'Esférico' in modelo_param: v_model = 'spherical'
-        elif 'Exponencial' in modelo_param: v_model = 'exponential'
-        elif 'Gaussiano' in modelo_param: v_model = 'gaussian'
-        elif 'Square root' in modelo_param: 
+        var_z = float(np.var(z)) if np.var(z) > 0 else 1.0
+        rango_geom = max(0.01, float(np.hypot(x.max()-x.min(), y.max()-y.min())))
+
+        if 'Lineal' in modelo_param: 
+            v_model = 'linear'
+        elif 'Esférico' in modelo_param: 
+            v_model = 'spherical'
+        elif 'Exponencial' in modelo_param: 
+            v_model = 'exponential'
+        elif 'Gaussiano' in modelo_param: 
+            v_model = 'gaussian'
+        elif 'Square root' in modelo_param or 'Raíz Cuadrada' in modelo_param: 
             v_model = 'power'
-            v_kwargs['variogram_parameters'] = {'degree': 0.5}
+            v_kwargs['variogram_parameters'] = {'scale': var_z, 'exponent': 0.5, 'nugget': 0.0}
         elif 'Stable' in modelo_param: 
             v_model = 'power'
-            v_kwargs['variogram_parameters'] = {'degree': 1.5}
+            v_kwargs['variogram_parameters'] = {'scale': var_z, 'exponent': 1.5, 'nugget': 0.0}
         elif 'Logarítmico' in modelo_param:
             v_model = 'custom'
             v_kwargs['variogram_function'] = lambda p, d: p[0] * np.log1p(d) + p[1]
-            v_kwargs['variogram_parameters'] = [np.var(z), 0.0]
+            v_kwargs['variogram_parameters'] = [var_z, 0.0]
         elif 'Cúbico' in modelo_param:
             v_model = 'custom'
+            p0 = var_z / (rango_geom**3)
             v_kwargs['variogram_function'] = lambda p, d: p[0] * (d**3) + p[1]
-            v_kwargs['variogram_parameters'] = [0.0, np.var(z)]
+            v_kwargs['variogram_parameters'] = [p0, 0.0]
 
         ok = OrdinaryKriging(x, y, z, variogram_model=v_model, verbose=False, enable_plotting=False, **v_kwargs)
         Z, ss = ok.execute('grid', grid_x, grid_y)
@@ -840,11 +947,17 @@ def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None
         ss_res = np.sum((exp_semi - theo_semi)**2)
         ss_tot = np.sum((exp_semi - np.mean(exp_semi))**2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-        fit_range = ok.variogram_model_parameters[1] if v_model not in ['linear', 'power', 'custom'] else "N/A"
+        
+        fit_range = "N/A"
+        if v_model not in ['linear', 'power', 'custom'] and hasattr(ok, 'variogram_model_parameters'):
+            try:
+                fit_range = ok.variogram_model_parameters[1]
+            except Exception:
+                fit_range = "N/A"
         
         props_kriging = {
             "Determination (R²)": f"{r_squared:.4f}",
-            "Fitting Range": f"{fit_range:.2f}" if isinstance(fit_range, float) else "N/A",
+            "Fitting Range": f"{fit_range:.2f}" if isinstance(fit_range, (int, float)) else "N/A",
             "Samples": str(len(x)),
             "Lag Distance": f"{np.mean(np.diff(exp_lags)):.4f}",
             "Max Distance": f"{np.max(exp_lags):.4f}"
@@ -986,7 +1099,17 @@ def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_f
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    dy, dx = np.gradient(Z, grid_y, grid_x)
+    
+    # Conversión geométrica métrica (WGS84) para gradiente físico real en m/m
+    lat_media = float(np.mean(grid_y))
+    m_por_deg_lat = 111132.954
+    m_por_deg_lon = 111412.84 * np.cos(np.radians(lat_media))
+    
+    step_x_m = float(abs(grid_x[1] - grid_x[0])) * m_por_deg_lon if len(grid_x) > 1 else 100.0
+    step_y_m = float(abs(grid_y[1] - grid_y[0])) * m_por_deg_lat if len(grid_y) > 1 else 100.0
+    
+    dy, dx = np.gradient(Z, step_y_m, step_x_m)
+    # Ley de Darcy: flujo va en sentido contrario al gradiente de carga hidráulica (-gradiente)
     Vx, Vy = (-dx, -dy) if variable == 'Carga_Hidraulica' else (dx, dy)
         
     magnitude = np.sqrt(Vx**2 + Vy**2)
@@ -1033,7 +1156,8 @@ def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_f
     for lo, la, vx, vy, mg, az in zip(lons, lats, v_x, v_y, mags, azimut):
         rec = {
             "LONGITUD": round(float(lo), 6), "LATITUD": round(float(la), 6),
-            "GRADIENTE": round(float(mg), 5), "AZIMUT_DEG": round(float(az), 1),
+            "GRADIENTE": round(float(mg), 6), "GRAD_M_KM": round(float(mg) * 1000.0, 3),
+            "AZIMUT_DEG": round(float(az), 1),
             "VX": round(float(vx), 5), "VY": round(float(vy), 5)
         }
         data_records.append(rec)
@@ -1068,11 +1192,11 @@ with st.container(border=True):
     col_i1.metric("Pozos Registrados", total_pozos)
     col_i2.metric("Pozos Activos (≤ 3 años)", pozos_activos, f"{porcentaje_activos:.0f}% Operatividad", delta_color="normal" if porcentaje_activos > 70 else "inverse")
 
-    if area_actual > 0:
-        densidad = area_actual / pozos_activos if pozos_activos > 0 else 0
+    if area_actual > 0 and pozos_activos > 0:
+        densidad = area_actual / pozos_activos
         col_i3.metric("Densidad Espacial", f"1 pozo / {densidad:.1f} km²")
     else:
-        col_i3.metric("Densidad Espacial", "N/D")
+        col_i3.metric("Densidad Espacial", "N/D", "Sin pozos activos")
 
     col_i4.metric("Sin Datos Recientes", total_pozos - pozos_activos, "Pozos Desatendidos", delta_color="inverse")
 
@@ -1110,16 +1234,37 @@ with tab_mapa:
             with tab_params:
                 st.markdown("<p style='font-size:12px; color:#64748B;'>Ajusta los parámetros matemáticos. El modelo se recalculará automáticamente.</p>", unsafe_allow_html=True)
                 
-                with st.expander("1. Modelo Matemático", expanded=True):
+                with st.expander("1. Sincronización Temporal y Variograma", expanded=True):
+                    anios_disp = sorted([int(a) for a in df_ac['Año'].dropna().unique().tolist()])
+                    anios_con_pozos = df_ac.groupby('Año')['Pozo'].nunique()
+                    anios_validos = [int(a) for a in anios_con_pozos[anios_con_pozos >= 4].index.tolist()]
+                    anio_default = max(anios_validos) if anios_validos else (max(anios_disp) if anios_disp else 2024)
+                    
+                    c_a1, c_a2 = st.columns([1.1, 1.9])
+                    idx_anio = anios_disp.index(anio_default) if anio_default in anios_disp else len(anios_disp)-1
+                    anio_sel = c_a1.selectbox("Año Objetivo:", anios_disp, index=idx_anio)
+                    modo_sync = c_a2.selectbox(
+                        "Sincronización:",
+                        ["Interpolación Dinámica", "Corte Estricto (Sin interpolar)"]
+                    )
+                    
                     var_interp = st.selectbox("Variable a Modelar:", ["Carga Hidráulica (msnm) [Recomendado para flujo]", "Profundidad del Nivel (m)"])
                     var_real = 'Carga_Hidraulica' if "Carga" in var_interp else 'Profundidad_NE'
                     
                     param = st.selectbox("Modelo de Variograma:", [
-                        "Lineal (no nugget)", "Raíz Cuadrada (square root)", "Logarítmico", 
-                        "Stable (0 < k < 2)", "Cúbico", "Esférico (spherical)", "Exponencial (exponential)", "Gaussiano (gaussian)"
+                        "Esférico (spherical)", "Exponencial (exponential)", "Gaussiano (gaussian)", "Lineal (no nugget)", 
+                        "Raíz Cuadrada (square root)", "Logarítmico", "Stable (0 < k < 2)", "Cúbico"
                     ])
-                
-                df_ultimo = df_ac.loc[df_ac.groupby('Pozo')['Año'].idxmax()].dropna(subset=[var_real, 'Latitud', 'Longitud']).copy()
+                    
+                    modo_sync_cod = "interpolado" if "Interpolación" in modo_sync else "estricto"
+                    df_ultimo = obtener_red_sincronizada(df_ac, anio_sel, var_nombre=var_real, modo=modo_sync_cod, ventana_tolerancia=3)
+                    
+                    if not df_ultimo.empty:
+                        n_reales = len(df_ultimo[df_ultimo['Tipo_Dato'] == 'Medición Real'])
+                        n_interp = len(df_ultimo) - n_reales
+                        st.caption(f"📍 **Red {anio_sel}:** `{len(df_ultimo)}` pozos sincronizados (`{n_reales}` reales, `{n_interp}` interp/proy).")
+                    else:
+                        st.caption(f"⚠️ Sin pozos disponibles para el año {anio_sel}.")
                 
                 with st.expander("2. Fronteras del Modelo", expanded=True):
                     geom_activa = poligono_oficial_geom
@@ -1244,9 +1389,16 @@ with tab_mapa:
 
                         geotiff_bytes = generar_geotiff_bytes(Z_masked, bounds)
                         mask_val = ~np.isnan(Z_masked)
-                        df_grid = pd.DataFrame({"LONGITUD": np.round(X[mask_val], 6), "LATITUD": np.round(Y[mask_val], 6), "VALOR": np.round(Z_masked[mask_val], 3)})
-                        geojson_krig = json.dumps({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["LONGITUD"], r["LATITUD"]]}, "properties": {"VALOR": r["VALOR"], "VARIABLE": var_real}} for _, r in df_grid.iterrows()]}, indent=2).encode('utf-8')
-                        shp_krig_zip = empaquetar_shapefile_zip(gpd.GeoDataFrame(df_grid, geometry=[Point(xy) for xy in zip(df_grid["LONGITUD"], df_grid["LATITUD"])], crs="EPSG:4326"), f"kriging_{clave_actual}") if (GEOPANDAS_INSTALADO and not df_grid.empty) else None
+                        lons_k = np.round(X[mask_val], 6)
+                        lats_k = np.round(Y[mask_val], 6)
+                        vals_k = np.round(Z_masked[mask_val], 3)
+                        df_grid = pd.DataFrame({"LONGITUD": lons_k, "LATITUD": lats_k, "VALOR": vals_k})
+                        features_krig = [
+                            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [float(lo), float(la)]}, "properties": {"VALOR": float(vl), "VARIABLE": var_real}}
+                            for lo, la, vl in zip(lons_k, lats_k, vals_k)
+                        ]
+                        geojson_krig = json.dumps({"type": "FeatureCollection", "features": features_krig}).encode('utf-8')
+                        shp_krig_zip = empaquetar_shapefile_zip(gpd.GeoDataFrame(df_grid, geometry=[Point(xy) for xy in zip(lons_k, lats_k)], crs="EPSG:4326"), f"kriging_{clave_actual}") if (GEOPANDAS_INSTALADO and not df_grid.empty) else None
 
                         z_list = []
                         for row in Z_masked:
@@ -1290,13 +1442,17 @@ with tab_mapa:
                                 color_punto = "#9f2241" if z_trend > 0.1 else ("#285c4d" if z_trend < -0.1 else "#b38e5d")
                             else:
                                 color_punto = "#9e9d9e"
+                            tipo_dato_txt = str(row.get('Tipo_Dato', 'Medición Real'))
+                            anio_medido_txt = int(row.get('Año_Medido', row['Año']))
                             features_pozos.append({
                                 "type": "Feature",
                                 "geometry": {"type": "Point", "coordinates": [row['Longitud'], row['Latitud']]},
                                 "properties": {
                                     "Pozo": row['Pozo'],
                                     "Valor": round(row[var_real], 2),
-                                    "Año": row['Año'],
+                                    "Año": int(row['Año']),
+                                    "Año_Medido": anio_medido_txt,
+                                    "Tipo": tipo_dato_txt,
                                     "Color": color_punto,
                                     "Variable": var_real
                                 }
@@ -2230,10 +2386,12 @@ with tab_mapa:
                                     if (popupActivo) popupActivo.remove();
                                     const p = e.features[0].properties;
                                     popupActivo = new maplibregl.Popup().setLngLat(e.lngLat)
-                                        .setHTML(`<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:150px;">
+                                        .setHTML(`<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:160px;">
                                                     <h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">📍 Pozo: ${{p.Pozo}}</h4>
                                                     <b>${{p.Variable}}:</b> ${{p.Valor}}<br>
-                                                    <b>Año de Medición:</b> ${{p.Año}}
+                                                    <b>Año Objetivo:</b> ${{p.Año}}<br>
+                                                    <b>Origen:</b> ${{p.Tipo || 'Medición Real'}}<br>
+                                                    <b>Año Medido:</b> ${{p.Año_Medido || p.Año}}
                                                   </div>`)
                                         .addTo(map);
                                 }});
@@ -2436,44 +2594,61 @@ with tab_hidrograma:
     @st.fragment
     def renderizar_pestaña_hidrograma():
         st.write("Selecciona un pozo de la red de monitoreo para analizar su comportamiento temporal y su tasa de abatimiento matemática.")
-        pozo_sel = st.selectbox("🎯 Filtrar por Pozo de Monitoreo:", pozos_disponibles)
         
-        df_pozo = df_ac[df_ac['Pozo'].astype(str) == str(pozo_sel)].sort_values(by='Año').dropna(subset=['Año', 'Profundidad_NE'])
+        c_h1, c_h2 = st.columns([1.5, 1])
+        pozo_sel = c_h1.selectbox("🎯 Filtrar por Pozo de Monitoreo:", pozos_disponibles)
+        var_hidro = c_h2.radio("Variable a Graficar:", ["Profundidad del Nivel (m)", "Carga Hidráulica (msnm)"], horizontal=True)
+        col_y_hidro = 'Profundidad_NE' if "Profundidad" in var_hidro else 'Carga_Hidraulica'
+        
+        df_pozo_raw = df_ac[df_ac['Pozo'].astype(str) == str(pozo_sel)].dropna(subset=['Año', col_y_hidro])
+        # Promediar si existen mediciones estacionales en el mismo año
+        df_pozo = df_pozo_raw.groupby('Año')[col_y_hidro].mean().reset_index().sort_values(by='Año')
         
         if len(df_pozo) >= 2:
             x = df_pozo['Año'].values
-            y = df_pozo['Profundidad_NE'].values
+            y = df_pozo[col_y_hidro].values
             coeficientes = np.polyfit(x, y, 1)
             pendiente = coeficientes[0] 
             tendencia_y = np.polyval(coeficientes, x)
             
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Última Profundidad Registrada", f"{y[-1]:.2f} m")
+            unidad_txt = "m" if col_y_hidro == 'Profundidad_NE' else "msnm"
+            col_m1.metric("Último Valor Registrado", f"{y[-1]:.2f} {unidad_txt}")
             
-            if pendiente > 0.1:
+            # En Profundidad_NE: pendiente > 0 significa nivel bajando (abatimiento)
+            # En Carga_Hidraulica: pendiente < 0 significa carga bajando (abatimiento)
+            es_abatimiento = (pendiente > 0.1) if col_y_hidro == 'Profundidad_NE' else (pendiente < -0.1)
+            es_recuperacion = (pendiente < -0.1) if col_y_hidro == 'Profundidad_NE' else (pendiente > 0.1)
+            
+            if es_abatimiento:
                 estado, color_linea = "🔴 Abatiéndose", "#9f2241"
-                col_m2.metric("Ritmo de Abatimiento", f"-{pendiente:.2f} m/año", "Caída del Nivel", delta_color="inverse")
-            elif pendiente < -0.1:
+                delta_txt = f"-{abs(pendiente):.2f} m/año"
+                col_m2.metric("Ritmo de Abatimiento", delta_txt, "Pérdida de Nivel", delta_color="inverse")
+            elif es_recuperacion:
                 estado, color_linea = "🟢 Recuperándose", "#285c4d"
-                col_m2.metric("Ritmo de Recuperación", f"+{abs(pendiente):.2f} m/año", "Aumento del Nivel", delta_color="normal")
+                delta_txt = f"+{abs(pendiente):.2f} m/año"
+                col_m2.metric("Ritmo de Recuperación", delta_txt, "Aumento de Nivel", delta_color="normal")
             else:
                 estado, color_linea = "🟡 Estable", "#b38e5d"
-                col_m2.metric("Tasa de Cambio Promedio", f"{pendiente:.2f} m/año", "Estable", delta_color="off")
+                delta_txt = f"{pendiente:.2f} m/año"
+                col_m2.metric("Tasa de Cambio Promedio", delta_txt, "Estable", delta_color="off")
                 
             col_m3.metric("Diagnóstico Físico", estado)
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_pozo['Año'], y=df_pozo['Profundidad_NE'], mode='lines+markers', name='Medición de Campo', line=dict(color='#244062', width=2.5), marker=dict(size=8, color='#b38e5d')))
+            fig.add_trace(go.Scatter(x=df_pozo['Año'], y=df_pozo[col_y_hidro], mode='lines+markers', name='Medición de Campo', line=dict(color='#244062', width=2.5), marker=dict(size=8, color='#b38e5d')))
             ecuacion_txt = f"y = {pendiente:.2f}x {'+' if coeficientes[1]>0 else '-'} {abs(coeficientes[1]):.2f}"
             fig.add_trace(go.Scatter(x=df_pozo['Año'], y=tendencia_y, mode='lines', name=f'Tendencia Histórica ({ecuacion_txt})', line=dict(color=color_linea, width=2, dash='dash')))
 
             mitad_idx = len(x) // 2
             fig.add_annotation(x=x[mitad_idx], y=tendencia_y[mitad_idx], text=f"<b>Pendiente:<br>{pendiente:.2f} m/año</b>", showarrow=True, arrowhead=2, arrowsize=1, ax=40, ay=-40, font=dict(color=color_linea, size=11), arrowcolor=color_linea, bgcolor="rgba(255,255,255,0.9)", bordercolor=color_linea)
 
-            fig.update_layout(title=f"Hidrograma Invertido - Evolución del Nivel Estático (Pozo: {pozo_sel})", yaxis=dict(autorange="reversed"), height=500, margin=dict(t=60, b=40), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            layout_yaxis = dict(autorange="reversed") if col_y_hidro == 'Profundidad_NE' else dict(title="Carga Hidráulica (msnm)")
+            titulo_hidro = f"Evolución Piezométrica ({var_hidro}) - Pozo: {pozo_sel}"
+            fig.update_layout(title=titulo_hidro, yaxis=layout_yaxis, xaxis=dict(title="Año"), height=500, margin=dict(t=60, b=40), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("No hay suficientes datos históricos.")
+            st.warning("No hay suficientes datos históricos para este pozo.")
     renderizar_pestaña_hidrograma()
 
 # --- EJE 4: FORECASTING Y ALERTAS ---
@@ -2484,14 +2659,28 @@ with tab_alertas:
         resultados_alertas = []
         
         for pozo in pozos_disponibles:
-            df_hist = df_ac[df_ac['Pozo'].astype(str) == str(pozo)].sort_values(by='Año').dropna(subset=['Año', 'Profundidad_NE'])
+            df_hist_raw = df_ac[df_ac['Pozo'].astype(str) == str(pozo)].dropna(subset=['Año', 'Profundidad_NE'])
+            df_hist = df_hist_raw.groupby('Año')['Profundidad_NE'].mean().reset_index().sort_values(by='Año')
             if len(df_hist) >= 3: 
                 x, y = df_hist['Año'].values, df_hist['Profundidad_NE'].values
                 z = np.polyfit(x, y, 1)
-                tasa, prof_actual, anio_actual = z[0], y[-1], x[-1]
-                prof_2035 = np.polyval(z, 2035)
+                tasa = float(z[0])
+                prof_actual = float(y[-1])
+                anio_actual = int(x[-1])
+                prof_2035 = max(0.0, float(np.polyval(z, 2035)))
+                anios_dif = max(1, 2035 - anio_actual)
+                caida_estimada = round(tasa * anios_dif, 2) if tasa > 0 else 0.0
+                
                 alerta = "🚨 Crítico" if tasa > 0.5 else ("⚠️ Precaución" if tasa > 0 else "✅ Estable / Sano")
-                resultados_alertas.append({"ID Pozo": str(pozo), "Tasa (m/año)": tasa, "Último Año Medido": int(anio_actual), "Prof. Actual (m)": prof_actual, "Prof. Proyectada 2035 (m)": prof_2035, "Caída Estimada (m)": (prof_2035 - prof_actual) if tasa > 0 else 0.0, "Estatus de Estrés": alerta})
+                resultados_alertas.append({
+                    "ID Pozo": str(pozo), 
+                    "Tasa (m/año)": round(tasa, 2), 
+                    "Último Año Medido": anio_actual, 
+                    "Prof. Actual (m)": round(prof_actual, 2), 
+                    "Prof. Proyectada 2035 (m)": round(prof_2035, 2), 
+                    "Caída Estimada (m)": caida_estimada, 
+                    "Estatus de Estrés": alerta
+                })
                 
         if resultados_alertas:
             df_alertas = pd.DataFrame(resultados_alertas).sort_values(by="Tasa (m/año)", ascending=False)
@@ -2504,34 +2693,41 @@ with tab_alertas:
             
             pozos_criticos = len(df_alertas[df_alertas["Estatus de Estrés"] == "🚨 Crítico"])
             if pozos_criticos > 0:
-                st.error(f"**Justificación Técnica:** Se detectaron {pozos_criticos} pozos con abatimiento crítico.")
+                st.error(f"**Justificación Técnica:** Se detectaron {pozos_criticos} pozos con abatimiento crítico (tasa > 0.50 m/año).")
             else:
-                st.success("La red refleja estabilidad física.")
+                st.success("La red refleja estabilidad física general.")
             
             col_g1, col_g2 = st.columns([1, 1.3])
             with col_g1:
                 st.write("**1. Panorama Global**")
                 fig_bar = px.bar(df_alertas, x="ID Pozo", y="Tasa (m/año)", color="Estatus de Estrés", color_discrete_map={"🚨 Crítico": "#9f2241", "⚠️ Precaución": "#b38e5d", "✅ Estable / Sano": "#285c4d"})
-                fig_bar.add_hline(y=0.5, line_dash="dot", annotation_text="Límite Crítico", line_color="#9f2241")
+                fig_bar.add_hline(y=0.5, line_dash="dot", annotation_text="Límite Crítico (0.5 m/año)", line_color="#9f2241")
                 fig_bar.update_layout(height=450, showlegend=False)
                 st.plotly_chart(fig_bar, use_container_width=True)
             with col_g2:
                 st.write("**2. Proyección y Cálculo**")
                 pozo_demo = st.selectbox("Selecciona un pozo:", df_alertas["ID Pozo"].tolist())
-                df_pozo_demo = df_ac[df_ac['Pozo'].astype(str) == pozo_demo].sort_values(by='Año').dropna(subset=['Año', 'Profundidad_NE'])
+                df_pozo_demo_raw = df_ac[df_ac['Pozo'].astype(str) == pozo_demo].dropna(subset=['Año', 'Profundidad_NE'])
+                df_pozo_demo = df_pozo_demo_raw.groupby('Año')['Profundidad_NE'].mean().reset_index().sort_values(by='Año')
                 x, y = df_pozo_demo['Año'].values, df_pozo_demo['Profundidad_NE'].values
                 z = np.polyfit(x, y, 1)
                 x_proy = np.arange(x[0], 2036)
                 y_proy = np.polyval(z, x_proy)
+                prof_proy_2035 = max(0.0, float(np.polyval(z, 2035)))
                 
                 fig_demo = go.Figure()
-                fig_demo.add_trace(go.Scatter(x=x_proy, y=y_proy, mode='lines', name=f'Regresión Lineal', line=dict(color='#888', width=1.5, dash='dot')))
+                fig_demo.add_trace(go.Scatter(x=x_proy, y=y_proy, mode='lines', name='Regresión Lineal', line=dict(color='#888', width=1.5, dash='dot')))
                 fig_demo.add_trace(go.Scatter(x=x, y=y, mode='markers', name='Datos Reales', marker=dict(color='#244062', size=8)))
-                fig_demo.add_trace(go.Scatter(x=[x[-1]], y=[y[-1]], mode='markers', name=f'Última Medida', marker=dict(color='#b38e5d', size=12, symbol='square')))
-                fig_demo.add_trace(go.Scatter(x=[2035], y=[np.polyval(z, 2035)], mode='markers', name='Proyección 2035', marker=dict(color='#9f2241', size=14, symbol='star')))
+                fig_demo.add_trace(go.Scatter(x=[x[-1]], y=[y[-1]], mode='markers', name='Última Medida', marker=dict(color='#b38e5d', size=12, symbol='square')))
+                fig_demo.add_trace(go.Scatter(x=[2035], y=[prof_proy_2035], mode='markers', name='Proyección 2035', marker=dict(color='#9f2241', size=14, symbol='star')))
+                
                 if z[0] > 0:
                     fig_demo.add_shape(type="line", x0=x[-1], y0=y[-1], x1=2035, y1=y[-1], line=dict(color="gray", width=1, dash="dash"))
-                    fig_demo.add_annotation(x=2035, y=(y[-1] + np.polyval(z, 2035))/2, ax=2035, ay=y[-1], text=f"<b>Caída:<br>{np.polyval(z, 2035) - y[-1]:.1f} m</b>", showarrow=True, arrowhead=2)
+                    fig_demo.add_annotation(x=2035, y=(y[-1] + prof_proy_2035)/2, ax=2035, ay=y[-1], text=f"<b>Caída:<br>{prof_proy_2035 - y[-1]:.1f} m</b>", showarrow=True, arrowhead=2)
+                else:
+                    fig_demo.add_shape(type="line", x0=x[-1], y0=y[-1], x1=2035, y1=y[-1], line=dict(color="gray", width=1, dash="dash"))
+                    fig_demo.add_annotation(x=2035, y=(y[-1] + prof_proy_2035)/2, ax=2035, ay=y[-1], text=f"<b>Recuperación:<br>{y[-1] - prof_proy_2035:.1f} m</b>", showarrow=True, arrowhead=2)
+                    
                 fig_demo.update_layout(yaxis=dict(autorange="reversed"), height=450)
                 st.plotly_chart(fig_demo, use_container_width=True)
     renderizar_pestaña_alertas()
