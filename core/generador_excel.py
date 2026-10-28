@@ -47,6 +47,9 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
         f_tbl_pct = workbook.add_format({'num_format': '0.0', 'align': 'center', 'valign': 'vcenter', 'font_size': 9})
         f_txt_bold = workbook.add_format({'bold': True, 'font_size': 10})
 
+        # Homologación estricta de cambio de almacenamiento a 1 decimal
+        dvs_anualizado = round(float(dvs_anualizado), 1)
+
         # --- FORMATOS PARA CENTRAR ENCABEZADOS DE TABLAS NATIVAS ---
         # (Usando los colores exactos de la paleta Office 2007-2010 de tus capturas)
         f_hdr_nat_ent = workbook.add_format({'bg_color': '#9BBB59', 'font_color': 'white', 'bold': True, 'align': 'center', 'valign': 'vcenter'}) # Medio 11 (Verde)
@@ -70,12 +73,20 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
         valores = dict(zip(df_resumen['Concepto'], df_resumen['Volumen (hm³)'])) 
         def get_val(clave): return round(float(valores.get(clave, 0.0)), 1)
         
-        v_rr, v_eh, v_rv = get_val("Recarga Vertical por Lluvia (Rr)"), get_val("Entradas Horizontales (Eh)"), get_val("Recarga Vertical Resultante (Rv)")
+        v_rr = get_val("Retornos por Riego (Rr)") if "Retornos por Riego (Rr)" in valores else get_val("Recarga Vertical por Lluvia (Rr)")
+        v_eh, v_rv = get_val("Entradas Horizontales (Eh)"), get_val("Recarga Vertical Resultante (Rv)")
         v_ri, v_rtot = get_val("Recarga Incidental (Ri)"), get_val("RECARGA TOTAL (R)")
         v_b, v_etr, v_sh = get_val("Extracción / Bombeo (B)"), get_val("Evapotranspiración (ETR)"), get_val("Salidas Horizontales (Sh)")
-        v_ssb, v_dfb, v_dm = get_val("Salidas Subterráneas (Ssb)"), get_val("Descarga Flujo Base (Dfb)"), get_val("Descarga Manantiales (Dm)")
+        v_ssb = get_val("Salidas de Agua Salobre (Sas)") if "Salidas de Agua Salobre (Sas)" in valores else get_val("Salidas Subterráneas (Ssb)")
+        v_dfb, v_dm = get_val("Descarga Flujo Base (Dfb)"), get_val("Descarga Manantiales (Dm)")
         v_stot = get_val("DESCARGA TOTAL (S)")
         v_dnc = get_val("Descarga Natural Comprometida (DNC)")
+        v_eas = get_val("Entradas de Agua Salobre (Eas)")
+
+        # Si Ri > 0 y v_rv representa la recarga vertical total del balance,
+        # se descuenta v_ri en la fila de Rv para que la sumatoria nativa de la tabla
+        # no duplique la recarga incidental y cumpla exactamente Rv = B + Sh + ETR ± ΔV(S) - Eh - Ri
+        v_rv_tabla = round(v_rv - v_ri, 1) if (v_ri > 0 and round(v_rv + v_rr + v_eh + v_eas, 1) == round(v_stot + dvs_anualizado, 1)) else v_rv
 
         usos_dict = dict(zip(df_usos['Tipo de Uso'].str.upper(), df_usos['Volumen [hm³/año]']))
         def get_uso(nombre): return float(usos_dict.get(nombre, 0.0))
@@ -104,8 +115,8 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
             ("Rr", f_ribbon_ent, v_rr), 
             ("Ri", f_ribbon_ent, v_ri), 
             ("Eh", f_ribbon_ent, v_eh), 
-            ("Ehs", f_ribbon_ent, get_val("Entradas de Agua Salobre (Eas)")),
-            ("Rv", f_ribbon_ent, v_rv), 
+            ("Ehs", f_ribbon_ent, v_eas), 
+            ("Rv", f_ribbon_ent, v_rv_tabla), 
             ("R", f_ribbon_ent, v_rtot),
             ("USO PÚBLICO URBANO", f_ribbon_rep, get_uso("PÚBLICO URBANO")), 
             ("USO AGRÍCOLA", f_ribbon_rep, get_uso("AGRÍCOLA")),
@@ -258,7 +269,7 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
         ws.write(r_res-2, 16, 'Rv = B + Sh + ETR ± ΔV(S) - Eh - Ri', workbook.add_format({'bold': True, 'font_color': '#2F5597', 'font_size': 11}))
         
         # 1. ENTRADAS (Medio 11)
-        data_entradas = [["Rv", v_rv], ["Rr", v_rr], ["Ri", v_ri], ["Eh", v_eh]]
+        data_entradas = [["Rv", v_rv_tabla], ["Rr", v_rr], ["Ri", v_ri], ["Eh", v_eh], ["Eas", v_eas]]
         ws.add_table(r_res, 16, r_res + len(data_entradas) + 1, 17, {
             'data': data_entradas,
             'columns': [
@@ -339,10 +350,46 @@ def generar_excel_matriz(df_resumen, df_eh, df_usos, df_sh, df_etr, df_dvs, df_e
         ws.merge_range(r_e, 1, r_e, 7, 'TOTAL', f_tot_flujos)
         ws.write(r_e, 8, v_eh, f_tot_flujos_num)
 
+        r_cursor = r_e
+
+        # ==========================================
+        # TABLA CONDICIONAL: ENTRADAS DE AGUA SALOBRE (Eas)
+        # ==========================================
+        vol_eas_calc = 0.0
+        if df_eas is not None and not df_eas.empty:
+            vol_eas_calc = pd.to_numeric(df_eas.get('Volumen [hm³/año]'), errors='coerce').fillna(0.0).sum()
+        if vol_eas_calc == 0.0 and v_eas > 0:
+            vol_eas_calc = v_eas
+
+        if vol_eas_calc > 0 and df_eas is not None and not df_eas.empty:
+            r_eas = r_cursor + 3
+            ws.merge_range(r_eas, 1, r_eas, 8, f'ENTRADAS DE AGUA SALOBRE POR FLUJO HORIZONTAL {anio_b}', f_hdr_flujos)
+            for col, txt in enumerate(hdr_flu): ws.write(r_eas+1, col+1, txt, f_hdr_flujos)
+                
+            r_eas_fila = r_eas + 2
+            for _, row in df_eas.iterrows():
+                t = float(row.get('Transmisividad T [m²/s]', 0))
+                grad = float(row.get('Gradiente i', 0))
+                long_b = float(row.get('Longitud B [m]', 0))
+                q_val = (t * grad * long_b) if not (pd.isna(t) or pd.isna(grad) or pd.isna(long_b)) else 0
+
+                ws.write(r_eas_fila, 1, str(row.get('Celda', '')), f_val_txt)
+                ws.write(r_eas_fila, 2, long_b if not pd.isna(long_b) else '', f_val_num1)
+                ws.write(r_eas_fila, 3, float(row.get('Ancho a [m]', 0)) if not pd.isna(row.get('Ancho a [m]')) else '', f_val_num1)
+                ws.write(r_eas_fila, 4, float(row.get('h2-h1 [m]', 0)) if not pd.isna(row.get('h2-h1 [m]')) else '', f_val_num1)
+                ws.write(r_eas_fila, 5, grad if not pd.isna(grad) else '', f_val_num4)
+                ws.write(r_eas_fila, 6, t if not pd.isna(t) else '', f_val_num4)
+                ws.write(r_eas_fila, 7, q_val, f_val_num4)
+                ws.write(r_eas_fila, 8, float(row.get('Volumen [hm³/año]', 0)) if not pd.isna(row.get('Volumen [hm³/año]')) else '', f_val_num1)
+                r_eas_fila += 1
+            ws.merge_range(r_eas_fila, 1, r_eas_fila, 7, 'TOTAL', f_tot_flujos)
+            ws.write(r_eas_fila, 8, v_eas, f_tot_flujos_num)
+            r_cursor = r_eas_fila
+
         # ==========================================
         # TABLA 4: SALIDAS HORIZONTALES 
         # ==========================================
-        r_sh = r_e + 3
+        r_sh = r_cursor + 3
         ws.merge_range(r_sh, 1, r_sh, 8, f'SALIDAS POR FLUJO SUBTERRÁNEO HORIZONTAL {anio_b}', f_hdr_flujos)
         for col, txt in enumerate(hdr_flu): ws.write(r_sh+1, col+1, txt, f_hdr_flujos)
             
