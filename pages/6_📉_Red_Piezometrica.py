@@ -3156,7 +3156,11 @@ with tab_mapa:
                                     // REPDA Nacional Completo MVT (PMTiles 461,914 concesiones)
                                     let pmtilesUrlTab1 = '{url_pmtiles_srv_tab1}';
                                     if (!pmtilesUrlTab1.startsWith('http://') && !pmtilesUrlTab1.startsWith('https://')) {{
-                                        pmtilesUrlTab1 = window.location.origin + pmtilesUrlTab1;
+                                        let baseOrigin = (window.location && window.location.origin && window.location.origin !== 'null') ? window.location.origin : '';
+                                        if (!baseOrigin && document.referrer) {{
+                                            try {{ baseOrigin = new URL(document.referrer).origin; }} catch (err) {{}}
+                                        }}
+                                        pmtilesUrlTab1 = (baseOrigin || '') + pmtilesUrlTab1;
                                     }}
                                     map.addSource('repda-nacional-src', {{
                                         type: 'vector',
@@ -5491,7 +5495,11 @@ with tab_evolucion:
                     // REPDA Nacional Completo MVT (PMTiles 461,914 concesiones)
                     let pmtilesUrlTab2 = '{url_pmtiles_srv_tab2}';
                     if (!pmtilesUrlTab2.startsWith('http://') && !pmtilesUrlTab2.startsWith('https://')) {{
-                        pmtilesUrlTab2 = window.location.origin + pmtilesUrlTab2;
+                        let baseOrigin = (window.location && window.location.origin && window.location.origin !== 'null') ? window.location.origin : '';
+                        if (!baseOrigin && document.referrer) {{
+                            try {{ baseOrigin = new URL(document.referrer).origin; }} catch (err) {{}}
+                        }}
+                        pmtilesUrlTab2 = (baseOrigin || '') + pmtilesUrlTab2;
                     }}
                     map.addSource('repda-nacional-src', {{
                         type: 'vector',
@@ -6978,7 +6986,11 @@ with tab_cobertura:
                     // 8. REPDA Nacional Completo (Vector Tiles PMTiles)
                     let pmtilesUrlTab3 = '{url_pmtiles_srv}';
                     if (!pmtilesUrlTab3.startsWith('http://') && !pmtilesUrlTab3.startsWith('https://')) {{
-                        pmtilesUrlTab3 = window.location.origin + pmtilesUrlTab3;
+                        let baseOrigin = (window.location && window.location.origin && window.location.origin !== 'null') ? window.location.origin : '';
+                        if (!baseOrigin && document.referrer) {{
+                            try {{ baseOrigin = new URL(document.referrer).origin; }} catch (err) {{}}
+                        }}
+                        pmtilesUrlTab3 = (baseOrigin || '') + pmtilesUrlTab3;
                     }}
                     map.addSource('repda-nacional-src', {{
                         type: 'vector',

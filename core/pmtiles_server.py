@@ -103,11 +103,14 @@ def asegurar_servidor_pmtiles(port=PMTILES_PORT):
         except Exception:
             return f"http://127.0.0.1:{port}"
 
+URL_GITHUB_RAW_DEFAULT = "https://raw.githubusercontent.com/JBarreraM89/Ambiente_de_Pruebas_CONAGUA_II/main/static/repda_nacional.pmtiles"
+
 def obtener_url_pmtiles(port=PMTILES_PORT):
     """
     Retorna la URL adecuada para consumir las teselas PMTiles:
-    1. Si existe una variable de entorno o st.secrets 'PMTILES_URL', la usa directamente (ej. CDN / GitHub Releases / Cloudflare R2).
-    2. Si detecta entorno de Streamlit Cloud (o contenedor Linux de producción), retorna la ruta estática '/app/static/repda_nacional.pmtiles'.
+    1. Si existe una variable de entorno o st.secrets 'PMTILES_URL', la usa directamente (ej. CDN / Cloudflare R2 / AWS S3).
+    2. Si detecta entorno de Streamlit Cloud (o contenedor Linux de producción), retorna
+       la URL CDN HTTPS oficial de GitHub Raw / Fastly con soporte nativo de HTTP 206 y CORS (*).
     3. En entorno local de desarrollo (Windows / localhost), asegura el microservicio local en 127.0.0.1:port
        con soporte estricto de HTTP 206 y CORS, y retorna esa URL.
     """
@@ -131,7 +134,7 @@ def obtener_url_pmtiles(port=PMTILES_PORT):
         or (os.path.exists("/app") and not os.path.exists("C:\\"))
     )
     if is_cloud:
-        return "/app/static/repda_nacional.pmtiles"
+        return URL_GITHUB_RAW_DEFAULT
 
     base_srv = asegurar_servidor_pmtiles(port=port)
     return f"{base_srv}/repda_nacional.pmtiles"
