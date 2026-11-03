@@ -67,8 +67,8 @@ def construir_pmtiles_repda(
             COALESCE(SUBSTR(TITULAR, 1, 35), '') as t,
             COALESCE(D_USO_TIT, 'OTROS') as u_raw,
             CAST(ROUND(COALESCE(VOLEXTANUA, 0)) AS BIGINT) as v,
-            LATDEC as lat,
-            LONDEC as lon
+            ROUND(LATDEC, 5) as lat,
+            ROUND(LONDEC, 5) as lon
         FROM '{parquet_path}'
         WHERE LATDEC IS NOT NULL AND LONDEC IS NOT NULL 
           AND LATDEC BETWEEN 14.0 AND 33.5 AND LONDEC BETWEEN -118.5 AND -86.0
@@ -115,13 +115,14 @@ def construir_pmtiles_repda(
         df_z['tx'] = tx
         df_z['ty'] = ty
 
-        # Coordenadas locales de pixel [0, 4096] dentro de la tesela
-        # 0 es el norte (borde superior), 4096 es el sur (borde inferior)
+        # Coordenadas locales de pixel dentro de la tesela con resolución submétrica (extent = 65536)
+        # 0 es el norte (borde superior), 65536 es el sur (borde inferior)
+        extent = 65536
         n = 2.0 ** z
         gx = (df_z['lon'].values + 180.0) / 360.0 * n
         gy = (1.0 - np.arcsinh(np.tan(np.radians(df_z['lat'].values))) / np.pi) / 2.0 * n
-        px = np.clip(np.round((gx - df_z['tx'].values) * 4096).astype(int), 0, 4096)
-        py = np.clip(np.round((gy - df_z['ty'].values) * 4096).astype(int), 0, 4096)
+        px = np.clip(np.round((gx - df_z['tx'].values) * extent).astype(int), 0, extent)
+        py = np.clip(np.round((gy - df_z['ty'].values) * extent).astype(int), 0, extent)
         df_z['px'] = px
         df_z['py'] = py
 
@@ -143,7 +144,9 @@ def construir_pmtiles_repda(
                         "e": str(r.e),
                         "t": str(r.t),
                         "u": str(r.u),
-                        "v": int(r.v)
+                        "v": int(r.v),
+                        "la": float(r.lat),
+                        "lo": float(r.lon)
                     }
                 })
 
@@ -153,18 +156,19 @@ def construir_pmtiles_repda(
 
         print(f"   Zoom {z:2d}: {count_z:4d} teselas calculadas en {time.time() - tz0:.2f} s")
 
-    print(f"\n4. Codificando {len(tiles_dict):,} teselas a MVT con y_coord_down=True...")
+    print(f"\n4. Codificando {len(tiles_dict):,} teselas a MVT con y_coord_down=True y extent=65536...")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
     with open(output_path, "wb") as f_out:
         w = Writer(f_out)
         for tid in sorted(tiles_dict.keys()):
             feats = tiles_dict[tid]
-            # IMPORTANTE: default_options={'y_coord_down': True} evita la inversión de Y
+            # IMPORTANTE: default_options={'y_coord_down': True, 'extents': 65536} evita la inversión de Y
+            # y proporciona resolución de ~2 metros por tesela, alineando exactamente con los datos locales
             mvt_bytes = mapbox_vector_tile.encode([{
                 "name": "repda",
                 "features": feats
-            }], default_options={'y_coord_down': True})
+            }], default_options={'y_coord_down': True, 'extents': 65536})
             mvt_gz = gzip.compress(mvt_bytes)
             w.write_tile(tid, mvt_gz)
 

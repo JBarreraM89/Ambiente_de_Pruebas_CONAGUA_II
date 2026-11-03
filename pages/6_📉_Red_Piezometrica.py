@@ -3145,7 +3145,7 @@ with tab_mapa:
                                                     <div><b>Volumen:</b> <b style="color:#1e293b;">${{volFmt}} m³/año</b> (${{volHm3}} hm³/año)</div>
                                                     ${{p.profundidad_m > 0 ? `<div><b>Profundidad Obra:</b> ${{p.profundidad_m}} m</div>` : ''}}
                                                     <div style="font-size:9.5px; color:#64748b; margin-top:4px; text-align:right;">
-                                                        ${{Number(p.lat).toFixed(4)}}° N, ${{Number(p.lon).toFixed(4)}}° W
+                                                        Coordenadas: ${{Number(p.lat).toFixed(5)}}° N, ${{Number(p.lon).toFixed(5)}}° W
                                                     </div>
                                                 </div>
                                             `;
@@ -3214,6 +3214,8 @@ with tab_mapa:
                                         const p = e.features[0].properties;
                                         const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
                                         const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                                        const latFmt = p.la !== undefined ? Number(p.la).toFixed(5) : e.lngLat.lat.toFixed(5);
+                                        const lonFmt = p.lo !== undefined ? Number(p.lo).toFixed(5) : e.lngLat.lng.toFixed(5);
                                         const html = `
                                             <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; min-width:220px; line-height:1.45;">
                                                 <div style="font-weight:700; color:#166534; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #166534; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
@@ -3224,7 +3226,7 @@ with tab_mapa:
                                                 ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
                                                 <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
                                                 <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
-                                                <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W</div>
+                                                <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{latFmt}}° N, ${{lonFmt}}° W</div>
                                             </div>
                                         `;
                                         popupActivo = new maplibregl.Popup({{ className: 'gis-badge-popup' }}).setLngLat(e.lngLat).setHTML(html).addTo(map);
@@ -3247,8 +3249,8 @@ with tab_mapa:
                                 }}
 
                                 map.on('mousemove', (e) => {{
-                                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4) + '°';
-                                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4) + '°';
+                                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(5) + '°';
+                                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(5) + '°';
                                     
                                     const lat = e.lngLat.lat, lng = e.lngLat.lng;
                                     if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
@@ -5479,7 +5481,7 @@ with tab_evolucion:
                                         <b>Diagnóstico Causa/Efecto:</b> <span style="font-weight:600; color:${{colDiag}};">${{diagTxt}}</span>
                                     </div>
                                     <div style="font-size:9.5px; color:#64748b; margin-top:4px; text-align:right;">
-                                        ${{Number(p.lat).toFixed(4)}}° N, ${{Number(p.lon).toFixed(4)}}° W
+                                        Coordenadas: ${{Number(p.lat).toFixed(5)}}° N, ${{Number(p.lon).toFixed(5)}}° W
                                     </div>
                                 </div>
                             `;
@@ -5551,6 +5553,8 @@ with tab_evolucion:
                         const p = e.features[0].properties;
                         const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
                         const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                        const latFmt = p.la !== undefined ? Number(p.la).toFixed(5) : e.lngLat.lat.toFixed(5);
+                        const lonFmt = p.lo !== undefined ? Number(p.lo).toFixed(5) : e.lngLat.lng.toFixed(5);
                         new maplibregl.Popup({{ className: 'gis-badge-popup' }})
                             .setLngLat(e.lngLat)
                             .setHTML(`
@@ -5563,7 +5567,7 @@ with tab_evolucion:
                                     ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
                                     <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
                                     <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
-                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W</div>
+                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{latFmt}}° N, ${{lonFmt}}° W</div>
                                 </div>
                             `)
                             .addTo(map);
@@ -5639,8 +5643,8 @@ with tab_evolucion:
                 }});
 
                 map.on('mousemove', (e) => {{
-                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4) + '°';
-                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4) + '°';
+                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(5) + '°';
+                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(5) + '°';
                     const lat = e.lngLat.lat, lng = e.lngLat.lng;
                     if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
                         let r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
@@ -6978,6 +6982,9 @@ with tab_cobertura:
                                     <div style="margin-top:5px; padding-top:4px; border-top:1px dashed #cbd5e1; font-size:11px;">
                                         <b>Diagnóstico Territorial:</b><br>${{condCob}}
                                     </div>
+                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px; text-align:right;">
+                                        Coordenadas: ${{Number(p.lat).toFixed(5)}}° N, ${{Number(p.lon).toFixed(5)}}° W
+                                    </div>
                                 </div>
                             `)
                             .addTo(map);
@@ -7043,6 +7050,8 @@ with tab_cobertura:
                         const p = e.features[0].properties;
                         const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
                         const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                        const latFmt = p.la !== undefined ? Number(p.la).toFixed(5) : e.lngLat.lat.toFixed(5);
+                        const lonFmt = p.lo !== undefined ? Number(p.lo).toFixed(5) : e.lngLat.lng.toFixed(5);
                         new maplibregl.Popup({{ className: 'gis-badge-popup' }})
                             .setLngLat(e.lngLat)
                             .setHTML(`
@@ -7055,7 +7064,7 @@ with tab_cobertura:
                                     ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
                                     <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
                                     <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
-                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W</div>
+                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{latFmt}}° N, ${{lonFmt}}° W</div>
                                 </div>
                             `)
                             .addTo(map);
@@ -7070,7 +7079,7 @@ with tab_cobertura:
 
                 // HUD Reactivo de Coordenadas y Diagnóstico
                 map.on('mousemove', (e) => {{
-                    document.getElementById('hud-coord').innerText = `${{e.lngLat.lat.toFixed(4)}}° N, ${{e.lngLat.lng.toFixed(4)}}° W`;
+                    document.getElementById('hud-coord').innerText = `${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W`;
                 }});
 
                 // Gestión de Mapas Base (idéntica a Dinámica de Flujo y Evolución)
