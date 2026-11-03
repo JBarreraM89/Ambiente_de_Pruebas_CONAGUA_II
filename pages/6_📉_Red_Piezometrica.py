@@ -3,76 +3,781 @@
 Módulo de Evaluación y Monitoreo Geohidrológico (Nivel Enterprise)
 Diagnóstico físico con Kriging Ordinario, Variogramas, Isopiezas, Vectores de Flujo y Forecasting.
 Desacoplamiento de modelo matemático vs renderizado para interactividad instantánea (<40 ms).
-Exportación exclusiva en formatos SIG: GeoTIFF (.tif), Shapefile (.zip) y GeoJSON (.geojson).
 """
 
+import os
+import io
+import re
+import math
+import json
+import base64
+import zipfile
+import tempfile
+import unicodedata
+from pathlib import Path
+
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
-import folium
-from folium.plugins import HeatMap, Fullscreen
-from streamlit_folium import st_folium
-import unicodedata
-import re
-import io
-import os
-import json
-import zipfile
-import tempfile
-import base64
-import matplotlib
-matplotlib.use('Agg') # Modo servidor seguro
-import matplotlib.pyplot as plt
-from matplotlib.path import Path
 from scipy.spatial import ConvexHull
-import branca.colormap as cm
-from branca.element import MacroElement
-from jinja2 import Template
-
-# Librerías SIG con detección segura
-try:
-    from pykrige.ok import OrdinaryKriging
-    PYKRIGE_INSTALADO = True
-except ImportError:
-    PYKRIGE_INSTALADO = False
-
-try:
-    import rasterio
-    from rasterio.transform import from_bounds
-    from rasterio.io import MemoryFile
-    RASTERIO_INSTALADO = True
-except ImportError:
-    RASTERIO_INSTALADO = False
+from matplotlib.path import Path as MplPath
 
 try:
     import geopandas as gpd
-    from shapely.geometry import LineString, Point, Polygon, MultiPolygon, shape
+    from shapely.geometry import LineString, Point, Polygon, MultiPolygon, mapping
     GEOPANDAS_INSTALADO = True
 except ImportError:
     GEOPANDAS_INSTALADO = False
 
 # Importaciones del Core
 from utils.styles import inyectar_css_oficial, banner_institucional
-from core.data_loader import CARPETA_DATOS, cargar_catalogo, cargar_datos_maestros
+from core.data_loader import CARPETA_DATOS, cargar_catalogo, cargar_datos_maestros, DIRECTORIO_RAIZ
+from core.pmtiles_server import asegurar_servidor_pmtiles, obtener_url_pmtiles
 
 # =======================================================
-# 🎨 0. CONFIGURACIÓN E INYECCIÓN DE ESTILOS
+# ⚡ FUNCIÓN MÁGICA: Descargas Cero-Rerun (Scope Global)
 # =======================================================
-st.set_page_config(layout="wide")
+def generar_enlace_descarga(data, filename, mime, label):
+    """Genera un enlace de descarga en Base64 que opera 100% en el cliente sin causar rerun en Streamlit."""
+    b64 = base64.b64encode(data).decode()
+    return f'<a href="data:{mime};base64,{b64}" download="{filename}" class="btn-descarga-html">{label}</a>'
+
+# =======================================================
+# 🎨 1. CONFIGURACIÓN E INYECCIÓN DE ESTILOS
+# =======================================================
+st.set_page_config(layout="wide", page_title="Red Piezométrica", page_icon="📉")
 inyectar_css_oficial()
 banner_institucional()
+
+# ⚡ CSS AISLADO Y NEUTRALIZACIÓN DE CONFLICTOS CON styles.py
+st.markdown("""
+    <style>
+        /* ========================================================= */
+        /* 📏 0. ESTABILIZADOR DE PESTAÑAS (ELIMINA BRINCOS DE SCROLL)*/
+        /* ========================================================= */
+        div[data-testid="stTabs"] div[role="tabpanel"],
+        div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
+            min-height: 880px !important;
+        }
+
+        /* Sub-pestañas del panel izquierdo conservan su tamaño natural */
+        div[data-testid="stColumn"] div[data-testid="stTabs"] div[role="tabpanel"],
+        div[data-testid="stColumn"] div[data-testid="stTabs"] [data-baseweb="tab-panel"] {
+            min-height: auto !important;
+        }
+
+        /* ========================================================= */
+        /* 🚨 1. ANULAR MARGEN DE 1.8rem DE styles.py EN BOTONES     */
+        /* ========================================================= */
+        [data-testid="stExpanderDetails"] button [data-testid="stMarkdownContainer"] p,
+        [data-testid="stExpanderDetails"] button p,
+        [data-testid="stExpanderDetails"] [data-testid="stFileUploader"] p {
+            margin: 0 !important;
+            margin-bottom: 0 !important;
+            padding: 0 !important;
+            line-height: 1 !important;
+        }
+
+        /* ========================================================= */
+        /* 📍 2. BOTONES DE BARRA LATERAL                            */
+        /* ========================================================= */
+        section[data-testid="stSidebar"] button[kind="secondary"],
+        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]),
+        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 6px !important;
+            color: #333333 !important;
+            font-weight: 600 !important;
+            width: 100% !important;
+            min-height: 38px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            text-decoration: none !important;
+            transition: all 0.2s ease !important;
+            margin-top: 4px !important;
+        }
+        section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+        section[data-testid="stSidebar"] button[data-baseweb="button"]:not([kind="primary"]):hover,
+        section[data-testid="stSidebar"] div[data-testid="stDownloadButton"] button:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+        section[data-testid="stSidebar"] button[kind="primary"] {
+            border-radius: 6px !important;
+            min-height: 38px !important;
+            font-weight: 600 !important;
+            margin-top: 4px !important;
+        }
+
+        /* ========================================================= */
+        /* 🚀 3. BOTONES DE FRONTERAS DEL MODELO (CARGAR / LIMPIAR)  */
+        /* ========================================================= */
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button {
+            height: 38px !important;
+            min-height: 38px !important;
+            max-height: 38px !important;
+            border-radius: 6px !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 14px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            transition: all 0.2s ease !important;
+        }
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button div {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            height: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* Botón Limpiar (Gris) */
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="secondary"] {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            color: #333333 !important;
+        }
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="secondary"]:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+
+        /* Botón Cargar (Guinda) */
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="primary"] {
+            background-color: #9F2241 !important;
+            border: 1px solid #9F2241 !important;
+            color: #ffffff !important;
+        }
+        [data-testid="stExpanderDetails"] div[data-testid="stButton"] > button[kind="primary"]:hover {
+            background-color: #691C32 !important;
+            border-color: #691C32 !important;
+        }
+
+        /* ========================================================= */
+        /* 📦 4. CONTENEDOR DEL UPLOADER BLANCO + BOTÓN UPLOAD       */
+        /* ========================================================= */
+        [data-testid="stFileUploaderDropzone"],
+        [data-testid="stFileUploader"] section {
+            background-color: #ffffff !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 8px !important;
+        }
+
+        [data-testid="stFileUploader"] button {
+            background-color: #e9ecef !important;
+            border: 1px solid #ced4da !important;
+            border-radius: 6px !important;
+            color: #333333 !important;
+            font-size: 14px !important;
+            font-weight: 600 !important;
+            width: 100% !important;
+            height: 38px !important;
+            min-height: 38px !important;
+            padding: 0 14px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+            margin: 0 !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            transition: all 0.2s ease !important;
+        }
+        [data-testid="stFileUploader"] button:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+        [data-testid="stFileUploader"] button div {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            height: 100% !important;
+            width: 100% !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* ========================================================= */
+        /* 📥 5. ENLACES DE DESCARGAS SIG                            */
+        /* ========================================================= */
+        .btn-descarga-html {
+            display: inline-flex !important; 
+            align-items: center !important; 
+            justify-content: center !important;
+            background-color: #e9ecef !important; 
+            border: 1px solid #ced4da !important; 
+            border-radius: 6px !important;
+            color: #333333 !important; 
+            font-weight: 600 !important; 
+            font-size: 14px !important; 
+            text-decoration: none !important; 
+            width: 100% !important; 
+            min-height: 38px !important;
+            height: 38px !important;
+            box-sizing: border-box !important; 
+            transition: all 0.2s ease !important; 
+            margin-top: 4px !important;
+            margin-bottom: 4px !important;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05) !important;
+        }
+        .btn-descarga-html:hover {
+            background-color: #dde2e6 !important;
+            border-color: #adb5bd !important;
+            color: #000000 !important;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 
 st.subheader("📉 Red de Monitoreo Geohidrológico")
 st.caption("Validación Física: Evaluación espacial, temporal, modelación geostadística de flujo y proyectiva.")
 
 # =======================================================
-# 🔍 1. SELECTOR Y SINCRONIZACIÓN DE SESIÓN GLOBAL
+# 🏛️ 1.5 CARGA DE ESTILOS OFICIALES SGM
 # =======================================================
-clave_actual = st.session_state.get("clave_global")
-nombre_actual = st.session_state.get("nombre_global")
-area_actual = st.session_state.get("area_total_global", 0)
+@st.cache_data(show_spinner=False)
+def cargar_estilos_sgm_oficiales():
+    carpeta_geo = DIRECTORIO_RAIZ / "data" / "geologia"
+    ruta_json = carpeta_geo / "estilos_oficiales_sgm.json"
+    if ruta_json.exists():
+        try:
+            with open(ruta_json, 'r', encoding='utf-8') as f:
+                return json.load(f), "Catálogo Oficial SGM (3,024 reglas QGIS)"
+        except Exception:
+            pass
+    return {}, "Norma Cartográfica General SGM"
+
+DICCIONARIO_SGM_GLOBAL, ORIGEN_SGM_GLOBAL = cargar_estilos_sgm_oficiales()
+
+TABLA_CROMATICA_RESPALDO = {
+    "Q(AL)": "#FFF5AF", "ALUVION": "#FFF5AF", "ALUVIÓN": "#FFF5AF",
+    "Q(AR)": "#FFE696", "ARENA": "#FFE696", "Q(CO)": "#E6CDA0", "CONGLOMERADO": "#E6CDA0",
+    "Q(LA)": "#EBEBBE", "LACUSTRE": "#EBEBBE", "QPT(B)": "#800080", "BASALTO": "#800080",
+    "QPT(A)": "#C33278", "ANDESITA": "#B43264", "TPA(A)": "#B43264",
+    "TPA(R)": "#ED5F7D", "RIOLITA": "#ED5F7D", "TPA(D)": "#F07D3C", "DACITA": "#F07D3C",
+    "TPA(TR)": "#F7AFAF", "TOBA RIOLITICA": "#F7AFAF", "TPA(TA)": "#B98CC3",
+    "K(CZ)": "#2887CD", "CALIZA": "#2887CD", "KI(CZ)": "#0F5FAF", "KS(CZ)": "#5FAFE6",
+    "K(LU)": "#9BB95A", "LUTITA": "#9BB95A", "K(AR)": "#BED273", "ARENISCA": "#BED273",
+    "GR": "#EB3732", "GRANITO": "#EB3732", "GD": "#D74B46", "GRANODIORITA": "#D74B46",
+    "AGUA": "#A6CAE8"
+}
+
+def resolver_color_oficial(clave_sgm, litologia, roca):
+    for val in [clave_sgm, litologia, roca]:
+        if val is not None and pd.notna(val):
+            txt = str(val).strip().upper()
+            if txt in DICCIONARIO_SGM_GLOBAL:
+                return DICCIONARIO_SGM_GLOBAL[txt]
+            for k_estilo, hex_col in DICCIONARIO_SGM_GLOBAL.items():
+                if len(k_estilo) >= 3 and (k_estilo == txt or k_estilo in txt):
+                    return hex_col
+            if txt in TABLA_CROMATICA_RESPALDO:
+                return TABLA_CROMATICA_RESPALDO[txt]
+
+    texto_eval = f"{clave_sgm} {litologia} {roca}".upper()
+    if any(k in texto_eval for k in ["ALUV", "ALUVION", "ALUVIÓN", "SUELO"]): return "#FFF5AF"
+    if any(k in texto_eval for k in ["BASALT", "BASÁLT"]): return "#800080"
+    if any(k in texto_eval for k in ["ANDESIT", "ANDESÍT"]): return "#B43264"
+    if any(k in texto_eval for k in ["RIOLIT", "RIOLÍT"]): return "#ED5F7D"
+    if any(k in texto_eval for k in ["CALIZ", "CALÍZ"]): return "#2887CD"
+    if any(k in texto_eval for k in ["LUTIT", "LUTÍT"]): return "#9BB95A"
+    if any(k in texto_eval for k in ["ARENISC", "ARENA"]): return "#BED273"
+    if any(k in texto_eval for k in ["GRANIT", "GRANOD"]): return "#EB3732"
+    if "AGUA" in texto_eval: return "#A6CAE8"
+    return "#B0BEC5"
+
+# =======================================================
+# 🛰️ 2.15 MOTOR DE AUTODETECCIÓN ESPACIAL DE ACUÍFEROS
+# =======================================================
+gdf_m = cargar_datos_maestros()
+
+def auto_identificar_acuifero_por_coordenadas(lat, lon, gdf_consulta):
+    try:
+        val_lat = float(lat)
+        val_lon = -abs(float(lon))
+        pt_geom = Point(val_lon, val_lat)
+        
+        if gdf_consulta is None or gdf_consulta.empty:
+            return None
+        if gdf_consulta.crs is None:
+            gdf_consulta = gdf_consulta.set_crs(epsg=4326)
+        
+        idx_posibles = list(gdf_consulta.sindex.intersection(pt_geom.bounds))
+        if not idx_posibles:
+            idx_posibles = list(gdf_consulta.sindex.intersection(pt_geom.buffer(0.005).bounds))
+            
+        if idx_posibles:
+            candidatos = gdf_consulta.iloc[idx_posibles]
+            coincidencias = candidatos[candidatos.geometry.contains(pt_geom)]
+            if coincidencias.empty:
+                coincidencias = candidatos[candidatos.geometry.intersects(pt_geom.buffer(0.001))]
+                
+            if not coincidencias.empty:
+                fila = coincidencias.iloc[0]
+                cve = str(fila.get('CLV_ACUI', fila.get('CLAVE_SIGM', ''))).strip().zfill(4)
+                nom = str(fila.get('NOM_ACUI', fila.get('ACUÍFERO', ''))).strip()
+                area = float(fila.get('AREA_KM2', 0.0))
+                edo = str(fila.get('NOM_EDO', fila.get('ESTADO', ''))).strip()
+                return {"clave": cve, "nombre": nom, "area": area, "estado": edo}
+    except Exception:
+        pass
+    return None
+
+# =======================================================
+# 🏢 2.1.B CARGA E INTEGRACIÓN DE CONCESIONES REPDA (INCISO D)
+# =======================================================
+@st.cache_data(show_spinner=False)
+def cargar_resumen_repda(clave_acuifero):
+    """
+    Carga el balance de derechos de extracción de aguas subterráneas (REPDA oficial CONAGUA)
+    y el conteo oficial de aprovechamientos de data/REPDA.xlsx y data/coordenadas_repda_sep25.
+    """
+    if not clave_acuifero:
+        return None
+    try:
+        cve_str = str(clave_acuifero).strip()
+        cve_str4 = cve_str.zfill(4)
+        cve_int = int(cve_str)
+    except Exception:
+        return None
+
+    resumen = {
+        "clave": cve_str4,
+        "nombre": "",
+        "volumen_total_hm3": 0.0,
+        "volumen_total_m3": 0.0,
+        "total_aprovechamientos": 0,
+        "df_usos": pd.DataFrame(),
+        "uso_predominante": "No especificado",
+        "pct_predominante": 0.0,
+        "conteo_usos": {}
+    }
+
+    ruta_repda = os.path.join("data", "REPDA.xlsx")
+    if os.path.exists(ruta_repda):
+        try:
+            df_repda = pd.read_excel(ruta_repda)
+            col_cve = df_repda.columns[0]
+            match = df_repda[df_repda[col_cve].astype(str).str.strip().str.zfill(4) == cve_str4]
+            if match.empty:
+                match = df_repda[df_repda[col_cve].astype(str).str.strip() == str(cve_int)]
+            
+            if not match.empty:
+                r = match.iloc[0]
+                resumen["nombre"] = str(r.get('Acuífero', r.get('Acu\u00edfero', ''))).strip()
+                vol_tot = float(r.get('Volumen total (hm3/año)', r.get('Volumen total (hm3/a\u00f1o)', 0.0)) or 0.0)
+                resumen["volumen_total_hm3"] = vol_tot
+                resumen["volumen_total_m3"] = vol_tot * 1e6
+
+                usos_cols = [c for c in df_repda.columns if '(hm3/' in c and 'total' not in c.lower() and 'porcentaje' not in c.lower()]
+                desglose = []
+                for c in usos_cols:
+                    val = float(r.get(c, 0.0) or 0.0)
+                    if val > 0:
+                        nombre_uso = c.split('(')[0].strip()
+                        desglose.append({
+                            'Uso': nombre_uso,
+                            'Volumen_hm3': round(val, 4),
+                            'Volumen_m3': round(val * 1e6, 2)
+                        })
+                df_u = pd.DataFrame(desglose)
+                if not df_u.empty:
+                    df_u['Pct_Volumen'] = (df_u['Volumen_hm3'] / vol_tot * 100.0) if vol_tot > 0 else 0.0
+                    df_u = df_u.sort_values(by='Volumen_hm3', ascending=False)
+                    resumen["df_usos"] = df_u
+                    resumen["uso_predominante"] = df_u.iloc[0]['Uso']
+                    resumen["pct_predominante"] = float(df_u.iloc[0]['Pct_Volumen'])
+        except Exception:
+            pass
+
+    # Conteo de aprovechamientos (prioriza coordenadas_repda_sep25.parquet, fallback a Aprovechamientos.parquet)
+    ruta_sep25_pq = os.path.join("data", "coordenadas_repda_sep25.parquet")
+    ruta_sep25_xlsx = os.path.join("data", "coordenadas_repda_sep25.xlsx")
+    if os.path.exists(ruta_sep25_xlsx) and (not os.path.exists(ruta_sep25_pq) or os.path.getmtime(ruta_sep25_xlsx) > os.path.getmtime(ruta_sep25_pq)):
+        try:
+            df_all = pd.read_excel(ruta_sep25_xlsx)
+            df_all.to_parquet(ruta_sep25_pq, index=False, engine="pyarrow", compression="snappy")
+        except Exception:
+            pass
+
+    aprov_cargados = False
+    if os.path.exists(ruta_sep25_pq) and cve_int > 0:
+        try:
+            sub_ap = pd.read_parquet(ruta_sep25_pq, filters=[('AC_HOM', '==', cve_int)])
+            if not sub_ap.empty:
+                resumen["total_aprovechamientos"] = len(sub_ap)
+                col_u = next((c for c in sub_ap.columns if c.strip().upper() in ['D_USO_TIT', 'USOAGUA', 'USO']), None)
+                if col_u:
+                    resumen["conteo_usos"] = sub_ap[col_u].value_counts().to_dict()
+                aprov_cargados = True
+        except Exception:
+            pass
+
+    if not aprov_cargados:
+        ruta_aprov = os.path.join("data", "Aprovechamientos.parquet")
+        if os.path.exists(ruta_aprov):
+            try:
+                df_aprov = pd.read_parquet(ruta_aprov)
+                sub_ap = df_aprov[df_aprov['Cve_Acuif'].astype(str).str.strip().str.zfill(4) == cve_str4]
+                if sub_ap.empty:
+                    sub_ap = df_aprov[df_aprov['Cve_Acuif'].astype(str).str.strip() == str(cve_int)]
+                resumen["total_aprovechamientos"] = len(sub_ap)
+                if not sub_ap.empty and 'Uso' in sub_ap.columns:
+                    resumen["conteo_usos"] = sub_ap['Uso'].value_counts().to_dict()
+            except Exception:
+                pass
+
+    return resumen
+
+
+def get_repda_uso_color(uso_str):
+    u = str(uso_str).upper()
+    if 'AGR' in u: return '#16a34a'
+    if 'URB' in u or 'PUBL' in u: return '#2563eb'
+    if 'IND' in u: return '#d97706'
+    if 'SERV' in u or 'COMER' in u: return '#9333ea'
+    if 'DOM' in u: return '#06b6d4'
+    if 'DIF' in u or 'MULT' in u: return '#ec4899'
+    if 'PEC' in u: return '#84cc16'
+    return '#64748b'
+
+
+def cargar_concesiones_repda_puntos(clave_acuifero, custom_df=None):
+    """
+    Carga pozos y aprovechamientos georreferenciados con volumen concesionado.
+    Prioriza archivo cargado por el usuario (custom_df); de lo contrario consulta data/coordenadas_repda_sep25.
+    Retorna: (df_puntos, geojson_str, tiene_puntos)
+    """
+    df_raw = None
+    if custom_df is not None and not custom_df.empty:
+        df_raw = custom_df.copy()
+    else:
+        try:
+            cve_int = int(str(clave_acuifero).strip()) if clave_acuifero else 0
+        except Exception:
+            cve_int = 0
+
+        ruta_pq = os.path.join("data", "coordenadas_repda_sep25.parquet")
+        ruta_xlsx = os.path.join("data", "coordenadas_repda_sep25.xlsx")
+
+        # Caching automático de coordenadas_repda_sep25.xlsx a parquet para lectura en milisegundos
+        if os.path.exists(ruta_xlsx):
+            if not os.path.exists(ruta_pq) or os.path.getmtime(ruta_xlsx) > os.path.getmtime(ruta_pq):
+                try:
+                    df_all = pd.read_excel(ruta_xlsx)
+                    df_all.to_parquet(ruta_pq, index=False, engine="pyarrow", compression="snappy")
+                except Exception:
+                    pass
+
+        if os.path.exists(ruta_pq) and cve_int > 0:
+            try:
+                df_raw = pd.read_parquet(ruta_pq, filters=[("AC_HOM", "==", cve_int)])
+            except Exception:
+                df_raw = None
+
+        if df_raw is None or df_raw.empty:
+            ruta_core = os.path.join("core", "pozos_consolidados.xlsx")
+            if os.path.exists(ruta_core):
+                try:
+                    df_pc = pd.read_excel(ruta_core, sheet_name="REPDA_CONAGUA")
+                    if "CVE_ACU" in df_pc.columns:
+                        sub = df_pc[df_pc["CVE_ACU"] == cve_int]
+                        df_raw = sub if not sub.empty else df_pc
+                    else:
+                        df_raw = df_pc
+                except Exception:
+                    df_raw = None
+
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame(), '{"type": "FeatureCollection", "features": []}', False
+
+    col_lon = next((c for c in df_raw.columns if c.strip().upper() in ["LONDEC", "LONGITUD", "LON", "LONG"]), None)
+    col_lat = next((c for c in df_raw.columns if c.strip().upper() in ["LATDEC", "LATITUD", "LAT"]), None)
+    if not col_lon or not col_lat:
+        return pd.DataFrame(), '{"type": "FeatureCollection", "features": []}', False
+
+    col_vol = next((c for c in df_raw.columns if c.strip().upper() in ["VOLEXTANUA", "VOLUMEN", "VOL_EXT_M3", "VOLUMEN_M3", "VOL_M3", "VOL_EXT_HM3"]), None)
+    col_uso = next((c for c in df_raw.columns if c.strip().upper() in ["D_USO_TIT", "USOAGUA", "USO", "USO_AGUA", "USO_SUB", "USO_TIT"]), None)
+    col_titular = next((c for c in df_raw.columns if c.strip().upper() in ["TITULAR", "NOMBRE", "RAZON_SOCIAL", "PROPIETARIO"]), None)
+    col_folio = next((c for c in df_raw.columns if c.strip().upper() in ["FOLIOREG", "FOLIO", "TITULO", "EXPEDIENTE"]), None)
+    col_exp = next((c for c in df_raw.columns if c.strip().upper() in ["NO_EXPE", "EXPEDIENTE", "NUM_EXPEDIENTE", "NO_EXP"]), None)
+    col_fecha = next((c for c in df_raw.columns if c.strip().upper() in ["FECHAREGI2", "FECHA", "FECHA_REGISTRO", "FECHAREG"]), None)
+    col_prof = next((c for c in df_raw.columns if c.strip().upper() in ["PROFUND", "PROFUNDIDAD", "PROF"]), None)
+
+    vol_series = pd.to_numeric(df_raw[col_vol], errors="coerce").fillna(0.0) if col_vol else pd.Series(0.0, index=df_raw.index)
+    max_raw_vol = float(vol_series.max()) if not vol_series.empty else 1.0
+    if max_raw_vol > 0 and max_raw_vol <= 500 and "HM3" in (col_vol.upper() if col_vol else ""):
+        vol_series = vol_series * 1e6
+        max_raw_vol = float(vol_series.max())
+    if max_raw_vol <= 0:
+        max_raw_vol = 1.0
+
+    features = []
+    recs = []
+    for idx, row in df_raw.iterrows():
+        try:
+            lat = float(row[col_lat])
+            lon = float(row[col_lon])
+        except Exception:
+            continue
+        if np.isnan(lat) or np.isnan(lon) or lat == 0.0 or lon == 0.0:
+            continue
+        if abs(lon) > 80:
+            lon = -abs(lon)
+
+        vol_m3 = float(vol_series.loc[idx])
+        vol_hm3 = round(vol_m3 / 1e6, 4)
+        uso = str(row[col_uso]).strip() if col_uso and pd.notna(row.get(col_uso)) else "No Especificado"
+        titular = str(row[col_titular]).strip() if col_titular and pd.notna(row.get(col_titular)) else "Sin Titular Registrado"
+        folio = str(row[col_folio]).strip() if col_folio and pd.notna(row.get(col_folio)) else f"REPDA-{idx+1}"
+        expediente = str(row[col_exp]).strip() if col_exp and pd.notna(row.get(col_exp)) else ""
+        fecha_str = str(row[col_fecha])[:10] if col_fecha and pd.notna(row.get(col_fecha)) else ""
+        prof = float(pd.to_numeric(row[col_prof], errors="coerce")) if col_prof and not pd.isna(row.get(col_prof)) else 0.0
+
+        color = get_repda_uso_color(uso)
+        radio_px = round(float(5.0 + 11.0 * np.sqrt(max(0.0, vol_m3) / max_raw_vol)), 1)
+
+        prop = {
+            "folio": folio,
+            "expediente": expediente,
+            "fecha": fecha_str,
+            "titular": titular,
+            "uso": uso,
+            "volumen_m3": round(vol_m3, 1),
+            "volumen_hm3": vol_hm3,
+            "profundidad_m": round(prof, 1),
+            "radio_px": radio_px,
+            "color": color,
+            "lat": round(lat, 5),
+            "lon": round(lon, 5)
+        }
+        recs.append(prop)
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [round(lon, 5), round(lat, 5)]},
+            "properties": prop
+        })
+
+    df_puntos = pd.DataFrame(recs)
+    geojson_str = json.dumps({"type": "FeatureCollection", "features": features})
+    tiene_puntos = len(features) > 0
+    return df_puntos, geojson_str, tiene_puntos
+
+# =======================================================
+# 📍 2.2 CONTROL Y CARGA DE PUNTOS ADICIONALES (MANUAL Y CSV)
+# =======================================================
+if "marcadores_piezo" not in st.session_state:
+    st.session_state["marcadores_piezo"] = []
+if "csv_uploader_key_piezo" not in st.session_state:
+    st.session_state["csv_uploader_key_piezo"] = 0
+
+@st.fragment
+def renderizar_controles_puntos_piezo():
+    tab_m, tab_c = st.tabs(["✍️ Manual", "📁 Carga CSV"])
+    
+    with tab_m:
+        with st.form(key="form_manual_piezo", clear_on_submit=True):
+            nom = st.text_input("Identificador:", placeholder="Ej. Pozo San Bernardo")
+            tipo = st.selectbox("Tipo de Infraestructura:", ["Pozo existente", "Pozo requerido", "PTAR existente", "PTAR requerido", "Tanque existente", "Tanque requerido"])
+            c1, c2 = st.columns(2)
+            lat = c1.number_input("Latitud (N):", value=0.0, format="%.5f")
+            lon = c2.number_input("Longitud (W):", value=0.0, format="%.5f")
+            
+            submit_manual = st.form_submit_button("➕ Agregar", type="primary", use_container_width=True)
+            
+            if submit_manual:
+                if lat != 0.0 and lon != 0.0:
+                    lon_final = -abs(float(lon))
+                    st.session_state["marcadores_piezo"].append({
+                        "lat": float(lat), "lon": lon_final,
+                        "nombre": nom.strip() if nom.strip() else f"Punto Manual {len(st.session_state['marcadores_piezo'])+1}",
+                        "tipo": tipo,
+                        "atributos": {},
+                        "fuente": "manual"
+                    })
+                    
+                    acuifero_detectado = auto_identificar_acuifero_por_coordenadas(lat, lon_final, gdf_m)
+                    if acuifero_detectado:
+                        st.session_state["clave_piezo"] = acuifero_detectado["clave"]
+                        st.session_state["nombre_piezo"] = acuifero_detectado["nombre"]
+                        st.session_state["area_total_piezo"] = acuifero_detectado["area"]
+                        st.session_state["piezo_sel_edo"] = acuifero_detectado["estado"]
+                        st.session_state["piezo_sel_clv"] = f"{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}"
+                        st.session_state["puntos_recien_cargados"] = True
+
+                    try:
+                        st.rerun(scope="app")
+                    except TypeError:
+                        st.rerun()
+                else:
+                    st.warning("Ingresa coordenadas válidas distintas de 0.00000.")
+
+        if st.button("🧹 Limpiar Todos los Puntos", use_container_width=True, type="secondary", key="btn_limpiar_manual_piezo"):
+            st.session_state["marcadores_piezo"] = []
+            st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
+        
+    with tab_c:
+        st.markdown("""<div style="background-color: #ffffff; border: 1px dashed #ced4da; border-radius: 4px; padding: 6px 10px; font-size: 10px; color: #495057; margin-bottom: 8px;">Sube tu archivo y mapea las columnas. El mapa se actualizará al dar clic en "Cargar Puntos CSV".</div>""", unsafe_allow_html=True)
+        
+        up_key = f"csv_up_piezo_{st.session_state['csv_uploader_key_piezo']}"
+        archivo_csv = st.file_uploader("Subir CSV", type=['csv'], key=up_key, label_visibility="collapsed")
+        
+        c_csv1, c_csv2 = st.columns(2)
+        if c_csv2.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_csv_piezo"):
+            st.session_state["marcadores_piezo"] = []
+            st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+            try:
+                st.rerun(scope="app")
+            except TypeError:
+                st.rerun()
+        
+        if archivo_csv is not None:
+            try:
+                archivo_csv.seek(0)
+                try:
+                    df_pts = pd.read_csv(archivo_csv, sep=None, engine='python', encoding='utf-8-sig')
+                except Exception:
+                    archivo_csv.seek(0)
+                    df_pts = pd.read_csv(archivo_csv, sep=None, engine='python', encoding='latin1')
+                    
+                df_pts.columns = df_pts.columns.astype(str).str.strip()
+                cols = df_pts.columns.tolist()
+                cols_upper = [c.upper() for c in cols]
+                
+                idx_lat = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['LATITUD', 'LAT', 'Y', 'NORTE'])), 0)
+                idx_lon = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['LONGITUD', 'LON', 'LONG', 'X', 'OESTE'])), 0)
+                idx_infra = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['INFRAESTRUCTURA', 'INFRA', 'TIPO', 'CATEGORIA'])), None)
+                idx_nom = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['NOMBRE/SITIO', 'NOMBRE', 'SITIO', 'NOM', 'ID', 'ESTACION'])), None)
+                idx_color = next((i for i, c in enumerate(cols_upper) if any(k in c for k in ['COLOR', 'HEX'])), None)
+                
+                with st.form(key="form_csv_piezo"):
+                    col_lat = st.selectbox("Columna Latitud:", cols, index=idx_lat)
+                    col_lon = st.selectbox("Columna Longitud:", cols, index=idx_lon)
+                    
+                    opciones_opt = ["(Ninguna)"] + cols
+                    col_nom = st.selectbox("Columna Nombre (Opcional):", opciones_opt, index=(idx_nom + 1) if idx_nom is not None else 0)
+                    col_infra = st.selectbox("Columna Tipo Infraestructura (Opcional):", opciones_opt, index=(idx_infra + 1) if idx_infra is not None else 0)
+                    col_color = st.selectbox("Columna Color HEX (Opcional):", opciones_opt, index=(idx_color + 1) if idx_color is not None else 0)
+                    
+                    cols_popup = st.multiselect("Columnas para el Popup:", cols)
+                    
+                    submit_csv = st.form_submit_button("🚀 Cargar Puntos CSV", type="primary", use_container_width=True)
+                    
+                    if submit_csv:
+                        nuevos = []
+                        acuifero_detectado = None
+                        
+                        for _, row in df_pts.iterrows():
+                            try:
+                                lat_v = pd.to_numeric(str(row[col_lat]).replace(',', '.').strip(), errors='coerce')
+                                lon_v = pd.to_numeric(str(row[col_lon]).replace(',', '.').strip(), errors='coerce')
+                                if pd.notna(lat_v) and pd.notna(lon_v):
+                                    infra_val = str(row[col_infra]).strip() if col_infra != "(Ninguna)" and pd.notna(row[col_infra]) else "Pozo existente"
+                                    nom_v = str(row[col_nom]).strip() if col_nom != "(Ninguna)" and pd.notna(row[col_nom]) else infra_val
+                                    color_val = str(row[col_color]).strip() if col_color != "(Ninguna)" and pd.notna(row[col_color]) else None
+                                    
+                                    attrs = {c: str(row[c]) for c in cols_popup}
+                                    lon_final = -abs(float(lon_v))
+                                    
+                                    nuevos.append({
+                                        "lat": float(lat_v), "lon": lon_final,
+                                        "nombre": nom_v, "tipo": infra_val, "color_hex": color_val,
+                                        "atributos": attrs, "fuente": "csv"
+                                    })
+                                    
+                                    if not acuifero_detectado:
+                                        acuifero_detectado = auto_identificar_acuifero_por_coordenadas(lat_v, lon_final, gdf_m)
+                                        
+                            except Exception:
+                                pass
+                            
+                        if nuevos:
+                            st.session_state["puntos_recien_cargados"] = True
+                            st.session_state["marcadores_piezo"].extend(nuevos)
+                            if acuifero_detectado:
+                                st.session_state["clave_piezo"] = acuifero_detectado["clave"]
+                                st.session_state["nombre_piezo"] = acuifero_detectado["nombre"]
+                                st.session_state["area_total_piezo"] = acuifero_detectado["area"]
+                                st.session_state["piezo_sel_edo"] = acuifero_detectado["estado"]
+                                st.session_state["piezo_sel_clv"] = f"{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}"
+                                st.success(f"📍 Acuífero autodetectado: **{acuifero_detectado['clave']} - {acuifero_detectado['nombre']}**")
+                            else:
+                                st.success(f"✅ {len(nuevos)} puntos cargados correctamente.")
+                            try:
+                                st.rerun(scope="app")
+                            except TypeError:
+                                st.rerun()
+                        else:
+                            st.error("❌ No se encontraron coordenadas válidas.")
+            except Exception as e:
+                st.error(f"Error procesando CSV: {e}")
+        else:
+            c_csv1.button("🚀 Cargar", use_container_width=True, type="primary", disabled=True, key="btn_cargar_csv_dis_piezo")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("📍 Puntos de Referencia / Pozos")
+st.sidebar.markdown("""<div style="font-size: 11px; color: #666; margin-top: -14px; margin-bottom: 8px;">Ingresa coordenadas manuales o carga masiva vía CSV</div>""", unsafe_allow_html=True)
+
+with st.sidebar:
+    renderizar_controles_puntos_piezo()
+    if len(st.session_state["marcadores_piezo"]) > 0:
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        df_descarga = pd.DataFrame(st.session_state["marcadores_piezo"])
+        if not df_descarga.empty:
+            if 'atributos' in df_descarga.columns:
+                df_attrs = pd.json_normalize(df_descarga['atributos'])
+                df_descarga = pd.concat([df_descarga.drop(columns=['atributos']), df_attrs], axis=1)
+            df_descarga = df_descarga.rename(columns={"tipo": "Infraestructura", "nombre": "Nombre", "lat": "Latitud", "lon": "Longitud"})
+            cols_to_keep = ["Infraestructura", "Nombre", "Latitud", "Longitud"] + [c for c in df_descarga.columns if c not in ["Infraestructura", "Nombre", "Latitud", "Longitud", "fuente", "color_hex"]]
+            csv_data = df_descarga[cols_to_keep].to_csv(index=False).encode('utf-8-sig')
+            
+            st.markdown(generar_enlace_descarga(csv_data, "puntos_piezometria.csv", "text/csv", "⬇️ Descargar Puntos (CSV)"), unsafe_allow_html=True)
+
+    with st.sidebar.expander("🏢 Concesiones REPDA (Extracciones)", expanded=False):
+        st.markdown("""<div style="font-size: 11px; color: #475569; margin-bottom: 6px;">Superposición oficial de derechos de extracción de aguas subterráneas (Causa vs Efecto).<br><b style="color:#166534;">Fuente base:</b> coordenadas_repda_sep25.xlsx</div>""", unsafe_allow_html=True)
+        subir_repda = st.file_uploader("Cargar concesiones locales (CSV/Excel):", type=["csv", "xlsx", "xls"], key="uploader_repda_side")
+        if subir_repda is not None:
+            try:
+                if subir_repda.name.endswith(".csv"):
+                    df_sub_rep = pd.read_csv(subir_repda, encoding="latin1")
+                else:
+                    df_sub_rep = pd.read_excel(subir_repda)
+                st.session_state["repda_custom_df"] = df_sub_rep
+                st.success(f"✅ Cargadas {len(df_sub_rep)} captaciones")
+            except Exception as e:
+                st.error(f"Error procesando archivo: {e}")
+        elif "repda_custom_df" in st.session_state:
+            st.info(f"📂 Archivo activo: {len(st.session_state['repda_custom_df'])} registros")
+            if st.button("🗑️ Restablecer a oficial CONAGUA", use_container_width=True, key="btn_reset_repda"):
+                del st.session_state["repda_custom_df"]
+                st.rerun()
+
+# =======================================================
+# 🔍 3. SELECTOR Y SINCRONIZACIÓN DE SESIÓN GLOBAL
+# =======================================================
+clave_actual = st.session_state.get("clave_piezo")
+nombre_actual = st.session_state.get("nombre_piezo")
+area_actual = st.session_state.get("area_total_piezo", 0)
 
 abrir_buscador = True if not clave_actual else False
 
@@ -94,12 +799,21 @@ with st.expander("📍 Búsqueda de Acuífero en Catálogo Oficial", expanded=ab
 
             if seleccion:
                 clave_sel = seleccion.split(" - ")[0]
-                if clave_sel != st.session_state.get("clave_global"):
+                if clave_sel != st.session_state.get("clave_piezo"):
                     datos_acu = df_est[df_est["CLAVE_SIGM"] == clave_sel].iloc[0]
-                    st.session_state["clave_global"] = str(datos_acu["CLAVE_SIGM"])
-                    st.session_state["nombre_global"] = str(datos_acu["ACUÍFERO"])
-                    st.session_state["area_total_global"] = round(float(datos_acu["AREA_KM2"]), 1)
-                    st.rerun()
+                    st.session_state["clave_piezo"] = str(datos_acu["CLAVE_SIGM"])
+                    st.session_state["nombre_piezo"] = str(datos_acu["ACUÍFERO"])
+                    st.session_state["area_total_piezo"] = round(float(datos_acu["AREA_KM2"]), 1)
+                    
+                    # 🛡️ PROTECCIÓN: Solo limpiar si el cambio vino de selección manual en el buscador
+                    if not st.session_state.get("puntos_recien_cargados", False):
+                        st.session_state["marcadores_piezo"] = []
+                        st.session_state["csv_uploader_key_piezo"] = st.session_state.get("csv_uploader_key_piezo", 0) + 1
+                    st.session_state["puntos_recien_cargados"] = False
+                    
+                    clave_actual = st.session_state["clave_piezo"]
+                    nombre_actual = st.session_state["nombre_piezo"]
+                    area_actual = st.session_state["area_total_piezo"]
         except Exception as e:
             st.error(f"Error cargando catálogo: {e}")
 
@@ -117,22 +831,26 @@ with st.container(border=True):
 st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
 
 # =======================================================
-# 💾 2. CARGA Y TRANSFORMACIÓN DE BASE DE DATOS
+# 💾 4. CARGA Y TRANSFORMACIÓN DE BASE DE DATOS
 # =======================================================
 @st.cache_data(show_spinner="Procesando serie de tiempo piezométrica nacional...")
 def cargar_piezometria():
     archivos_candidatos = list(CARPETA_DATOS.glob("Mediciones*.csv"))
-    if not archivos_candidatos: return None, None, None
+    if not archivos_candidatos:
+        return None, None, None
         
     archivos_candidatos.sort(key=lambda x: x.stat().st_mtime, reverse=True)
     ruta_csv = archivos_candidatos[0] 
     
-    try: df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='utf-8-sig')
-    except: df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='latin1')
+    try:
+        df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='utf-8-sig')
+    except Exception:
+        df = pd.read_csv(ruta_csv, sep=None, engine='python', encoding='latin1')
         
     df.columns = df.columns.str.strip()
     cols_upper = [str(c).upper() for c in df.columns]
     
+    col_cve = next((c for c, u in zip(df.columns, cols_upper) if 'CVE_ACUI' in u or 'CLAVE' in u), None)
     col_pozo = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_POZ' in u), next((c for c, u in zip(df.columns, cols_upper) if 'POZO' in u), 'Pozo'))
     col_edo = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_EDO' in u or 'ESTADO' in u), 'Estado')
     col_ac = next((c for c, u in zip(df.columns, cols_upper) if 'NOM_ACU' in u or 'ACUIFERO' in u or 'ACUÍFERO' in u), 'Acuifero')
@@ -145,19 +863,28 @@ def cargar_piezometria():
     renombre_anios = {}
     for col in df.columns:
         match = re.search(r'(19\d{2}|20\d{2})', str(col))
-        if match: renombre_anios[col] = match.group(1)
+        if match:
+            renombre_anios[col] = match.group(1)
             
     df = df.rename(columns=renombre_anios)
     columnas_anios_limpias = list(renombre_anios.values())
-    id_vars_seguras = [c for c in [col_pozo, col_edo, col_ac, col_elev, col_lat, col_lon] if c in df.columns]
+    
+    id_vars_seguras = [c for c in [col_cve, col_pozo, col_edo, col_ac, col_elev, col_lat, col_lon] if c is not None and c in df.columns]
     val_vars_seguras = [c for c in columnas_anios_limpias if c in df.columns]
     
     df_largo = df.melt(id_vars=id_vars_seguras, value_vars=val_vars_seguras, var_name='Año', value_name='Profundidad_NE')
     
-    df_largo = df_largo.rename(columns={
+    rename_dict = {
         col_pozo: 'Pozo', col_edo: 'Estado', col_ac: 'Acuifero',
         col_elev: 'Elev.Terr', col_lat: 'Latitud', col_lon: 'Longitud'
-    })
+    }
+    if col_cve:
+        rename_dict[col_cve] = 'Clave'
+        
+    df_largo = df_largo.rename(columns=rename_dict)
+    
+    if 'Clave' in df_largo.columns:
+        df_largo['Clave'] = df_largo['Clave'].astype(str).str.replace(r'\.0$', '', regex=True).str.zfill(4)
     
     df_largo['Profundidad_NE'] = pd.to_numeric(df_largo['Profundidad_NE'], errors='coerce')
     df_largo['Año'] = pd.to_numeric(df_largo['Año'], errors='coerce')
@@ -172,19 +899,27 @@ if df_crudo is None or df_largo is None:
     st.error("⚠️ No se encontró ningún archivo de piezometría en la carpeta de datos.")
     st.stop()
 
-def normalizar(texto):
-    if pd.isna(texto) or not texto: return ""
-    t = str(texto).upper().strip()
-    t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
-    t = re.sub(r'[^A-Z0-9\s]', '', t)
-    return re.sub(r'\s+', ' ', t)
+# =======================================================
+# 🔍 4.1 FILTRADO ESTRICTO POR CLAVE DEL ACUÍFERO
+# =======================================================
+clave_limpia_global = str(clave_actual).strip().zfill(4)
 
-nombre_limpio_global = normalizar(nombre_actual)
-df_largo['Ac_Norm'] = df_largo['Acuifero'].apply(normalizar)
-df_ac_completo = df_largo[df_largo['Ac_Norm'].apply(lambda x: x in nombre_limpio_global or nombre_limpio_global in x)].copy()
+if 'Clave' in df_largo.columns:
+    df_ac_completo = df_largo[df_largo['Clave'] == clave_limpia_global].copy()
+else:
+    def normalizar(texto):
+        if pd.isna(texto) or not texto: return ""
+        t = str(texto).upper().strip()
+        t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+        t = re.sub(r'[^A-Z0-9\s]', '', t)
+        return re.sub(r'\s+', ' ', t)
+
+    nombre_limpio_global = normalizar(nombre_actual)
+    df_largo['Ac_Norm'] = df_largo['Acuifero'].apply(normalizar)
+    df_ac_completo = df_largo[df_largo['Ac_Norm'] == nombre_limpio_global].copy()
 
 if df_ac_completo.empty:
-    st.error(f"❌ El acuífero **{nombre_actual}** no cuenta con registros en la base de monitoreo.")
+    st.error(f"❌ El acuífero **{clave_actual} - {nombre_actual}** no cuenta con registros en la base de monitoreo.")
     st.stop()
 
 df_ac = df_ac_completo.dropna(subset=['Profundidad_NE', 'Año']).copy()
@@ -195,7 +930,106 @@ if df_ac.empty:
 pozos_disponibles = sorted(df_ac['Pozo'].astype(str).unique().tolist())
 
 # =======================================================
-# 🗺️ 2.1 POLÍGONO OFICIAL (DESDE Acuiferos_Dashboard_V4)
+# ⏱️ 4.2 MOTOR DE SINCRONIZACIÓN TEMPORAL E INTERPOLACIÓN
+# =======================================================
+def obtener_red_sincronizada(df_ac_completo, anio_objetivo, var_nombre='Carga_Hidraulica', modo="interpolado", ventana_tolerancia=3):
+    """
+    Sincroniza temporalmente la red de pozos para un año objetivo.
+    - modo 'interpolado': Si el pozo tiene dato en el año, lo usa. Si no, interpola o proyecta por tendencia si el dato más reciente está a <= ventana_tolerancia años.
+    - modo 'estricto': Solo pozos con medición en el año exacto.
+    """
+    filas_sincronizadas = []
+    pozos_unicos = df_ac_completo['Pozo'].unique()
+    
+    for pz in pozos_unicos:
+        df_pz = df_ac_completo[df_ac_completo['Pozo'] == pz].sort_values(by='Año').dropna(subset=['Año', 'Latitud', 'Longitud'])
+        if df_pz.empty:
+            continue
+        
+        lat = float(df_pz.iloc[0]['Latitud'])
+        lon = float(df_pz.iloc[0]['Longitud'])
+        elev = float(df_pz.iloc[0]['Elev.Terr']) if ('Elev.Terr' in df_pz.columns and pd.notna(df_pz.iloc[0]['Elev.Terr'])) else np.nan
+        
+        # 1. Comprobar si existe medición exacta en anio_objetivo
+        df_exacto = df_pz[df_pz['Año'] == anio_objetivo].dropna(subset=[var_nombre])
+        if not df_exacto.empty:
+            val = float(df_exacto.iloc[0][var_nombre])
+            pne = float(df_exacto.iloc[0]['Profundidad_NE']) if ('Profundidad_NE' in df_exacto.columns and pd.notna(df_exacto.iloc[0]['Profundidad_NE'])) else np.nan
+            ch = float(df_exacto.iloc[0]['Carga_Hidraulica']) if ('Carga_Hidraulica' in df_exacto.columns and pd.notna(df_exacto.iloc[0]['Carga_Hidraulica'])) else np.nan
+            filas_sincronizadas.append({
+                'Pozo': pz,
+                'Latitud': lat,
+                'Longitud': lon,
+                'Elev.Terr': elev,
+                'Año': int(anio_objetivo),
+                'Año_Medido': int(anio_objetivo),
+                'Profundidad_NE': pne,
+                'Carga_Hidraulica': ch,
+                var_nombre: val,
+                'Tipo_Dato': 'Medición Real'
+            })
+            continue
+            
+        # Si el modo es estricto, no se interpola
+        if modo == "estricto":
+            continue
+            
+        # 2. Si el modo es interpolado, verificar si se puede interpolar o proyectar
+        df_validos = df_pz.dropna(subset=['Año', var_nombre])
+        if len(df_validos) < 1:
+            continue
+            
+        anios = df_validos['Año'].values
+        vals = df_validos[var_nombre].values
+        min_a, max_a = int(anios.min()), int(anios.max())
+        
+        # A. Interpolación entre dos años existentes
+        if min_a <= anio_objetivo <= max_a:
+            val_interp = float(np.interp(anio_objetivo, anios, vals))
+            pne_interp = (elev - val_interp) if (pd.notna(elev) and var_nombre == 'Carga_Hidraulica') else (val_interp if var_nombre == 'Profundidad_NE' else np.nan)
+            ch_interp = val_interp if var_nombre == 'Carga_Hidraulica' else ((elev - val_interp) if pd.notna(elev) else np.nan)
+            filas_sincronizadas.append({
+                'Pozo': pz,
+                'Latitud': lat,
+                'Longitud': lon,
+                'Elev.Terr': elev,
+                'Año': int(anio_objetivo),
+                'Año_Medido': int(anios[np.abs(anios - anio_objetivo).argmin()]),
+                'Profundidad_NE': pne_interp,
+                'Carga_Hidraulica': ch_interp,
+                var_nombre: val_interp,
+                'Tipo_Dato': 'Interpolación Temporal'
+            })
+        # B. Proyección temporal hacia adelante o hacia atrás si está dentro de la ventana de tolerancia
+        elif abs(anio_objetivo - max_a) <= ventana_tolerancia or abs(anio_objetivo - min_a) <= ventana_tolerancia:
+            if len(df_validos) >= 2:
+                z_coef = np.polyfit(anios, vals, 1)
+                val_proy = float(np.polyval(z_coef, anio_objetivo))
+            else:
+                val_proy = float(vals[-1] if anio_objetivo > max_a else vals[0])
+                
+            pne_proy = (elev - val_proy) if (pd.notna(elev) and var_nombre == 'Carga_Hidraulica') else (val_proy if var_nombre == 'Profundidad_NE' else np.nan)
+            ch_proy = val_proy if var_nombre == 'Carga_Hidraulica' else ((elev - val_proy) if pd.notna(elev) else np.nan)
+            filas_sincronizadas.append({
+                'Pozo': pz,
+                'Latitud': lat,
+                'Longitud': lon,
+                'Elev.Terr': elev,
+                'Año': int(anio_objetivo),
+                'Año_Medido': int(max_a if anio_objetivo > max_a else min_a),
+                'Profundidad_NE': pne_proy,
+                'Carga_Hidraulica': ch_proy,
+                var_nombre: val_proy,
+                'Tipo_Dato': 'Proyección por Tendencia'
+            })
+            
+    df_sync = pd.DataFrame(filas_sincronizadas)
+    if not df_sync.empty:
+        df_sync = df_sync.dropna(subset=[var_nombre, 'Latitud', 'Longitud'])
+    return df_sync
+
+# =======================================================
+# 🗺️ 5. POLÍGONO OFICIAL Y GEOLOGÍA
 # =======================================================
 @st.cache_resource(show_spinner=False)
 def obtener_poligono_oficial(clave):
@@ -213,17 +1047,102 @@ def obtener_poligono_oficial(clave):
 
 poligono_oficial_geom = obtener_poligono_oficial(clave_actual)
 
-# =======================================================
-# ⚙️ 3. MOTOR GEOSTADÍSTICO MATEMÁTICO (DESACOPLADO)
-# =======================================================
 @st.cache_data(show_spinner=False)
+def preparar_geologia_vectorial(clave_ac, _geom_acuifero):
+    if _geom_acuifero is None:
+        return None, "Ninguna", {}
+    carpeta_cache = DIRECTORIO_RAIZ / "data" / "cache_geologia"
+    carpeta_cache.mkdir(parents=True, exist_ok=True)
+    ruta_cache_parquet = carpeta_cache / f"GEO_SHP_{clave_ac}.parquet"
+
+    gdf_sgm = None
+    if ruta_cache_parquet.exists() and ruta_cache_parquet.stat().st_size > 2000:
+        try:
+            gdf_cached = gpd.read_parquet(ruta_cache_parquet)
+            if len(gdf_cached.columns) > 3:
+                gdf_sgm = gdf_cached
+            else:
+                ruta_cache_parquet.unlink()
+        except Exception:
+            pass
+
+    if gdf_sgm is None or gdf_sgm.empty:
+        rutas_busqueda = [DIRECTORIO_RAIZ / "data" / "geologia"]
+        for r_dir in rutas_busqueda:
+            if not r_dir.exists(): continue
+            for pq_p in r_dir.glob("*.parquet"):
+                if any(k in pq_p.name.lower() for k in ["lito", "geo", "cnal"]) and "estructura" not in pq_p.name.lower():
+                    try:
+                        gdf_temp = gpd.read_parquet(pq_p)
+                        if gdf_temp.crs is None:
+                            gdf_temp = gdf_temp.set_crs(epsg=4326)
+                        else:
+                            gdf_temp = gdf_temp.to_crs(epsg=4326)
+                        recorte = gdf_temp.clip(_geom_acuifero)
+                        if not recorte.empty:
+                            gdf_sgm = recorte
+                            break
+                    except Exception:
+                        pass
+            if gdf_sgm is not None:
+                break
+
+    if gdf_sgm is not None and not gdf_sgm.empty:
+        def reparar_texto_mojibake(val):
+            if val is None or pd.isna(val): return ""
+            s = str(val).strip()
+            try:
+                s = s.encode('latin1').decode('utf-8')
+            except Exception:
+                pass
+            return s
+
+        for col in gdf_sgm.select_dtypes(include=['object', 'string']).columns:
+            if col != 'geometry':
+                gdf_sgm[col] = gdf_sgm[col].apply(reparar_texto_mojibake)
+
+        cols_upper = [c.upper() for c in gdf_sgm.columns]
+        if "CLAVE_SGM" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE_SGM")]
+        elif "CLAVE" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("CLAVE")]
+        elif "LITOLOGIA" in cols_upper: col_sel = gdf_sgm.columns[cols_upper.index("LITOLOGIA")]
+        else: col_sel = gdf_sgm.columns[0]
+
+        colores = []
+        dic_leyenda = {}
+        for _, row in gdf_sgm.iterrows():
+            c_val = str(row.get(col_sel, "")).strip()
+            l_val = str(row.get("LITOLOGIA", "")).strip() if "LITOLOGIA" in gdf_sgm.columns else ""
+            r_val = str(row.get("ROCA", "")).strip() if "ROCA" in gdf_sgm.columns else ""
+            hex_c = resolver_color_oficial(c_val, l_val, r_val)
+            colores.append(hex_c)
+            dic_leyenda[c_val] = hex_c
+            
+        gdf_sgm["COLOR_HEX"] = colores
+        gdf_sgm["geometry"] = gdf_sgm.geometry.simplify(tolerance=0.0001, preserve_topology=True)
+
+        try:
+            gdf_sgm.to_parquet(ruta_cache_parquet)
+        except Exception:
+            pass
+        return gdf_sgm, col_sel, dic_leyenda
+        
+    return None, "Ninguna", {}
+
+# =======================================================
+# ⚙️ 6. MOTOR GEOSTADÍSTICO MATEMÁTICO (DESACOPLADO)
+# =======================================================
 def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None, resolucion=150):
+    try:
+        from pykrige.ok import OrdinaryKriging
+        PYKRIGE_INSTALADO = True
+    except ImportError:
+        PYKRIGE_INSTALADO = False
     if not PYKRIGE_INSTALADO:
         return None, "Falta instalar 'pykrige' (pip install pykrige)", None, None, None, None, None, None, None, None, None
         
-    x = df_puntos['Longitud'].values
-    y = df_puntos['Latitud'].values
-    z = df_puntos[variable].values
+    x = np.asarray(df_puntos['Longitud'].values, dtype=np.float64)
+    y = np.asarray(df_puntos['Latitud'].values, dtype=np.float64)
+    z = np.asarray(df_puntos[variable].values, dtype=np.float64)
     
     if bounds_limite is not None:
         min_x, min_y, max_x, max_y = bounds_limite
@@ -237,32 +1156,40 @@ def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None
         min_x, max_x = x.min() - margen_x, x.max() + margen_x
         min_y, max_y = y.min() - margen_y, y.max() + margen_y
     
-    grid_x = np.linspace(min_x, max_x, resolucion)
-    grid_y = np.linspace(min_y, max_y, resolucion)
+    grid_x = np.linspace(min_x, max_x, resolucion, dtype=np.float64)
+    grid_y = np.linspace(min_y, max_y, resolucion, dtype=np.float64)
     X, Y = np.meshgrid(grid_x, grid_y)
     
     props_kriging = {}
     try:
         v_model = 'linear'
         v_kwargs = {}
-        if 'Lineal' in modelo_param: v_model = 'linear'
-        elif 'Esférico' in modelo_param: v_model = 'spherical'
-        elif 'Exponencial' in modelo_param: v_model = 'exponential'
-        elif 'Gaussiano' in modelo_param: v_model = 'gaussian'
-        elif 'Square root' in modelo_param: 
+        var_z = float(np.var(z)) if np.var(z) > 0 else 1.0
+        rango_geom = max(0.01, float(np.hypot(x.max()-x.min(), y.max()-y.min())))
+
+        if 'Lineal' in modelo_param: 
+            v_model = 'linear'
+        elif 'Esférico' in modelo_param: 
+            v_model = 'spherical'
+        elif 'Exponencial' in modelo_param: 
+            v_model = 'exponential'
+        elif 'Gaussiano' in modelo_param: 
+            v_model = 'gaussian'
+        elif 'Square root' in modelo_param or 'Raíz Cuadrada' in modelo_param: 
             v_model = 'power'
-            v_kwargs['variogram_parameters'] = {'degree': 0.5}
+            v_kwargs['variogram_parameters'] = {'scale': var_z, 'exponent': 0.5, 'nugget': 0.0}
         elif 'Stable' in modelo_param: 
             v_model = 'power'
-            v_kwargs['variogram_parameters'] = {'degree': 1.5}
+            v_kwargs['variogram_parameters'] = {'scale': var_z, 'exponent': 1.5, 'nugget': 0.0}
         elif 'Logarítmico' in modelo_param:
             v_model = 'custom'
             v_kwargs['variogram_function'] = lambda p, d: p[0] * np.log1p(d) + p[1]
-            v_kwargs['variogram_parameters'] = [np.var(z), 0.0]
+            v_kwargs['variogram_parameters'] = [var_z, 0.0]
         elif 'Cúbico' in modelo_param:
             v_model = 'custom'
+            p0 = var_z / (rango_geom**3)
             v_kwargs['variogram_function'] = lambda p, d: p[0] * (d**3) + p[1]
-            v_kwargs['variogram_parameters'] = [0.0, np.var(z)]
+            v_kwargs['variogram_parameters'] = [p0, 0.0]
 
         ok = OrdinaryKriging(x, y, z, variogram_model=v_model, verbose=False, enable_plotting=False, **v_kwargs)
         Z, ss = ok.execute('grid', grid_x, grid_y)
@@ -280,11 +1207,17 @@ def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None
         ss_res = np.sum((exp_semi - theo_semi)**2)
         ss_tot = np.sum((exp_semi - np.mean(exp_semi))**2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
-        fit_range = ok.variogram_model_parameters[1] if v_model not in ['linear', 'power', 'custom'] else "N/A"
+        
+        fit_range = "N/A"
+        if v_model not in ['linear', 'power', 'custom'] and hasattr(ok, 'variogram_model_parameters'):
+            try:
+                fit_range = ok.variogram_model_parameters[1]
+            except Exception:
+                fit_range = "N/A"
         
         props_kriging = {
             "Determination (R²)": f"{r_squared:.4f}",
-            "Fitting Range": f"{fit_range:.2f}" if isinstance(fit_range, float) else "N/A",
+            "Fitting Range": f"{fit_range:.2f}" if isinstance(fit_range, (int, float)) else "N/A",
             "Samples": str(len(x)),
             "Lag Distance": f"{np.mean(np.diff(exp_lags)):.4f}",
             "Max Distance": f"{np.max(exp_lags):.4f}"
@@ -294,6 +1227,139 @@ def resolver_malla_kriging(df_puntos, variable, modelo_param, bounds_limite=None
 
     bounds = [[min_y, min_x], [max_y, max_x]]
     return X, Y, Z, grid_x, grid_y, bounds, props_kriging, exp_lags, exp_semi, smooth_lags, theo_semi_smooth
+
+@st.cache_data(show_spinner=False)
+def evaluar_validacion_cruzada_loocv(df_puntos, var_nombre):
+    """
+    Realiza Validación Cruzada Leave-One-Out (LOOCV) para los 8 modelos de semivariograma.
+    Calcula RMSE (m), MAE (m), ME/Sesgo (m) y R² para cada modelo.
+    Retorna un DataFrame con el ranking y un diccionario de detalles por pozo.
+    """
+    try:
+        from pykrige.ok import OrdinaryKriging
+    except ImportError:
+        return None, None, None
+        
+    if df_puntos is None or len(df_puntos) < 4:
+        return None, None, None
+        
+    df_valid = df_puntos.dropna(subset=['Longitud', 'Latitud', var_nombre]).drop_duplicates(subset=['Longitud', 'Latitud']).copy()
+    if len(df_valid) < 4:
+        return None, None, None
+        
+    x = np.asarray(df_valid['Longitud'].values, dtype=np.float64)
+    y = np.asarray(df_valid['Latitud'].values, dtype=np.float64)
+    z = np.asarray(df_valid[var_nombre].values, dtype=np.float64)
+    pozos = df_valid['Pozo'].values
+    n = len(x)
+    
+    modelos_disponibles = [
+        "Esférico (spherical)", 
+        "Exponencial (exponential)", 
+        "Gaussiano (gaussian)", 
+        "Lineal (no nugget)", 
+        "Raíz Cuadrada (square root)", 
+        "Logarítmico", 
+        "Stable (0 < k < 2)", 
+        "Cúbico"
+    ]
+    
+    resultados_lista = []
+    detalles_dict = {}
+    
+    for m_label in modelos_disponibles:
+        y_obs_list, y_pred_list, pozos_list = [], [], []
+        
+        for i in range(n):
+            train_mask = np.ones(n, dtype=bool)
+            train_mask[i] = False
+            
+            sub_x = x[train_mask]
+            sub_y = y[train_mask]
+            sub_z = z[train_mask]
+            
+            var_z = float(np.var(sub_z)) if np.var(sub_z) > 0 else 1.0
+            rango_geom = max(0.01, float(np.hypot(sub_x.max() - sub_x.min(), sub_y.max() - sub_y.min())))
+            
+            v_model = 'linear'
+            v_kwargs = {}
+            
+            if 'Lineal' in m_label:
+                v_model = 'linear'
+            elif 'Esférico' in m_label:
+                v_model = 'spherical'
+            elif 'Exponencial' in m_label:
+                v_model = 'exponential'
+            elif 'Gaussiano' in m_label:
+                v_model = 'gaussian'
+            elif 'Square root' in m_label or 'Raíz Cuadrada' in m_label:
+                v_model = 'power'
+                v_kwargs['variogram_parameters'] = {'scale': var_z, 'exponent': 0.5, 'nugget': 0.0}
+            elif 'Stable' in m_label:
+                v_model = 'power'
+                v_kwargs['variogram_parameters'] = {'scale': var_z, 'exponent': 1.5, 'nugget': 0.0}
+            elif 'Logarítmico' in m_label:
+                v_model = 'custom'
+                v_kwargs['variogram_function'] = lambda p, d: p[0] * np.log1p(d) + p[1]
+                v_kwargs['variogram_parameters'] = [var_z, 0.0]
+            elif 'Cúbico' in m_label:
+                v_model = 'custom'
+                p0 = var_z / (rango_geom**3)
+                v_kwargs['variogram_function'] = lambda p, d: p[0] * (d**3) + p[1]
+                v_kwargs['variogram_parameters'] = [p0, 0.0]
+                
+            try:
+                ok = OrdinaryKriging(sub_x, sub_y, sub_z, variogram_model=v_model, verbose=False, enable_plotting=False, **v_kwargs)
+                pred, _ = ok.execute('points', [x[i]], [y[i]])
+                val_pred = float(pred[0])
+                if not np.isnan(val_pred):
+                    y_obs_list.append(float(z[i]))
+                    y_pred_list.append(val_pred)
+                    pozos_list.append(pozos[i])
+            except Exception:
+                pass
+                
+        if len(y_pred_list) >= max(3, int(n * 0.7)):
+            arr_obs = np.array(y_obs_list)
+            arr_pred = np.array(y_pred_list)
+            residuos = arr_obs - arr_pred
+            
+            rmse = float(np.sqrt(np.mean(residuos**2)))
+            mae = float(np.mean(np.abs(residuos)))
+            me_sesgo = float(np.mean(residuos))
+            
+            ss_res = np.sum(residuos**2)
+            ss_tot = np.sum((arr_obs - np.mean(arr_obs))**2)
+            r2 = float(1.0 - (ss_res / ss_tot)) if ss_tot > 0 else 0.0
+            
+            df_det = pd.DataFrame({
+                'Pozo': pozos_list,
+                'Observado': np.round(arr_obs, 2),
+                'Predicho_LOOCV': np.round(arr_pred, 2),
+                'Residual_m': np.round(residuos, 2),
+                'Abs_Residual_m': np.round(np.abs(residuos), 2)
+            }).sort_values(by='Abs_Residual_m', ascending=False)
+            
+            detalles_dict[m_label] = df_det
+            
+            resultados_lista.append({
+                'Modelo': m_label,
+                'RMSE (m)': round(rmse, 3),
+                'MAE (m)': round(mae, 3),
+                'Sesgo ME (m)': round(me_sesgo, 3),
+                'R²': round(r2, 4),
+                'Muestras': len(y_pred_list)
+            })
+            
+    if not resultados_lista:
+        return None, None, None
+        
+    df_ranking = pd.DataFrame(resultados_lista).sort_values(by='RMSE (m)', ascending=True).reset_index(drop=True)
+    df_ranking.insert(0, 'Rank', [f"{'🥇' if i==0 else ('🥈' if i==1 else ('🥉' if i==2 else f'{i+1}º'))}" for i in range(len(df_ranking))])
+    
+    modelo_optimo = df_ranking.iloc[0]['Modelo']
+    
+    return df_ranking, modelo_optimo, detalles_dict
 
 def empaquetar_shapefile_zip(gdf, base_name):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -316,6 +1382,15 @@ def empaquetar_shapefile_zip(gdf, base_name):
         return zip_buf.getvalue()
 
 def generar_geotiff_bytes(Z_masked, bounds):
+    import matplotlib.pyplot as plt
+    try:
+        import rasterio
+        from rasterio.transform import from_bounds
+        from rasterio.io import MemoryFile
+        RASTERIO_INSTALADO = True
+    except ImportError:
+        RASTERIO_INSTALADO = False
+    
     min_y, min_x = bounds[0]
     max_y, max_x = bounds[1]
     height, width = Z_masked.shape
@@ -337,16 +1412,20 @@ def generar_geotiff_bytes(Z_masked, bounds):
         return buf.getvalue()
 
 # =======================================================
-# 🎨 3.1 RENDERIZADO VISUAL REACTIVO (<30 ms)
+# 🎨 7. RENDERIZADO VISUAL REACTIVO (<30 ms)
 # =======================================================
 def render_imagen_kriging(X, Y, Z_masked, bounds):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
     fig = plt.figure(figsize=(10, 10), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
     ax.set_xlim(bounds[0][1], bounds[1][1])
     ax.set_ylim(bounds[0][0], bounds[1][0])
     
-    contourf = ax.contourf(X, Y, Z_masked, levels=40, cmap='Blues')
+    ax.contourf(X, Y, Z_masked, levels=40, cmap='Blues')
     
     buf = io.BytesIO()
     plt.savefig(buf, format='png', transparent=True, pad_inches=0)
@@ -357,6 +1436,10 @@ def render_imagen_kriging(X, Y, Z_masked, bounds):
     return buf.getvalue(), vmin, vmax
 
 def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
     fig = plt.figure(figsize=(10, 10), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
@@ -406,7 +1489,20 @@ def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
     return buf.getvalue(), geojson_bytes, shp_zip_bytes
 
 def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_flujo, inside_mask):
-    dy, dx = np.gradient(Z, grid_y, grid_x)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
+    # Conversión geométrica métrica (WGS84) para gradiente físico real en m/m
+    lat_media = float(np.mean(grid_y))
+    m_por_deg_lat = 111132.954
+    m_por_deg_lon = 111412.84 * np.cos(np.radians(lat_media))
+    
+    step_x_m = float(abs(grid_x[1] - grid_x[0])) * m_por_deg_lon if len(grid_x) > 1 else 100.0
+    step_y_m = float(abs(grid_y[1] - grid_y[0])) * m_por_deg_lat if len(grid_y) > 1 else 100.0
+    
+    dy, dx = np.gradient(Z, step_y_m, step_x_m)
+    # Ley de Darcy: flujo va en sentido contrario al gradiente de carga hidráulica (-gradiente)
     Vx, Vy = (-dx, -dy) if variable == 'Carga_Hidraulica' else (dx, dy)
         
     magnitude = np.sqrt(Vx**2 + Vy**2)
@@ -453,7 +1549,8 @@ def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_f
     for lo, la, vx, vy, mg, az in zip(lons, lats, v_x, v_y, mags, azimut):
         rec = {
             "LONGITUD": round(float(lo), 6), "LATITUD": round(float(la), 6),
-            "GRADIENTE": round(float(mg), 5), "AZIMUT_DEG": round(float(az), 1),
+            "GRADIENTE": round(float(mg), 6), "GRAD_M_KM": round(float(mg) * 1000.0, 3),
+            "AZIMUT_DEG": round(float(az), 1),
             "VX": round(float(vx), 5), "VY": round(float(vy), 5)
         }
         data_records.append(rec)
@@ -473,8 +1570,121 @@ def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_f
         
     return buf.getvalue(), geojson_bytes, shp_zip_bytes
 
+def render_imagen_evolucion_divergente(X, Y, delta_Z_masked, bounds):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
+    
+    fig = plt.figure(figsize=(10, 10), frameon=False)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.axis('off')
+    ax.set_xlim(bounds[0][1], bounds[1][1])
+    ax.set_ylim(bounds[0][0], bounds[1][0])
+    
+    val_valid = delta_Z_masked[~np.isnan(delta_Z_masked)]
+    if len(val_valid) == 0:
+        vmin, vmax = -5.0, 5.0
+    else:
+        vmin = float(np.min(val_valid))
+        vmax = float(np.max(val_valid))
+        
+    if vmin >= 0:
+        vmin = -0.05
+    if vmax <= 0:
+        vmax = 0.05
+        
+    try:
+        norm = TwoSlopeNorm(vcenter=0.0, vmin=vmin, vmax=vmax)
+        ax.contourf(X, Y, delta_Z_masked, levels=50, cmap='RdBu', norm=norm, extend='both')
+    except Exception:
+        ax.contourf(X, Y, delta_Z_masked, levels=50, cmap='RdBu', extend='both')
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0)
+    plt.close(fig)
+    
+    return buf.getvalue(), vmin, vmax
+
+def render_imagen_isolineas_evolucion(X, Y, delta_Z_masked, bounds, intervalo_iso, clave_actual):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
+    fig = plt.figure(figsize=(10, 10), frameon=False)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.axis('off')
+    ax.set_xlim(bounds[0][1], bounds[1][1])
+    ax.set_ylim(bounds[0][0], bounds[1][0])
+    
+    val_valid = delta_Z_masked[~np.isnan(delta_Z_masked)]
+    if len(val_valid) == 0:
+        vmin, vmax = -5.0, 5.0
+    else:
+        vmin = float(np.min(val_valid))
+        vmax = float(np.max(val_valid))
+        
+    if intervalo_iso <= 0:
+        intervalo_iso = 2.0
+        
+    min_cota = np.floor(vmin / intervalo_iso) * intervalo_iso
+    max_cota = np.ceil(vmax / intervalo_iso) * intervalo_iso
+    niveles = np.arange(min_cota, max_cota + intervalo_iso * 0.5, intervalo_iso)
+    if len(niveles) < 2:
+        niveles = np.linspace(vmin, vmax, 5)
+        
+    niveles_neg = [round(float(n), 2) for n in niveles if n < -1e-4]
+    niveles_cero = [round(float(n), 2) for n in niveles if abs(n) <= 1e-4]
+    niveles_pos = [round(float(n), 2) for n in niveles if n > 1e-4]
+    
+    contours_all = []
+    if niveles_neg:
+        c_neg = ax.contour(X, Y, delta_Z_masked, levels=niveles_neg, colors='#990000', linestyles='solid', linewidths=1.8, alpha=0.95)
+        ax.clabel(c_neg, inline=True, fontsize=10, fmt='%.1f m', colors='#660000')
+        contours_all.append(c_neg)
+    if niveles_cero:
+        c_cero = ax.contour(X, Y, delta_Z_masked, levels=niveles_cero, colors='#2C3E50', linestyles='solid', linewidths=2.2, alpha=0.95)
+        ax.clabel(c_cero, inline=True, fontsize=10.5, fmt='0.0 m (Equilibrio)', colors='#1A252F')
+        contours_all.append(c_cero)
+    if niveles_pos:
+        c_pos = ax.contour(X, Y, delta_Z_masked, levels=niveles_pos, colors='#0055AA', linestyles='dashed', linewidths=1.8, alpha=0.95)
+        ax.clabel(c_pos, inline=True, fontsize=10, fmt='+%.1f m', colors='#003366')
+        contours_all.append(c_pos)
+        
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0)
+    plt.close(fig)
+    
+    features, line_geoms, cotas = [], [], []
+    for cnt in contours_all:
+        try:
+            for level_val, segs in zip(cnt.levels, cnt.allsegs):
+                for seg in segs:
+                    if len(seg) >= 2:
+                        coords = [[round(float(pt[0]), 6), round(float(pt[1]), 6)] for pt in seg]
+                        tipo_cota = "Abatimiento" if level_val < -1e-4 else ("Equilibrio" if abs(level_val) <= 1e-4 else "Recuperación")
+                        features.append({
+                            "type": "Feature",
+                            "geometry": {"type": "LineString", "coordinates": coords},
+                            "properties": {"DELTA_H_M": round(float(level_val), 2), "TIPO": tipo_cota}
+                        })
+                        if GEOPANDAS_INSTALADO:
+                            line_geoms.append(LineString(coords))
+                            cotas.append(round(float(level_val), 2))
+        except Exception:
+            pass
+            
+    geojson_bytes = json.dumps({"type": "FeatureCollection", "features": features}, indent=2).encode('utf-8')
+    shp_zip_bytes = None
+    if GEOPANDAS_INSTALADO and line_geoms:
+        df_iso = pd.DataFrame({"DELTA_H_M": cotas, "TIPO": ["Abatimiento" if c < -1e-4 else ("Equilibrio" if abs(c) <= 1e-4 else "Recuperación") for c in cotas]})
+        gdf_iso = gpd.GeoDataFrame(df_iso, geometry=line_geoms, crs="EPSG:4326")
+        shp_zip_bytes = empaquetar_shapefile_zip(gdf_iso, f"isolineas_delta_h_{clave_actual}")
+        
+    return buf.getvalue(), geojson_bytes, shp_zip_bytes
+
 # =======================================================
-# 📊 4. EJE 1: SALUD E INVENTARIO DE LA RED
+# 📊 8. EJE 1: SALUD E INVENTARIO DE LA RED
 # =======================================================
 with st.container(border=True):
     st.markdown("<p style='color:#691C32; font-weight:700; margin:0 0 8px 0; font-size:14px;'>📡 SALUD Y OPERATIVIDAD DE LA RED PIEZOMÉTRICA</p>", unsafe_allow_html=True)
@@ -488,21 +1698,23 @@ with st.container(border=True):
     col_i1.metric("Pozos Registrados", total_pozos)
     col_i2.metric("Pozos Activos (≤ 3 años)", pozos_activos, f"{porcentaje_activos:.0f}% Operatividad", delta_color="normal" if porcentaje_activos > 70 else "inverse")
 
-    if area_actual > 0:
-        densidad = area_actual / pozos_activos if pozos_activos > 0 else 0
+    if area_actual > 0 and pozos_activos > 0:
+        densidad = area_actual / pozos_activos
         col_i3.metric("Densidad Espacial", f"1 pozo / {densidad:.1f} km²")
     else:
-        col_i3.metric("Densidad Espacial", "N/D")
+        col_i3.metric("Densidad Espacial", "N/D", "Sin pozos activos")
 
     col_i4.metric("Sin Datos Recientes", total_pozos - pozos_activos, "Pozos Desatendidos", delta_color="inverse")
 
 st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
 
 # =======================================================
-# 🛠️ 5. INTERFAZ DE TABS
+# 🛠️ 9. INTERFAZ DE TABS
 # =======================================================
-tab_mapa, tab_hidrograma, tab_alertas = st.tabs([
+tab_mapa, tab_evolucion, tab_cobertura, tab_hidrograma, tab_alertas = st.tabs([
     "🗺️ Dinámica de Flujo y Variogramas", 
+    "📉 Evolución y Conos de Abatimiento (Δh)", 
+    "🎯 Cobertura y Zonas Ciegas",
     "📈 Hidrogramas Inteligentes", 
     "🚨 Forecasting y Alertas"
 ])
@@ -511,90 +1723,208 @@ tab_mapa, tab_hidrograma, tab_alertas = st.tabs([
 with tab_mapa:
     @st.fragment
     def renderizar_pestaña_mapa():
-        c_ctrl, c_map = st.columns([0.34, 0.66])
         
-        with c_ctrl:
+        if "poly_uploader_key" not in st.session_state:
+            st.session_state["poly_uploader_key"] = 0
+        if "poligono_personalizado" not in st.session_state:
+            st.session_state["poligono_personalizado"] = None
+            
+        def limpiar_poly():
+            st.session_state["poly_uploader_key"] = st.session_state.get("poly_uploader_key", 0) + 1
+            st.session_state["poligono_personalizado"] = None
+
+        anios_disp = sorted([int(a) for a in df_ac['Año'].dropna().unique().tolist()])
+        anios_con_pozos = df_ac.groupby('Año')['Pozo'].nunique()
+        anios_validos = [int(a) for a in anios_con_pozos[anios_con_pozos >= 4].index.tolist()]
+        anio_default = max(anios_validos) if anios_validos else (max(anios_disp) if anios_disp else 2024)
+        idx_anio = anios_disp.index(anio_default) if anio_default in anios_disp else len(anios_disp)-1
+
+        geom_oficial = st.session_state.get("poligono_personalizado", None)
+        if geom_oficial is None:
+            geom_oficial = poligono_oficial_geom
+
+        opciones_delimitacion = ["Pozos de Monitoreo (Envolvente Convexa)"]
+        if geom_oficial is not None:
+            opciones_delimitacion.insert(0, "Polígono Oficial del Acuífero")
+
+        with st.container(border=True):
+            c_f1, c_f2, c_f3, c_f4 = st.columns([1.1, 1.4, 1.8, 1.4])
+            anio_sel = c_f1.selectbox("Año Objetivo:", anios_disp, index=idx_anio, key="sel_krig_anio_objetivo")
+            modo_sync = c_f2.selectbox(
+                "Sincronización Temporal:",
+                ["Interpolación Dinámica", "Corte Estricto (Sin interpolar)"],
+                key="sel_krig_modo_sync"
+            )
+            var_interp = c_f3.selectbox(
+                "Variable a Modelar:",
+                ["Carga Hidráulica (msnm) [Recomendado para flujo]", "Profundidad del Nivel (m)"],
+                key="sel_krig_var_interp"
+            )
+            modo_delimitacion = c_f4.selectbox(
+                "Delimitar Kriging por:", 
+                opciones_delimitacion, 
+                index=0,
+                key="sel_krig_delimitacion"
+            )
+
+        var_real = 'Carga_Hidraulica' if "Carga" in var_interp else 'Profundidad_NE'
+        modo_sync_cod = "interpolado" if "Interpolación" in modo_sync else "estricto"
+        df_ultimo = obtener_red_sincronizada(df_ac, anio_sel, var_nombre=var_real, modo=modo_sync_cod, ventana_tolerancia=3)
+
+        df_ranking_loocv, modelo_optimo_sugerido, detalles_loocv = None, None, None
+        if not df_ultimo.empty and len(df_ultimo) >= 4:
+            df_ranking_loocv, modelo_optimo_sugerido, detalles_loocv = evaluar_validacion_cruzada_loocv(df_ultimo, var_real)
+
+        if not df_ultimo.empty:
+            media_val = float(df_ultimo[var_real].mean())
+            min_val = float(df_ultimo[var_real].min())
+            max_val = float(df_ultimo[var_real].max())
+            rango_val = max_val - min_val
+            unidad_var = "msnm" if var_real == 'Carga_Hidraulica' else "m"
+
+            n_reales = len(df_ultimo[df_ultimo['Tipo_Dato'] == 'Medición Real'])
+            n_interp = len(df_ultimo) - n_reales
+
+            n_abat = 0
+            n_recup = 0
+            for _, r_p in df_ultimo.iterrows():
+                df_hist_p = df_ac[df_ac['Pozo'].astype(str) == str(r_p['Pozo'])]
+                if len(df_hist_p) >= 2:
+                    slope = np.polyfit(df_hist_p['Año'], df_hist_p['Profundidad_NE'], 1)[0]
+                    if slope > 0.1: n_abat += 1
+                    elif slope < -0.1: n_recup += 1
+
+            rmse_card = f"{df_ranking_loocv.iloc[0]['RMSE (m)']:.2f} m" if df_ranking_loocv is not None and not df_ranking_loocv.empty else "N/A"
+            r2_card = f"R²: {df_ranking_loocv.iloc[0]['R²']:.3f}" if df_ranking_loocv is not None and not df_ranking_loocv.empty else "N/A"
+
             with st.container(border=True):
-                st.markdown("<h4 style='color:#691C32; margin:0 0 10px 0; font-size:15px;'>⚙️ Configuración Geostadística</h4>", unsafe_allow_html=True)
-                var_interp = st.selectbox("1. Variable a Modelar", ["Carga Hidráulica (msnm) [Recomendado para flujo]", "Profundidad del Nivel (m)"])
-                var_real = 'Carga_Hidraulica' if "Carga" in var_interp else 'Profundidad_NE'
-                
-                param = st.selectbox("2. Modelo de Variograma", [
-                    "Lineal (no nugget)", "Raíz Cuadrada (square root)", "Logarítmico", 
-                    "Stable (0 < k < 2)", "Cúbico", "Esférico (spherical)", "Exponencial (exponential)", "Gaussiano (gaussian)"
-                ])
-                
-            df_ultimo = df_ac.loc[df_ac.groupby('Pozo')['Año'].idxmax()].dropna(subset=[var_real, 'Latitud', 'Longitud']).copy()
-
-            # 🗺️ Gestión del Polígono Oficial y Delimitación Espacial
-            geom_activa = poligono_oficial_geom
-            with st.container(border=True):
-                st.markdown("<h4 style='color:#691C32; margin:0 0 10px 0; font-size:15px;'>📍 Delimitación Geográfica</h4>", unsafe_allow_html=True)
-                
-                if geom_activa is not None:
-                    st.success(f"✅ Polígono oficial de **{nombre_actual}** cargado automáticamente desde el Geovisor.")
-                else:
-                    st.info("ℹ️ No se detectó polígono oficial en el catálogo maestro.")
-
-                with st.expander("📁 Cargar Polígono Alternativo (Shapefile o GeoJSON)", expanded=False):
-                    up_geom = st.file_uploader("Subir archivo (.geojson o .zip con Shapefile):", type=['geojson', 'json', 'zip'], key="up_poly_piezo")
-                    if up_geom is not None:
-                        try:
-                            if up_geom.name.endswith(".zip"):
-                                with tempfile.TemporaryDirectory() as tmpdir:
-                                    zip_path = os.path.join(tmpdir, "poly.zip")
-                                    with open(zip_path, "wb") as f_up: f_up.write(up_geom.read())
-                                    gdf_up = gpd.read_file(f"zip://{zip_path}")
-                            else:
-                                gdf_up = gpd.read_file(up_geom)
-
-                            if gdf_up.crs != "EPSG:4326":
-                                gdf_up = gdf_up.to_crs(epsg=4326)
-                            geom_activa = gdf_up.unary_union
-                            st.success("✅ Polígono personalizado cargado correctamente.")
-                        except Exception as err:
-                            st.error(f"Error procesando archivo: {err}")
-
-                opciones_delimitacion = ["Pozos de Monitoreo (Envolvente Convexa)"]
-                if geom_activa is not None:
-                    opciones_delimitacion.insert(0, "Polígono Oficial del Acuífero")
-
-                modo_delimitacion = st.radio(
-                    "3. Delimitar modelo geohidrológico por:", 
-                    opciones_delimitacion, 
-                    index=0,
-                    help="Si eliges el polígono oficial, el modelo espacial abarcará y recortará exactamente en la frontera del acuífero."
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric(
+                    f"{'Carga Hidráulica' if var_real == 'Carga_Hidraulica' else 'Profundidad'} Media",
+                    f"{media_val:.2f} {unidad_var}",
+                    f"Rango: {rango_val:.1f} {unidad_var} [{min_val:.1f} a {max_val:.1f}]",
+                    help="Promedio aritmético de los niveles en los pozos monitoreados para este año."
+                )
+                m2.metric(
+                    "Pozos de Monitoreo",
+                    f"{len(df_ultimo)} pozos",
+                    f"{n_reales} medidos | {n_interp} interp.",
+                    help="Pozos sincronizados para el año objetivo (medición directa vs sincronización temporal)."
+                )
+                m3.metric(
+                    "Tendencia Histórica",
+                    f"{n_abat} en descenso",
+                    f"{n_recup} en recuperación",
+                    delta_color="inverse" if n_abat > n_recup else "normal",
+                    help="Número de pozos con tendencia de descenso (abatimiento) vs ascenso (recuperación) en su serie de tiempo."
+                )
+                m4.metric(
+                    "Ajuste LOOCV Óptimo",
+                    rmse_card,
+                    f"Modelo: {modelo_optimo_sugerido.split(' ')[0] if modelo_optimo_sugerido else 'N/A'} ({r2_card})",
+                    help="Precisión del modelo con menor error cuadrático medio tras validación cruzada iterativa Leave-One-Out."
                 )
 
-            # Cálculo de rango preliminar para sliders
-            if len(df_ultimo) >= 4:
-                rango_estimado = max(1.0, float(df_ultimo[var_real].max() - df_ultimo[var_real].min()))
-                def_equidistancia = max(0.5, round(rango_estimado / 10.0, 1))
-                if def_equidistancia >= 5: def_equidistancia = round(def_equidistancia / 5.0) * 5.0
-            else:
-                rango_estimado = 50.0
-                def_equidistancia = 5.0
-
-            # 🎛️ Controladores de visualización reactivos (<30 ms)
-            with st.container(border=True):
-                st.markdown("<h4 style='color:#691C32; margin:0 0 10px 0; font-size:15px;'>🎛️ Ajustes de Visualización</h4>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top: 6px;'></div>", unsafe_allow_html=True)
+        col_izq, col_der = st.columns([1.15, 2.85], gap="large")
+        
+        with col_izq:
+            st.markdown("<h4 style='color:#691C32; margin-top:0; font-size:15px; margin-bottom:8px;'>⚙️ Panel Geostadístico</h4>", unsafe_allow_html=True)
+            tab_params, tab_vario, tab_valida = st.tabs(["🔧 Configuración", "📈 Variograma", "🎯 Validación LOOCV"])
+            
+            with tab_params:
+                lista_modelos = [
+                    "Esférico (spherical)", "Exponencial (exponential)", "Gaussiano (gaussian)", "Lineal (no nugget)", 
+                    "Raíz Cuadrada (square root)", "Logarítmico", "Stable (0 < k < 2)", "Cúbico"
+                ]
                 
-                opacidad_kriging = st.slider("Transparencia Capa Kriging (Opacidad):", 0.0, 1.0, 0.55, 0.05)
+                idx_param = 0
+                if "sel_krig_modelo" in st.session_state and st.session_state["sel_krig_modelo"] in lista_modelos:
+                    idx_param = lista_modelos.index(st.session_state["sel_krig_modelo"])
+                
+                st.markdown("<b style='font-size:12px; color:#1e293b;'>Modelo de Semivariograma:</b>", unsafe_allow_html=True)
+                c_mod1, c_mod2 = st.columns([2.0, 1.0])
+                param = c_mod1.selectbox("Modelo de Variograma:", lista_modelos, index=idx_param, key="sel_krig_param_box", label_visibility="collapsed")
+                
+                with c_mod2:
+                    if df_ranking_loocv is not None and not df_ranking_loocv.empty:
+                        if st.button("✨ Óptimo", key="btn_usar_optimo_krig", help=f"Aplicar automáticamente el semivariograma con menor RMSE ({modelo_optimo_sugerido})"):
+                            st.session_state["sel_krig_modelo"] = modelo_optimo_sugerido
+                            st.rerun()
+
+                if df_ranking_loocv is not None and not df_ranking_loocv.empty:
+                    rmse_val = df_ranking_loocv.iloc[0]['RMSE (m)']
+                    st.markdown(
+                        f"<div style='background:#f0fdf4; border:1px solid #bbf7d0; border-radius:4px; padding:4px 8px; font-size:10.5px; color:#166534; margin-top:-2px; margin-bottom:10px; line-height:1.3;'>"
+                        f"🏆 <b>Sugerencia Óptima (LOOCV):</b> {modelo_optimo_sugerido} (RMSE: <b>{rmse_val:.2f} m</b>)"
+                        f"</div>", 
+                        unsafe_allow_html=True
+                    )
+
+                if len(df_ultimo) >= 4:
+                    rango_estimado = max(1.0, float(df_ultimo[var_real].max() - df_ultimo[var_real].min()))
+                    def_equidistancia = max(0.5, round(rango_estimado / 10.0, 1))
+                    if def_equidistancia >= 5: def_equidistancia = round(def_equidistancia / 5.0) * 5.0
+                else:
+                    rango_estimado = 50.0
+                    def_equidistancia = 5.0
+
+                st.markdown("<b style='font-size:12px; color:#1e293b; margin-top:6px;'>Ajustes Cartográficos:</b>", unsafe_allow_html=True)
                 intervalo_iso = st.slider(
                     "Equidistancia de Isolíneas (m):", 
                     min_value=max(0.5, round(rango_estimado / 40.0, 1)), 
                     max_value=max(2.0, round(rango_estimado / 2.0, 1)), 
                     value=float(min(max(2.0, round(rango_estimado / 2.0, 1)), def_equidistancia)), 
-                    step=0.5 if rango_estimado < 20 else 1.0
+                    step=0.5 if rango_estimado < 20 else 1.0,
+                    key="slider_equidistancia_iso"
                 )
-                densidad_flujo = st.slider("Densidad de Vectores de Flujo:", 8, 36, 20, 2)
-            
-            ph_variograma = st.empty()
+                densidad_flujo = st.slider("Densidad de Vectores de Flujo:", 8, 36, 20, 2, key="slider_densidad_flujo")
 
-        with c_map:
+                with st.expander("📁 Subir Polígono Personalizado", expanded=False):
+                    st.caption("Carga un archivo (.geojson o .zip con shapefile) para delimitar el área de estudio.")
+                    up_key = f"up_poly_piezo_{st.session_state.get('poly_uploader_key', 0)}"
+                    up_geom = st.file_uploader("Cargar Polígono", type=['geojson', 'json', 'zip'], key=up_key, label_visibility="collapsed")
+                    
+                    c_poly1, c_poly2 = st.columns(2)
+                    with c_poly1:
+                        if up_geom is not None:
+                            if st.button("🚀 Cargar", use_container_width=True, type="primary", key="btn_cargar_poly"):
+                                try:
+                                    if up_geom.name.endswith(".zip"):
+                                        with tempfile.TemporaryDirectory() as tmpdir:
+                                            zip_path = os.path.join(tmpdir, "poly.zip")
+                                            with open(zip_path, "wb") as f_up: f_up.write(up_geom.read())
+                                            gdf_up = gpd.read_file(f"zip://{zip_path}")
+                                    else:
+                                        gdf_up = gpd.read_file(up_geom)
+
+                                    if gdf_up.crs != "EPSG:4326":
+                                        gdf_up = gdf_up.to_crs(epsg=4326)
+                                    st.session_state["poligono_personalizado"] = gdf_up.unary_union
+                                    st.success("✅ Polígono cargado.")
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"Error procesando archivo: {err}")
+                        else:
+                            st.button("🚀 Cargar", use_container_width=True, type="primary", disabled=True, key="btn_cargar_poly_dis")
+                    
+                    with c_poly2:
+                        st.button("🧹 Limpiar", use_container_width=True, type="secondary", key="btn_limpiar_poly", on_click=limpiar_poly)
+
+            with tab_vario:
+                ph_variograma = st.empty()
+
+            with tab_valida:
+                ph_validacion = st.empty()
+
+        # 2. MAPA Y RESULTADOS (COLUMNA DERECHA)
+        with col_der:
+            geom_activa = st.session_state.get("poligono_personalizado", None)
+            if geom_activa is None:
+                geom_activa = poligono_oficial_geom
+
             if len(df_ultimo) >= 4:
                 with st.spinner("Modelando superficie geostadística y delimitando fronteras..."):
-                    # Tupla hasheable (min_x, min_y, max_x, max_y)
                     geom_para_kriging = geom_activa if modo_delimitacion == "Polígono Oficial del Acuífero" else None
                     bounds_limite_hashable = geom_para_kriging.bounds if geom_para_kriging is not None else None
                     
@@ -607,7 +1937,6 @@ with tab_mapa:
                     else:
                         X, Y, Z, grid_x, grid_y, bounds, props_kriging, exp_lags, exp_semi, smooth_lags, theo_semi = resultado_kriging
                         
-                        # 🎯 DELIMITACIÓN MATEMÁTICA
                         pts_grid = np.column_stack((X.ravel(), Y.ravel()))
                         hull_pts = None
                         inside_mask = None
@@ -615,12 +1944,12 @@ with tab_mapa:
                         if modo_delimitacion == "Polígono Oficial del Acuífero" and geom_activa is not None:
                             try:
                                 if geom_activa.geom_type == 'Polygon':
-                                    path_poly = Path(np.array(geom_activa.exterior.coords))
+                                    path_poly = MplPath(np.array(geom_activa.exterior.coords))
                                     inside_mask = path_poly.contains_points(pts_grid).reshape(X.shape)
                                 elif geom_activa.geom_type == 'MultiPolygon':
                                     mask_accum = np.zeros(len(pts_grid), dtype=bool)
                                     for poly_sub in geom_activa.geoms:
-                                        p_sub = Path(np.array(poly_sub.exterior.coords))
+                                        p_sub = MplPath(np.array(poly_sub.exterior.coords))
                                         mask_accum |= p_sub.contains_points(pts_grid)
                                     inside_mask = mask_accum.reshape(X.shape)
                             except Exception:
@@ -632,310 +1961,5737 @@ with tab_mapa:
                             try:
                                 hull = ConvexHull(np.column_stack((x_pozos, y_pozos)))
                                 hull_pts = np.column_stack((x_pozos[hull.vertices], y_pozos[hull.vertices]))
-                                hull_path = Path(hull_pts)
+                                hull_path = MplPath(hull_pts)
                                 inside_mask = hull_path.contains_points(pts_grid).reshape(X.shape)
                             except Exception:
                                 inside_mask = np.ones(X.shape, dtype=bool)
 
                         Z_masked = np.where(inside_mask, Z, np.nan)
 
-                        # ⚡ Renderizado Desacoplado (Ultrarrápido)
                         img_kriging, vmin, vmax = render_imagen_kriging(X, Y, Z_masked, bounds)
                         img_isolineas, geojson_iso, shp_iso_zip = render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_real)
                         img_flujo, geojson_flujo, shp_flujo_zip = render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, var_real, densidad_flujo, inside_mask)
 
-                        # Preparación de datos de Kriging para exportación
                         geotiff_bytes = generar_geotiff_bytes(Z_masked, bounds)
                         mask_val = ~np.isnan(Z_masked)
-                        df_grid = pd.DataFrame({"LONGITUD": np.round(X[mask_val], 6), "LATITUD": np.round(Y[mask_val], 6), "VALOR": np.round(Z_masked[mask_val], 3)})
-                        geojson_krig = json.dumps({"type": "FeatureCollection", "features": [{"type": "Feature", "geometry": {"type": "Point", "coordinates": [r["LONGITUD"], r["LATITUD"]]}, "properties": {"VALOR": r["VALOR"], "VARIABLE": var_real}} for _, r in df_grid.iterrows()]}, indent=2).encode('utf-8')
-                        shp_krig_zip = empaquetar_shapefile_zip(gpd.GeoDataFrame(df_grid, geometry=[Point(xy) for xy in zip(df_grid["LONGITUD"], df_grid["LATITUD"])], crs="EPSG:4326"), f"kriging_{clave_actual}") if (GEOPANDAS_INSTALADO and not df_grid.empty) else None
+                        lons_k = np.round(X[mask_val], 6)
+                        lats_k = np.round(Y[mask_val], 6)
+                        vals_k = np.round(Z_masked[mask_val], 3)
+                        df_grid = pd.DataFrame({"LONGITUD": lons_k, "LATITUD": lats_k, "VALOR": vals_k})
+                        features_krig = [
+                            {"type": "Feature", "geometry": {"type": "Point", "coordinates": [float(lo), float(la)]}, "properties": {"VALOR": float(vl), "VARIABLE": var_real}}
+                            for lo, la, vl in zip(lons_k, lats_k, vals_k)
+                        ]
+                        geojson_krig = json.dumps({"type": "FeatureCollection", "features": features_krig}).encode('utf-8')
+                        shp_krig_zip = empaquetar_shapefile_zip(gpd.GeoDataFrame(df_grid, geometry=[Point(xy) for xy in zip(lons_k, lats_k)], crs="EPSG:4326"), f"kriging_{clave_actual}") if (GEOPANDAS_INSTALADO and not df_grid.empty) else None
 
-                        # Semivariograma
+                        z_list = []
+                        for row in Z_masked:
+                            z_list.append([None if math.isnan(v) else round(float(v), 2) for v in row])
+                        z_data_json = json.dumps(z_list)
+                        bounds_json = json.dumps(bounds)
+
                         with ph_variograma.container():
-                            with st.container(border=True):
-                                st.markdown("<h5 style='color:#691C32; margin:0 0 8px 0;'>📈 Semivariograma Experimental vs Teórico</h5>", unsafe_allow_html=True)
-                                fig_var = go.Figure()
-                                fig_var.add_trace(go.Scatter(x=exp_lags, y=exp_semi, mode='markers', name='Experimental (Campo)', marker=dict(color='#9f2241', size=7)))
-                                fig_var.add_trace(go.Scatter(x=smooth_lags, y=theo_semi, mode='lines', name='Ajuste Teórico', line=dict(color='#285c4d', width=2)))
-                                fig_var.update_layout(
-                                    xaxis_title="Lag (Distancia)", yaxis_title="Semivarianza",
-                                    height=220, margin=dict(t=10, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)',
-                                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10))
-                                )
-                                fig_var.update_xaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
-                                fig_var.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
-                                st.plotly_chart(fig_var, use_container_width=True)
+                            fig_var = go.Figure()
+                            fig_var.add_trace(go.Scatter(x=exp_lags, y=exp_semi, mode='markers', name='Exp.', marker=dict(color='#9f2241', size=6)))
+                            fig_var.add_trace(go.Scatter(x=smooth_lags, y=theo_semi, mode='lines', name='Teórico', line=dict(color='#285c4d', width=2)))
+                            fig_var.update_layout(
+                                xaxis_title="Lag", yaxis_title="Semivarianza",
+                                height=250, margin=dict(t=10, b=10, l=10, r=10), plot_bgcolor='rgba(0,0,0,0)',
+                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10))
+                            )
+                            fig_var.update_xaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
+                            fig_var.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
+                            st.plotly_chart(fig_var, use_container_width=True)
 
-                                tabla_props = f"""
-                                <table style="width:100%; font-size:11.5px; border-collapse: collapse; font-family: 'Segoe UI', sans-serif;">
-                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Determinación (R²):</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Determination (R²)']}</td></tr>
-                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Fitting Range:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Fitting Range']}</td></tr>
-                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Muestras Activas:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Samples']} pozos</td></tr>
-                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Lag Distance:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Lag Distance']}</td></tr>
-                                    <tr><td style="color:#64748B; padding:3px 0;">Distancia Máxima:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Max Distance']}</td></tr>
+                            tabla_props = f"""
+                            <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px; padding:10px; margin-top:10px;">
+                                <p style="margin:0 0 5px 0; font-size:12px; font-weight:bold; color:#691C32; border-bottom:1px solid #CBD5E1; padding-bottom:4px;">Métricas del Ajuste</p>
+                                <table style="width:100%; font-size:11px; border-collapse: collapse; font-family: 'Segoe UI', sans-serif;">
+                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">R²:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Determination (R²)']}</td></tr>
+                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Rango:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Fitting Range']}</td></tr>
+                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Muestras:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Samples']}</td></tr>
+                                    <tr style="border-bottom: 1px solid #E2E8F0;"><td style="color:#64748B; padding:3px 0;">Lag Dist:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Lag Distance']}</td></tr>
+                                    <tr><td style="color:#64748B; padding:3px 0;">Dist. Max:</td><td style="font-weight:700; color:#1E293B; text-align:right;">{props_kriging['Max Distance']}</td></tr>
                                 </table>
-                                """
-                                st.markdown(tabla_props, unsafe_allow_html=True)
+                            </div>
+                            """
+                            st.markdown(tabla_props, unsafe_allow_html=True)
+
+                        with ph_validacion.container():
+                            if df_ranking_loocv is not None and not df_ranking_loocv.empty:
+                                st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:2px; font-size:12.5px;'>🎯 VALIDACIÓN CRUZADA LOOCV</p>", unsafe_allow_html=True)
+                                st.markdown("<p style='font-size:10.5px; color:#64748B; margin-bottom:8px;'>Evaluación Leave-One-Out (LOOCV) iterativa sobre los 8 modelos de semivariograma para identificar el menor error de interpolación.</p>", unsafe_allow_html=True)
+
+                                rmse_top = df_ranking_loocv.iloc[0]['RMSE (m)']
+                                mae_top = df_ranking_loocv.iloc[0]['MAE (m)']
+                                r2_top = df_ranking_loocv.iloc[0]['R²']
+                                
+                                st.markdown(f"""
+                                <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px; padding:7px 10px; margin-bottom:8px;">
+                                    <span style="color:#166534; font-weight:700; font-size:11.5px;">🏆 Modelo Óptimo: {modelo_optimo_sugerido}</span><br>
+                                    <span style="color:#15803d; font-size:10.5px;">RMSE Mínimo: <b>{rmse_top:.3f} m</b> | MAE: <b>{mae_top:.3f} m</b> | R²: <b>{r2_top:.4f}</b></span>
+                                </div>
+                                """, unsafe_allow_html=True)
+
+                                st.markdown("<b style='font-size:11px; color:#1e293b;'>Ranking General de Precisión:</b>", unsafe_allow_html=True)
+                                st.dataframe(df_ranking_loocv, use_container_width=True, hide_index=True)
+
+                                df_det_act = detalles_loocv.get(param, detalles_loocv.get(modelo_optimo_sugerido, None))
+                                if df_det_act is not None and not df_det_act.empty:
+                                    st.markdown(f"<b style='font-size:11px; color:#1e293b; margin-top:6px;'>Dispersión Medido vs Predicho ({param.split(' ')[0]}):</b>", unsafe_allow_html=True)
+                                    min_val = min(df_det_act['Observado'].min(), df_det_act['Predicho_LOOCV'].min())
+                                    max_val = max(df_det_act['Observado'].max(), df_det_act['Predicho_LOOCV'].max())
+
+                                    fig_loocv = go.Figure()
+                                    fig_loocv.add_trace(go.Scatter(
+                                        x=[min_val, max_val], y=[min_val, max_val],
+                                        mode='lines', name='1:1 Ideal',
+                                        line=dict(color='#64748B', dash='dash', width=1.5)
+                                    ))
+                                    fig_loocv.add_trace(go.Scatter(
+                                        x=df_det_act['Observado'], y=df_det_act['Predicho_LOOCV'],
+                                        mode='markers', name='Pozos',
+                                        text=df_det_act['Pozo'] + '<br>Residuo: ' + df_det_act['Residual_m'].astype(str) + ' m',
+                                        marker=dict(
+                                            color=df_det_act['Abs_Residual_m'],
+                                            colorscale='Reds',
+                                            size=7,
+                                            showscale=True,
+                                            colorbar=dict(title=dict(text="|e| m", font=dict(size=9)), thickness=8, len=0.7)
+                                        )
+                                    ))
+                                    fig_loocv.update_layout(
+                                        xaxis_title="Medido (msnm)", yaxis_title="Predicho LOOCV (msnm)",
+                                        height=240, margin=dict(t=10, b=10, l=10, r=10),
+                                        plot_bgcolor='rgba(0,0,0,0)',
+                                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9))
+                                    )
+                                    fig_loocv.update_xaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
+                                    fig_loocv.update_yaxes(showgrid=True, gridcolor='rgba(200,200,200,0.2)')
+                                    st.plotly_chart(fig_loocv, use_container_width=True)
+
+                                    with st.expander("🔬 Residuales por Pozo (Detección de Outliers)", expanded=False):
+                                        fila_m = df_ranking_loocv[df_ranking_loocv['Modelo'] == param]
+                                        v_rmse = fila_m['RMSE (m)'].values[0] if not fila_m.empty else rmse_top
+                                        df_exp = df_det_act.copy()
+                                        df_exp['Diagnóstico'] = df_exp['Abs_Residual_m'].apply(lambda e: '⚠️ Discrepancia (>2 RMSE)' if e > 2*v_rmse else 'Normal')
+                                        st.dataframe(df_exp[['Pozo', 'Observado', 'Predicho_LOOCV', 'Residual_m', 'Diagnóstico']], use_container_width=True, hide_index=True)
+                            else:
+                                st.info("ℹ️ Se requieren al menos 4 pozos para calcular la validación cruzada geoestadística.")
                         
-                        centro_lat, centro_lon = df_ultimo['Latitud'].mean(), df_ultimo['Longitud'].mean()
-                        m = folium.Map(location=[centro_lat, centro_lon], zoom_start=10, tiles=None, control_scale=False, zoom_control=True)
-                        m.fit_bounds(bounds)
-
-                        # Estilos Leaflet
-                        css_controles = """
-                        <style>
-                            .leaflet-top.leaflet-left { left: 0 !important; top: 0 !important; }
-                            .leaflet-control-zoom { margin-top: 12px !important; margin-left: 12px !important; }
-                            .leaflet-control-layers { margin-top: 10px !important; margin-right: 10px !important; z-index: 2000 !important; }
-                            .leaflet-control-layers-expanded { z-index: 2500 !important; box-shadow: 0 4px 18px rgba(0,0,0,0.25) !important; }
-                            .gradient-widget-control { position: absolute !important; top: 125px !important; right: 10px !important; z-index: 1000 !important; pointer-events: auto !important; }
-                            .leaflet-open-gradient-btn { background: #691C32 !important; color: #ffffff !important; width: 38px !important; height: 38px !important; border-radius: 50% !important; line-height: 36px !important; text-align: center !important; cursor: pointer !important; box-shadow: 0 3px 10px rgba(105, 28, 50, 0.35) !important; font-size: 17px !important; border: 1.5px solid #BC955C !important; display: flex; align-items: center !important; justify-content: center !important; transition: all 0.2s ease !important; }
-                            .leaflet-open-gradient-btn:hover { background: #4A1424 !important; transform: scale(1.08) !important; }
-                            .gradient-docked-panel { background: #ffffff !important; width: 280px !important; border-radius: 8px !important; overflow: hidden !important; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important; border-top: 4px solid #691C32 !important; border: 1px solid #E2D9C8 !important; font-family: 'Segoe UI', Arial, sans-serif !important; display: none; }
-                            .docked-gradient-header { background: #691C32 !important; color: #ffffff !important; padding: 9px 12px !important; position: relative !important; }
-                            .docked-gradient-title { font-size: 13px !important; font-weight: 700 !important; color: #ffffff !important; padding-right: 22px !important; }
-                            .docked-gradient-sub { font-size: 10px !important; color: #D4C19C !important; margin-top: 3px !important; text-transform: uppercase !important; }
-                            .docked-gradient-close { position: absolute !important; top: 6px !important; right: 10px !important; color: #ffffff !important; cursor: pointer !important; font-size: 20px !important; }
-                            .docked-gradient-close:hover { color: #BC955C !important; }
-                            .docked-gradient-body { padding: 12px 14px !important; background: #ffffff !important; }
-                            .info.legend-piezo { background: white; padding: 12px; border: 1px solid #dcdde1; border-radius: 6px; font-size: 12px; line-height: 18px; color: #333; box-shadow: 0 4px 10px rgba(0,0,0,0.15); margin-bottom: 15px !important; margin-left: 15px !important; font-family: 'Segoe UI', sans-serif; }
-                            .info.legend-piezo b { font-size: 13.5px; display: block; margin-bottom: 8px; color: #691C32; border-bottom: 1px solid #eee; padding-bottom: 4px;}
-                            .info.legend-piezo i.circulo { width: 12px; height: 12px; float: left; margin-right: 8px; margin-top: 2px; border: 1px solid #fff; border-radius: 50%; }
-                            .info.legend-piezo i.flecha { color:#004085; font-weight:bold; font-size:16px; float:left; margin-right:8px; line-height: 14px; font-style: normal; }
-                        </style>
-                        """
-                        m.get_root().html.add_child(folium.Element(css_controles))
-
-                        # Mapas Base
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Neutral (defecto)').add_to(m)
-                        folium.TileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', attr='OpenStreetMap', name='OpenStreetMap', show=False).add_to(m)
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Estándar (ESRI)', show=False).add_to(m)
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Satélite (ESRI)', show=False).add_to(m)
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Topográfico (ESRI)', show=False).add_to(m)
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Terreno (ESRI)', show=False).add_to(m)
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Océanos (ESRI)', show=False).add_to(m)
-                        folium.TileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', attr='Esri', name='Gris Oscuro (ESRI)', show=False).add_to(m)
-                        folium.TileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Google Satelital (Transparencia)', show=False).add_to(m)
-
-                        # Polígono Oficial
-                        if geom_activa is not None:
-                            capa_poligono = folium.FeatureGroup(name="🗺️ Polígono Oficial del Acuífero", show=True)
-                            folium.GeoJson(
-                                geom_activa.__geo_interface__,
-                                style_function=lambda x: {
-                                    'fillColor': '#BC955C', 'color': '#691C32',
-                                    'weight': 2.5, 'fillOpacity': 0.10, 'dashArray': '4, 4'
-                                },
-                                tooltip=f"<b>Acuífero:</b> {nombre_actual} ({clave_actual})"
-                            ).add_to(capa_poligono)
-                            capa_poligono.add_to(m)
-
-                        # Capa Calor
-                        capa_calor = folium.FeatureGroup(name="🔥 Mapa de Calor (Zonas Críticas)", show=False)
-                        heat_data = [[row['Latitud'], row['Longitud'], row['Profundidad_NE']] for _, row in df_ultimo.iterrows()]
-                        HeatMap(heat_data, radius=35, blur=25, min_opacity=0.4, gradient={0.2: '#285c4d', 0.6: '#b38e5d', 1.0: '#9f2241'}).add_to(capa_calor)
-                        capa_calor.add_to(m)
-                        
-                        # Capa Kriging con opacidad directa en Leaflet
-                        capa_kriging = folium.FeatureGroup(name="🌊 Superficie Piezométrica (Kriging)", show=True)
-                        img_krig_b64 = base64.b64encode(img_kriging).decode('utf-8')
-                        folium.raster_layers.ImageOverlay(
-                            image=f"data:image/png;base64,{img_krig_b64}", 
-                            bounds=bounds, 
-                            opacity=opacidad_kriging
-                        ).add_to(capa_kriging)
-                        capa_kriging.add_to(m)
-
-                        # Capa Isolíneas
-                        capa_isolineas = folium.FeatureGroup(name="📏 Isolíneas / Isopiezas (Cotas)", show=True)
-                        img_iso_b64 = base64.b64encode(img_isolineas).decode('utf-8')
-                        folium.raster_layers.ImageOverlay(
-                            image=f"data:image/png;base64,{img_iso_b64}", 
-                            bounds=bounds, 
-                            opacity=0.95
-                        ).add_to(capa_isolineas)
-                        capa_isolineas.add_to(m)
-
-                        # Capa Flujo
-                        capa_flujo = folium.FeatureGroup(name="🧭 Vectores de Dirección de Flujo", show=True)
-                        img_flujo_b64 = base64.b64encode(img_flujo).decode('utf-8')
-                        folium.raster_layers.ImageOverlay(
-                            image=f"data:image/png;base64,{img_flujo_b64}", 
-                            bounds=bounds, 
-                            opacity=0.90
-                        ).add_to(capa_flujo)
-                        capa_flujo.add_to(m)
-                        
-                        # Capa Pozos
-                        capa_pozos = folium.FeatureGroup(name="📍 Red Piezométrica (Pozos)", show=True)
-                        if hull_pts is not None and modo_delimitacion != "Polígono Oficial del Acuífero":
-                            hull_folium = [[float(pt[1]), float(pt[0])] for pt in hull_pts]
-                            hull_folium.append(hull_folium[0])
-                            folium.PolyLine(
-                                locations=hull_folium, color='#691C32', weight=2, dash_array='6, 6',
-                                tooltip=f"Envolvente Convexa ({len(df_ultimo)} pozos)"
-                            ).add_to(capa_pozos)
-
+                        # 1. Preparar GeoJSON de Pozos Oficiales
+                        features_pozos = []
                         for _, row in df_ultimo.iterrows():
                             df_hist = df_ac[df_ac['Pozo'].astype(str) == str(row['Pozo'])]
                             if len(df_hist) >= 2:
-                                z = np.polyfit(df_hist['Año'], df_hist['Profundidad_NE'], 1)
-                                color_punto = "#9f2241" if z[0] > 0.1 else ("#285c4d" if z[0] < -0.1 else "#b38e5d")
-                            else: color_punto = "#9e9d9e"
-                                
-                            folium.CircleMarker(
-                                location=[row['Latitud'], row['Longitud']],
-                                radius=6, color='#111', weight=1, fill=True, fill_color=color_punto, fill_opacity=1,
-                                tooltip=f"<b>Pozo {row['Pozo']}</b><br>Valor Modelo: {row[var_real]:.2f}<br>Año Medición: {row['Año']}"
-                            ).add_to(capa_pozos)
-                        capa_pozos.add_to(m)
-                        
-                        # Gradiente Piezométrico
+                                z_trend = np.polyfit(df_hist['Año'], df_hist['Profundidad_NE'], 1)[0]
+                                color_punto = "#9f2241" if z_trend > 0.1 else ("#285c4d" if z_trend < -0.1 else "#b38e5d")
+                            else:
+                                color_punto = "#9e9d9e"
+                            tipo_dato_txt = str(row.get('Tipo_Dato', 'Medición Real'))
+                            anio_medido_txt = int(row.get('Año_Medido', row['Año']))
+                            features_pozos.append({
+                                "type": "Feature",
+                                "geometry": {"type": "Point", "coordinates": [row['Longitud'], row['Latitud']]},
+                                "properties": {
+                                    "Pozo": row['Pozo'],
+                                    "Valor": round(row[var_real], 2),
+                                    "Año": int(row['Año']),
+                                    "Año_Medido": anio_medido_txt,
+                                    "Tipo": tipo_dato_txt,
+                                    "Color": color_punto,
+                                    "Variable": var_real
+                                }
+                            })
+                        geojson_pozos_str = json.dumps({"type": "FeatureCollection", "features": features_pozos})
+
+                        # 2. Preparar GeoJSON de Puntos Adicionales (Manual/CSV)
+                        features_add = []
+                        for pt in st.session_state.get("marcadores_piezo", []):
+                            fuente = pt.get("fuente", "manual")
+                            color = "#2980b9" if fuente == "csv" else "#d35400"
+                            features_add.append({
+                                "type": "Feature",
+                                "geometry": {"type": "Point", "coordinates": [pt['lon'], pt['lat']]},
+                                "properties": {
+                                    "nombre": pt['nombre'],
+                                    "tipo": pt.get('tipo', 'Desconocido'),
+                                    "color": color,
+                                    "fuente": fuente,
+                                    "atributos": pt.get('atributos', {})
+                                }
+                            })
+                        geojson_add_str = json.dumps({"type": "FeatureCollection", "features": features_add})
+
+                        # 3. Preparar GeoJSON de Geología
+                        geojson_geo_str = "{}"
+                        col_sel_geo = "LITOLOGIA"
+                        dic_leyenda_rocas = {}
+                        if geom_activa is not None:
+                            gdf_geo, col_sel_geo, dic_leyenda_rocas = preparar_geologia_vectorial(clave_actual, geom_activa)
+                            if gdf_geo is not None and not gdf_geo.empty:
+                                geojson_geo_str = gdf_geo.to_json()
+
+                        # 4. Coordenadas de la imagen para MapLibre
+                        min_y, min_x = bounds[0]
+                        max_y, max_x = bounds[1]
+
+                        if geom_activa is not None:
+                            try:
+                                centro_lon = float(geom_activa.centroid.x)
+                                centro_lat = float(geom_activa.centroid.y)
+                            except Exception:
+                                centro_lon = float((min_x + max_x) / 2.0)
+                                centro_lat = float((min_y + max_y) / 2.0)
+                        else:
+                            centro_lon = float((min_x + max_x) / 2.0)
+                            centro_lat = float((min_y + max_y) / 2.0)
+
+                        img_coords_json = json.dumps([
+                            [min_x, max_y], [max_x, max_y], [max_x, min_y], [min_x, min_y]
+                        ])
+
+                        if vmin == vmax:
+                            vmax = vmin + 1.0
+
                         vmid = (vmin + vmax) / 2.0
-                        vmin_fmt, vmid_fmt, vmax_fmt = f"{vmin:.1f}", f"{vmid:.1f}", f"{vmax:.1f}"
                         var_titulo_limpio = "Carga Hidráulica (msnm)" if "Carga" in var_interp else "Profundidad del Nivel (m)"
+                        
+                        poly_bounds_str = json.dumps(list(geom_activa.bounds)) if geom_activa is not None else "null"
+                        
+                        img_krig_b64 = base64.b64encode(img_kriging).decode('utf-8')
+                        img_iso_b64 = base64.b64encode(img_isolineas).decode('utf-8')
+                        img_flujo_b64 = base64.b64encode(img_flujo).decode('utf-8')
 
-                        class ControlesVisualesMapa(MacroElement):
-                            def __init__(self):
-                                super().__init__()
-                                self._template = Template(f"""
-                                {{% macro script(this, kwargs) %}}
-                                L.control.scale({{position: 'bottomright', metric: true, imperial: true}}).addTo({{{{this._parent.get_name()}}}});
+                        # Carga de concesiones REPDA para visualización de extracciones vs dinámica de flujo
+                        df_repda_pts_tab1, geojson_repda_tab1_str, tiene_repda_tab1 = cargar_concesiones_repda_puntos(clave_actual, st.session_state.get("repda_custom_df"))
+                        n_repda_tab1 = len(df_repda_pts_tab1)
+                        
+                        # 5. Construcción dinámica de la leyenda editable (Estilo Visor y Descargas)
+                        hay_manual = any(pt.get("fuente") == "manual" for pt in st.session_state.get("marcadores_piezo", []))
+                        hay_csv = any(pt.get("fuente") == "csv" for pt in st.session_state.get("marcadores_piezo", []))
+                        
+                        span_edit = 'contenteditable="true" spellcheck="false" title="Haz clic para editar este texto" class="txt-leyenda-editable"'
 
-                                var legend = L.control({{position: 'bottomleft'}});
-                                legend.onAdd = function (map) {{
-                                    var div = L.DomUtil.create('div', 'info legend-piezo');
-                                    div.innerHTML = `
-                                    <b>Simbología</b>
-                                    <i class="circulo" style="background:#9f2241;"></i> Pozo Abatiéndose<br>
-                                    <i class="circulo" style="background:#285c4d;"></i> Pozo Recuperando<br>
-                                    <i class="circulo" style="background:#b38e5d;"></i> Pozo Estable<br>
-                                    <hr style="margin: 8px 0; border: 0; border-top: 1px solid #eee;">
-                                    <div style="display:flex; align-items:center; margin-top:2px;">
-                                        <i class="flecha">&rarr;</i> <span>Vectores de Flujo</span>
+                        leyenda_html = f"""
+                        <b style="color:#691C32; font-size: 12px;"><span {span_edit}>Simbología</span></b><br>
+                        <div id="leg-pozos" style="margin-top:4px;">
+                            <i style="background:#9f2241;"></i> <span {span_edit}>Pozo Abatiéndose</span><br>
+                            <i style="background:#285c4d;"></i> <span {span_edit}>Pozo Recuperando</span><br>
+                            <i style="background:#b38e5d;"></i> <span {span_edit}>Pozo Estable</span><br>
+                        </div>
+                        """
+                        
+                        leyenda_html += f'<div id="leg-manual" style="display: {"block" if hay_manual else "none"}; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
+                        leyenda_html += f'<i style="background:#d35400;"></i> <span {span_edit}>Puntos Manuales</span><br></div>'
+                            
+                        leyenda_html += f'<div id="leg-csv" style="display: {"block" if hay_csv else "none"}; margin-top:4px;">'
+                        leyenda_html += f'<i class="circle" style="background:#2980b9;"></i> <span {span_edit}>Puntos CSV</span><br></div>'
+
+                        if tiene_repda_tab1:
+                            leyenda_html += f'<div id="leg-repda" style="display: none; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
+                            leyenda_html += f'<b style="color:#691C32; font-size:11px;"><span {span_edit}>Concesiones REPDA ({n_repda_tab1})</span></b><br>'
+                            leyenda_html += f'<div style="font-size:9.5px; color:#64748B; margin-bottom:2px;"><span {span_edit}>Radio proporcional a √Volumen</span></div>'
+                            leyenda_html += f'<i class="circle" style="background:#16a34a;"></i> <span {span_edit}>Agrícola</span><br>'
+                            leyenda_html += f'<i class="circle" style="background:#2563eb;"></i> <span {span_edit}>Público Urbano</span><br>'
+                            leyenda_html += f'<i class="circle" style="background:#d97706;"></i> <span {span_edit}>Industrial</span><br>'
+                            leyenda_html += f'<i class="circle" style="background:#9333ea;"></i> <span {span_edit}>Servicios / Comercial</span><br>'
+                            leyenda_html += f'<i class="circle" style="background:#06b6d4;"></i> <span {span_edit}>Doméstico</span><br>'
+                            leyenda_html += f'<i class="circle" style="background:#ec4899;"></i> <span {span_edit}>Diferentes Usos</span><br></div>'
+
+                        leyenda_html += f"""
+                        <div id="leg-repda-nac" style="display: none; margin-top:5px; border-top: 1px solid #eee; padding-top:4px;">
+                            <b style="color:#166534; font-size:11px;"><span {span_edit}>🇲🇽 REPDA Nacional (461,914)</span></b><br>
+                            <div style="font-size:9.5px; color:#64748B; margin-bottom:3px;"><span {span_edit}>Uso Oficial Registrado</span></div>
+                            <i class="circle" style="background:#16a34a;"></i> <span {span_edit}>Agrícola</span><br>
+                            <i class="circle" style="background:#2563eb;"></i> <span {span_edit}>Público Urbano</span><br>
+                            <i class="circle" style="background:#ca8a04;"></i> <span {span_edit}>Pecuario</span><br>
+                            <i class="circle" style="background:#dc2626;"></i> <span {span_edit}>Industrial</span><br>
+                            <i class="circle" style="background:#9333ea;"></i> <span {span_edit}>Servicios</span><br>
+                            <i class="circle" style="background:#0284c7;"></i> <span {span_edit}>Doméstico</span><br>
+                            <i class="circle" style="background:#0d9488;"></i> <span {span_edit}>Diferentes Usos</span><br>
+                        </div>
+                        """
+                            
+                        if dic_leyenda_rocas:
+                            leyenda_html += f'<div id="leg-geo" style="display: {"block" if False else "none"}; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
+                            leyenda_html += f'<b style="color:#691C32; font-size:11px;"><span {span_edit}>Geología SGM ({col_sel_geo})</span></b><div style="max-height: 150px; overflow-y: auto; margin-top:4px;">'
+                            for roca, color in dic_leyenda_rocas.items():
+                                leyenda_html += f'<i class="square" style="background:{color};"></i> <span {span_edit} style="font-size:9.5px;">{roca}</span><br>'
+                            leyenda_html += '</div></div>'
+
+                        url_pmtiles_srv_tab1 = obtener_url_pmtiles()
+
+                        # 6. HTML de MapLibre (Motor WebGL)
+                        html_maplibre = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                            <meta charset="utf-8" />
+                            <title>Red Piezométrica MapLibre</title>
+                            <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+                            <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+                            <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+                            <script src="https://unpkg.com/pmtiles@2.11.0/dist/index.js"></script>
+                            
+                            <!-- Librerías Vectoriales para Dibujo y Cálculo Geodésico -->
+                            <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" type="text/css" />
+                            <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
+                            <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+
+                            <style>
+                                body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
+                                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #ffffff; border-radius: 8px; }}
+                                
+                                .txt-leyenda-editable {{ 
+                                    cursor: text; padding: 1px 4px; border-radius: 3px; outline: none; 
+                                    border-bottom: 1px dashed transparent; transition: background-color 0.2s; 
+                                }}
+                                .txt-leyenda-editable:hover {{ 
+                                    background-color: rgba(0,0,0,0.05); border-bottom: 1px dashed #888; 
+                                }}
+                                .txt-leyenda-editable:focus {{ 
+                                    background-color: #ffffff; border-bottom: 1.5px solid #2980b9; 
+                                    box-shadow: 0 1px 3px rgba(0,0,0,0.15); 
+                                }}
+
+                                .gis-badge-popup .maplibregl-popup-content {{
+                                    background: rgba(255, 255, 255, 0.95) !important;
+                                    backdrop-filter: blur(8px) !important;
+                                    border: 1px solid #CBD5E1 !important;
+                                    border-top: 3px solid #691C32 !important;
+                                    border-radius: 6px !important;
+                                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16) !important;
+                                    padding: 6px 10px !important;
+                                    font-family: 'Segoe UI', Arial, sans-serif !important;
+                                    line-height: 1.4 !important;
+                                    pointer-events: auto !important;
+                                }}
+                                .gis-badge-popup .maplibregl-popup-tip {{
+                                    border-top-color: rgba(255, 255, 255, 0.95) !important;
+                                }}
+                                .gis-badge-popup .maplibregl-popup-close-button {{
+                                    font-size: 14px !important;
+                                    color: #64748B !important;
+                                    padding: 2px 5px !important;
+                                    right: 2px !important;
+                                    top: 2px !important;
+                                    cursor: pointer !important;
+                                }}
+                                .gis-badge-popup .maplibregl-popup-close-button:hover {{
+                                    color: #DC2626 !important;
+                                    background: transparent !important;
+                                }}
+
+                                .hud-elevation {{
+                                    position: absolute; top: 12px; right: 55px; z-index: 1000;
+                                    background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
+                                    color: #1e293b; padding: 7px 14px; border-radius: 8px;
+                                    border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                                    font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
+                                }}
+                                .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+                                
+                                .btn-open-dock-circle {{
+                                    position: absolute; top: 12px; left: 12px; z-index: 1000;
+                                    background: #691C32; color: #ffffff; width: 38px; height: 38px;
+                                    border-radius: 50%; border: 1.5px solid #DDC9A3;
+                                    box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+                                    font-size: 19px; font-weight: bold; cursor: pointer;
+                                    display: flex; align-items: center; justify-content: center;
+                                    transition: all 0.2s ease;
+                                }}
+                                .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.1); }}
+                                
+                                .workbench-dock {{
+                                    position: absolute; top: 12px; left: 12px; z-index: 2000;
+                                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                                    width: 280px; border-radius: 10px; overflow: hidden;
+                                    box-shadow: 0 6px 20px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
+                                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+                                    font-size: 11.5px; color: #1E293B;
+                                }}
+                                .dock-header {{ 
+                                    background: #691C32; color: white; padding: 9px 12px; 
+                                    font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
+                                }}
+                                .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
+                                .dock-section {{ margin-bottom: 12px; }}
+                                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
+                                .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+                                
+                                .legend-panel {{
+                                    position: absolute; bottom: 35px; left: 12px; z-index: 1000;
+                                    background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 8px;
+                                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 11px; line-height: 1.6;
+                                    border: 1px solid #E2E8F0; max-width: 280px; pointer-events: auto;
+                                }}
+                                .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #ccc; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }}
+                                .legend-panel .square {{ border-radius: 2px; }}
+                                
+                                .leaflet-open-gradient-btn {{
+                                    position: absolute; top: 160px; right: 10px; z-index: 1000;
+                                    background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
+                                    border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                                    transition: background 0.2s ease;
+                                }}
+                                .leaflet-open-gradient-btn:hover {{ background: #88102B !important; }}
+
+                                .gradient-docked-panel {{
+                                    position: absolute; top: 160px; right: 50px; z-index: 2000;
+                                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                                    width: 220px; border-radius: 8px; overflow: hidden;
+                                    box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                                    font-size: 11px; color: #1E293B;
+                                }}
+                                .docked-gradient-header {{
+                                    background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                                    font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                                    border-bottom: 1px solid #e2e8f0;
+                                }}
+                                .docked-gradient-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; }}
+                                .docked-gradient-close:hover {{ color: #dc2626; }}
+                                .docked-gradient-body {{ padding: 10px; }}
+                                .gradient-bar {{ height: 10px; border-radius: 4px; background: linear-gradient(to right, #eff3ff, #bdd7e7, #6baed6, #3182bd, #08519c); margin: 6px 0; border: 1px solid #ccc; }}
+                                .gradient-labels {{ display: flex; justify-content: space-between; font-weight: bold; color: #333; }}
+
+                                .leaflet-open-draw-btn {{
+                                    position: absolute; top: 196px; right: 10px; z-index: 1000;
+                                    background: #ffffff; color: #691C32; width: 29px; height: 29px;
+                                    border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                                    transition: background 0.2s ease;
+                                }}
+                                .leaflet-open-draw-btn:hover {{ background: #f4f4f4; }}
+
+                                .draw-docked-panel {{
+                                    position: absolute; top: 196px; right: 50px; z-index: 2000;
+                                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                                    width: 270px; border-radius: 8px; overflow: hidden;
+                                    box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                                    font-size: 11px; color: #1E293B;
+                                }}
+                                .docked-draw-header {{
+                                    background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                                    font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                                    border-bottom: 1px solid #e2e8f0; font-size: 11.5px;
+                                }}
+                                .docked-draw-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; font-weight: bold; }}
+                                .docked-draw-close:hover {{ color: #dc2626; }}
+                                .docked-draw-body {{ padding: 10px; }}
+
+                                .draw-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }}
+                                .btn-tool {{
+                                    background: #ffffff; border: 1px solid #CBD5E1; border-radius: 5px;
+                                    padding: 6px 8px; font-size: 11px; font-weight: 600; color: #334155;
+                                    display: flex; align-items: center; gap: 6px; cursor: pointer; transition: all 0.15s ease;
+                                }}
+                                .btn-tool svg {{ width: 14px; height: 14px; stroke: #691C32; fill: none; stroke-width: 2; flex-shrink: 0; }}
+                                .btn-tool:hover {{ background: #f1f5f9; border-color: #691C32; color: #691C32; }}
+                                .btn-tool.active {{ background: #691C32; border-color: #691C32; color: #ffffff; }}
+                                .btn-tool.active svg {{ stroke: #ffffff; }}
+
+                                .btn-preset {{
+                                    flex: 1; padding: 3px 4px; font-size: 10px; font-weight: 600;
+                                    border: 1px solid #cbd5e1; border-radius: 3px; background: #f8fafc;
+                                    color: #475569; cursor: pointer; transition: all 0.15s ease; text-align: center;
+                                }}
+                                .btn-preset:hover {{ background: #e2e8f0; color: #1e293b; border-color: #691C32; }}
+
+                                .draw-measure-box {{
+                                    background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 5px;
+                                    padding: 8px 10px; font-size: 11px; line-height: 1.45; color: #14532D;
+                                    margin-bottom: 8px; display: none;
+                                }}
+                                .draw-measure-box b {{ color: #166534; }}
+
+                                .draw-actions {{ display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px; }}
+                                .btn-action-sm {{
+                                    flex: 1; padding: 5px 8px; font-size: 10.5px; font-weight: 600;
+                                    border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff;
+                                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                                    gap: 5px; transition: all 0.15s ease; color: #334155;
+                                }}
+                                .btn-action-sm svg {{ width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }}
+                                .btn-action-sm:hover {{ background: #f8fafc; border-color: #94A3B8; }}
+                                .btn-action-sm.danger {{ color: #dc2626; border-color: #fecaca; }}
+                                .btn-action-sm.danger:hover {{ background: #fef2f2; border-color: #dc2626; }}
+
+                                .label-marker-corte {{
+                                    width: 22px; height: 22px; border-radius: 50%;
+                                    color: #ffffff; font-weight: 800; font-size: 11px;
+                                    display: flex; align-items: center; justify-content: center;
+                                    box-shadow: 0 2px 6px rgba(0,0,0,0.35); border: 2px solid #ffffff;
+                                    pointer-events: none; font-family: 'Segoe UI', Arial, sans-serif;
+                                }}
+                                .label-marker-corte.label-a {{ background: #691C32; }}
+                                .label-marker-corte.label-b {{ background: #166534; }}
+
+                                .perfil-docked-panel {{
+                                    position: absolute; bottom: 10px; left: 10px; right: 55px; height: 215px;
+                                    background: rgba(255, 255, 255, 0.98); backdrop-filter: blur(10px);
+                                    border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+                                    border: 1.5px solid #cbd5e1; border-top: 3.5px solid #691C32;
+                                    z-index: 2500; display: none; flex-direction: column; overflow: hidden;
+                                    font-size: 11px; color: #1e293b;
+                                }}
+                                .docked-perfil-header {{
+                                    background: #f8fafc; color: #1e293b; padding: 6px 12px;
+                                    font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                                    border-bottom: 1px solid #e2e8f0; font-size: 11.5px;
+                                }}
+                                .docked-perfil-body {{
+                                    flex: 1; display: flex; padding: 8px 12px; gap: 12px; overflow: hidden;
+                                }}
+                                .perfil-stats-col {{
+                                    width: 230px; display: flex; flex-direction: column; justify-content: space-between;
+                                    border-right: 1px solid #e2e8f0; padding-right: 10px; font-size: 11px; flex-shrink: 0;
+                                }}
+                                .perfil-stat-row {{ display: flex; justify-content: space-between; margin-bottom: 2px; }}
+                                .perfil-stat-row b {{ color: #691C32; }}
+                                .perfil-svg-container {{
+                                    flex: 1; position: relative; display: flex; flex-direction: column; min-width: 0;
+                                }}
+                                .perfil-tooltip {{
+                                    position: absolute; top: 4px; right: 8px; background: rgba(30, 41, 59, 0.92);
+                                    color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 10.5px;
+                                    pointer-events: none; display: none; z-index: 10;
+                                }}
+
+                                .maplibregl-ctrl-attrib {{
+                                    background-color: rgba(255, 255, 255, 0.85) !important;
+                                    padding: 2px 6px !important; border-radius: 3px !important;
+                                    font-size: 10.5px !important; color: #333 !important;
+                                    box-shadow: 0 1px 3px rgba(0,0,0,0.15) !important;
+                                }}
+                            </style>
+                        </head>
+                        <body>
+                            <div id="map"></div>
+                            
+                            <div class="hud-elevation">
+                                <div><b>LON:</b> <span id="hud-lon">--</span></div>
+                                <div><b>LAT:</b> <span id="hud-lat">--</span></div>
+                                <div style="color:#008a3b;"><b>VALOR:</b> <span id="hud-ele">--</span></div>
+                            </div>
+
+                            <div id="btn-open-dock" class="btn-open-dock-circle" onclick="toggleDock()" title="Abrir Herramientas Visuales">
+                                ☰
+                            </div>
+                            
+                            <div id="dock-panel" class="workbench-dock" style="display: none;">
+                                <div class="dock-header">
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <span>🛠️ Capas Visuales</span>
                                     </div>
-                                    `;
-                                    return div;
-                                }};
-                                legend.addTo({{{{this._parent.get_name()}}}});
+                                    <button onclick="toggleDock()" style="background:transparent; border:none; color:white; font-size:16px; font-weight:bold; cursor:pointer; line-height:1; padding:2px 5px;" title="Contraer panel">✕</button>
+                                </div>
+                                <div class="dock-body">
+                                    <div class="dock-section">
+                                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🌍 Mapa Base:</label>
+                                        <select id="sel-basemap" class="slider-ctrl" style="padding: 4px; border-radius: 4px; border: 1px solid #ccc; width: 100%; background: #f8fafc;">
+                                            <option value="base-light-layer">Gris Claro (Esri)</option>
+                                            <option value="base-sat-layer">Satélite (Esri)</option>
+                                            <option value="base-topo-layer">Topográfico (Esri)</option>
+                                            <option value="base-osm-layer">OpenStreetMap</option>
+                                            <option value="base-street-layer">Estándar (Esri)</option>
+                                            <option value="base-terrain-layer">Terreno (Esri)</option>
+                                            <option value="base-ocean-layer">Océanos (Esri)</option>
+                                            <option value="base-dark-layer">Gris Oscuro (Esri)</option>
+                                            <option value="base-google-layer">Google Satelital gris 35%</option>
+                                        </select>
+                                    </div>
+                                    <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                                    <div class="dock-section">
+                                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Kriging: <span id="val-opac">65%</span></label>
+                                        <input type="range" class="slider-ctrl" id="slider-opac" min="0" max="1" step="0.05" value="0.65" oninput="cambiarOpacidadKriging(this.value)">
+                                    </div>
+                                    <div class="dock-section" id="sec-opac-geo" style="display: none;">
+                                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Geología: <span id="val-opac-geo">50%</span></label>
+                                        <input type="range" class="slider-ctrl" id="slider-opac-geo" min="0" max="1" step="0.05" value="0.50" oninput="cambiarOpacidadGeologia(this.value)">
+                                    </div>
+                                    <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                                    <div class="dock-section">
+                                        <label><input type="checkbox" id="chk-kriging" checked> 🌊 Superficie Kriging</label>
+                                        <label><input type="checkbox" id="chk-iso" checked> 📏 Isolíneas / Isopiezas</label>
+                                        <label><input type="checkbox" id="chk-vec" checked> 🧭 Vectores de Flujo</label>
+                                        <label><input type="checkbox" id="chk-heat"> 🔥 Mapa de Calor</label>
+                                        <label><input type="checkbox" id="chk-pozos" checked> 📍 Red Piezométrica</label>
+                                        <label style="display: {'flex' if tiene_repda_tab1 else 'none'};"><input type="checkbox" id="chk-repda"> 🏢 Concesiones REPDA ({n_repda_tab1})</label>
+                                        <label style="display: flex;"><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
+                                        <label style="display: {'flex' if hay_manual else 'none'};"><input type="checkbox" id="chk-manual" checked> 🟠 Puntos Manuales</label>
+                                        <label style="display: {'flex' if hay_csv else 'none'};"><input type="checkbox" id="chk-csv" checked> 🔵 Puntos CSV</label>
+                                        <label style="display: {'flex' if dic_leyenda_rocas else 'none'};"><input type="checkbox" id="chk-geo"> ⛰️ Geología SGM</label>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="legend-panel">
+                                {leyenda_html}
+                            </div>
+                            
+                            <div id="btn-open-gradient" class="leaflet-open-gradient-btn" onclick="toggleGradient()" title="Mostrar Gradiente">
+                                <div style="width: 14px; height: 14px; background: linear-gradient(to bottom, #eff3ff, #08519c); border: 1px solid #fff; border-radius: 2px;"></div>
+                            </div>
 
-                                var gradControl = L.control({{position: 'topright'}});
-                                gradControl.onAdd = function (map) {{
-                                    var div = L.DomUtil.create('div', 'gradient-widget-control');
-                                    L.DomEvent.disableClickPropagation(div);
-                                    L.DomEvent.disableScrollPropagation(div);
+                            <div id="gradient-panel-container" class="gradient-docked-panel" style="display: none;">
+                                <div class="docked-gradient-header">
+                                    <span>Gradiente Piezométrico</span>
+                                    <span class="docked-gradient-close" onclick="toggleGradient()" title="Ocultar">&times;</span>
+                                </div>
+                                <div class="docked-gradient-body">
+                                    <b style="color:#691C32; font-size:11px;">{var_titulo_limpio}</b>
+                                    <div class="gradient-bar"></div>
+                                    <div class="gradient-labels">
+                                        <span>{vmin:.1f}</span>
+                                        <span>{vmid:.1f}</span>
+                                        <span>{vmax:.1f}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="btn-open-draw" class="leaflet-open-draw-btn" onclick="toggleDraw()" title="Herramientas de Dibujo y Medición">
+                                <svg viewBox="0 0 24 24" style="width:16px; height:16px; stroke:#691C32; fill:none; stroke-width:2;">
+                                    <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+                                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+                                    <circle cx="12" cy="12" r="2"/>
+                                </svg>
+                            </div>
+
+                            <div id="draw-panel-container" class="draw-docked-panel" style="display: none;">
+                                <div class="docked-draw-header">
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <svg viewBox="0 0 24 24" style="width:14px; height:14px; stroke:#691C32; fill:none; stroke-width:2;">
+                                            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                                            <polyline points="2 17 12 22 22 17"/>
+                                            <polyline points="2 12 12 17 22 12"/>
+                                        </svg>
+                                        <span>Gabinete Hidrogeológico</span>
+                                    </div>
+                                    <span class="docked-draw-close" onclick="toggleDraw()" title="Ocultar">&times;</span>
+                                </div>
+                                <div class="docked-draw-body">
+                                    <div class="draw-grid">
+                                        <button id="btn-tool-point" class="btn-tool" onclick="activarModoDibujo('point')" title="Sondear cota/profundidad puntual">
+                                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+                                            Punto
+                                        </button>
+                                        <button id="btn-tool-line" class="btn-tool" onclick="activarModoDibujo('line_string')" title="Trazar línea o corte transversal A-A'">
+                                            <svg viewBox="0 0 24 24"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="2.5"/><circle cx="20" cy="4" r="2.5"/></svg>
+                                            Corte A-A'
+                                        </button>
+                                        <button id="btn-tool-poly" class="btn-tool" onclick="activarModoDibujo('polygon')" title="Calcular superficie geodésica">
+                                            <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 18 20 6 20 2 8.5"/></svg>
+                                            Polígono
+                                        </button>
+                                        <button id="btn-tool-circle" class="btn-tool" onclick="iniciarDibujoCirculo()" title="Círculo a mano alzada">
+                                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="12" x2="18.36" y2="5.64"/></svg>
+                                            Círculo Libre
+                                        </button>
+                                    </div>
+
+                                    <!-- Sección de Buffer Analítico Fijo -->
+                                    <div style="margin: 8px 0; border-top: 1px solid #f1f5f9; padding-top: 8px;">
+                                        <div style="font-weight: 700; color: #1e293b; font-size: 10.5px; margin-bottom: 5px; display:flex; justify-content:space-between; align-items:center;">
+                                            <span>🎯 Radio de Influencia / Buffer</span>
+                                        </div>
+                                        <div style="display:flex; gap: 4px; align-items: center; margin-bottom: 5px;">
+                                            <input type="number" id="input-buffer-radio" value="500" min="20" max="50000" step="50" 
+                                                   style="width: 70px; padding: 4px 6px; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 4px;" title="Radio en metros">
+                                            <span style="font-size: 11px; color: #64748b;">m</span>
+                                            <button id="btn-tool-buffer" class="btn-tool" style="flex:1; padding: 4px 6px; font-size: 10.5px; justify-content: center;" onclick="activarModoBuffer()" title="Clic en mapa o pozo para colocar buffer">
+                                                Fijar Buffer
+                                            </button>
+                                        </div>
+                                        <div style="display: flex; gap: 4px;">
+                                            <button class="btn-preset" onclick="setBufferRadio(250)">250m</button>
+                                            <button class="btn-preset" onclick="setBufferRadio(500)">500m</button>
+                                            <button class="btn-preset" onclick="setBufferRadio(1000)">1km</button>
+                                            <button class="btn-preset" onclick="setBufferRadio(2000)">2km</button>
+                                        </div>
+                                    </div>
+
+                                    <!-- Controles de Modo Captura Limpia y Bloqueo -->
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin: 6px 0; background:#f8fafc; padding: 4px 6px; border-radius:4px; border:1px solid #e2e8f0;">
+                                        <label style="font-size:10px; color:#475569; display:flex; align-items:center; gap:5px; cursor:pointer;" title="Ocultar popups flotantes para capturas de pantalla 100% limpias">
+                                            <input type="checkbox" id="chk-show-badge" checked onchange="toggleMostrarBadges(this.checked)">
+                                            <span>Etiqueta en mapa</span>
+                                        </label>
+                                        <button class="btn-preset" onclick="deseleccionarTodo()" title="Ocultar nodos de edición para fotos de reporte" style="padding:2px 6px; font-size:9.5px;">
+                                            👁️ Ocultar Nodos
+                                        </button>
+                                    </div>
+
+                                    <div id="draw-measure-box" class="draw-measure-box"></div>
+
+                                    <div class="draw-actions">
+                                        <button class="btn-action-sm danger" onclick="eliminarDibujoSeleccionado()" title="Borrar selección o todos los trazos">
+                                            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                            Limpiar
+                                        </button>
+                                        <button class="btn-action-sm" onclick="descargarDibujosGeoJSON()" title="Descargar trazos en GeoJSON para QGIS/ArcGIS">
+                                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                            Exportar
+                                        </button>
+                                        <button class="btn-action-sm" onclick="document.getElementById('input-import-geojson').click()" title="Cargar archivo GeoJSON al visor">
+                                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                                            Importar
+                                        </button>
+                                        <input type="file" id="input-import-geojson" accept=".geojson,.json" style="display:none;" onchange="importarDibujosGeoJSON(event)">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Panel Inferior de Perfil Geohidrológico de Corte A - A' -->
+                            <div id="panel-perfil-corte" class="perfil-docked-panel" style="display: none;">
+                                <div class="docked-perfil-header">
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <svg viewBox="0 0 24 24" style="width:15px; height:15px; stroke:#691C32; fill:none; stroke-width:2.2;">
+                                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                                        </svg>
+                                        <span style="font-weight:700; color:#691C32;">Perfil Hidrogeológico de Corte Transversal A - A'</span>
+                                        <span id="perfil-header-resumen" style="font-weight:500; color:#64748b; font-size:10.5px; margin-left:6px;"></span>
+                                    </div>
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <button class="btn-action-sm" onclick="descargarCsvPerfil()" title="Exportar datos del transecto a CSV" style="padding:3px 8px; font-size:10.5px;">
+                                            <svg viewBox="0 0 24 24" style="width:12px; height:12px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                            Descargar CSV
+                                        </button>
+                                        <span class="docked-draw-close" onclick="cerrarPerfilCorte()" title="Cerrar">&times;</span>
+                                    </div>
+                                </div>
+                                <div class="docked-perfil-body">
+                                    <div class="perfil-stats-col" id="perfil-stats-box">
+                                        <!-- Métricas del Corte -->
+                                    </div>
+                                    <div class="perfil-svg-container" id="perfil-svg-box">
+                                        <div id="perfil-tooltip" class="perfil-tooltip"></div>
+                                        <svg id="perfil-svg-chart" style="width:100%; height:100%; overflow:visible;"></svg>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <script>
+                                function cambiarOpacidadKriging(valor) {{
+                                    if (map.getLayer('kriging-layer')) {{
+                                        map.setPaintProperty('kriging-layer', 'raster-opacity', parseFloat(valor));
+                                        document.getElementById('val-opac').innerText = Math.round(valor * 100) + '%';
+                                    }}
+                                }}
+
+                                function cambiarOpacidadGeologia(valor) {{
+                                    if (map.getLayer('geo-fill')) {{
+                                        map.setPaintProperty('geo-fill', 'fill-opacity', parseFloat(valor));
+                                        document.getElementById('val-opac-geo').innerText = Math.round(valor * 100) + '%';
+                                    }}
+                                }}
+
+                                const iconExpandSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+                                const iconCompressSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+
+                                let protocol = new pmtiles.Protocol();
+                                maplibregl.addProtocol("pmtiles", protocol.tile);
+
+                                const map = new maplibregl.Map({{
+                                    container: 'map',
+                                    style: {{
+                                        'version': 8,
+                                        'sources': {{
+                                            'base-light': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                                            'base-sat': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, Maxar' }},
+                                            'base-topo': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                                            'base-osm': {{ 'type': 'raster', 'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'], 'tileSize': 256, 'attribution': '© OpenStreetMap' }},
+                                            'base-street': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                                            'base-terrain': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                                            'base-ocean': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, GEBCO' }},
+                                            'base-dark': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                                            'base-google': {{ 'type': 'raster', 'tiles': ['https://mt1.google.com/vt/lyrs=s&x={{x}}&y={{y}}&z={{z}}'], 'tileSize': 256, 'attribution': 'Google Satellite' }}
+                                        }},
+                                        'layers': [
+                                            {{ 'id': 'base-light-layer', 'type': 'raster', 'source': 'base-light', 'layout': {{'visibility': 'visible'}} }},
+                                            {{ 'id': 'base-sat-layer', 'type': 'raster', 'source': 'base-sat', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-topo-layer', 'type': 'raster', 'source': 'base-topo', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-osm-layer', 'type': 'raster', 'source': 'base-osm', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-street-layer', 'type': 'raster', 'source': 'base-street', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-terrain-layer', 'type': 'raster', 'source': 'base-terrain', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-ocean-layer', 'type': 'raster', 'source': 'base-ocean', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-dark-layer', 'type': 'raster', 'source': 'base-dark', 'layout': {{'visibility': 'none'}} }},
+                                            {{ 'id': 'base-google-layer', 'type': 'raster', 'source': 'base-google', 'layout': {{'visibility': 'none'}}, 'paint': {{'raster-opacity': 0.35, 'raster-saturation': -1.0}} }}
+                                        ]
+                                    }},
+                                    center: [{centro_lon}, {centro_lat}],
+                                    zoom: 9.5,
+                                    attributionControl: false,
+                                    preserveDrawingBuffer: true
+                                }});
+                                
+                                class FullscreenCustomControl {{
+                                    onAdd(mapInstance) {{
+                                        this._map = mapInstance;
+                                        this._container = document.createElement('div');
+                                        this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+                                        
+                                        const btn = document.createElement('button');
+                                        btn.type = 'button';
+                                        btn.innerHTML = iconExpandSVG;
+                                        btn.title = 'Pantalla Completa';
+                                        btn.style.width = '30px';
+                                        btn.style.height = '30px';
+                                        btn.style.display = 'flex';
+                                        btn.style.alignItems = 'center';
+                                        btn.style.justifyContent = 'center';
+                                        btn.style.background = '#ffffff';
+                                        btn.style.cursor = 'pointer';
+                                        btn.style.border = 'none';
+                                        
+                                        btn.onclick = () => {{
+                                            if (!document.fullscreenElement) {{
+                                                document.documentElement.requestFullscreen().catch(err => {{}});
+                                            }} else {{
+                                                if (document.exitFullscreen) document.exitFullscreen();
+                                            }}
+                                        }};
+                                        
+                                        document.addEventListener('fullscreenchange', () => {{
+                                            btn.innerHTML = document.fullscreenElement ? iconCompressSVG : iconExpandSVG;
+                                            btn.title = document.fullscreenElement ? 'Salir de Pantalla Completa' : 'Pantalla Completa';
+                                            setTimeout(() => {{ mapInstance.resize(); }}, 200);
+                                        }});
+                                        
+                                        this._container.appendChild(btn);
+                                        return this._container;
+                                    }}
+                                    onRemove() {{
+                                        this._container.parentNode.removeChild(this._container);
+                                        this._map = undefined;
+                                    }}
+                                }}
+                                map.addControl(new FullscreenCustomControl(), 'top-right');
+                                map.addControl(new maplibregl.NavigationControl(), 'top-right');
+                                map.addControl(new maplibregl.AttributionControl({{ compact: false }}), 'bottom-right');
+                                map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
+
+                                const draw = new MapboxDraw({{
+                                    displayControlsDefault: false,
+                                    controls: {{}},
+                                    userProperties: true,
+                                    styles: [
+                                        {{
+                                            'id': 'gl-draw-line', 'type': 'line',
+                                            'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+                                            'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                                            'paint': {{ 'line-color': '#9f2241', 'line-width': 3, 'line-dasharray': [0.2, 2] }}
+                                        }},
+                                        {{
+                                            'id': 'gl-draw-polygon-fill', 'type': 'fill',
+                                            'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                                            'paint': {{ 'fill-color': '#285c4d', 'fill-opacity': 0.25 }}
+                                        }},
+                                        {{
+                                            'id': 'gl-draw-polygon-stroke', 'type': 'line',
+                                            'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                                            'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                                            'paint': {{ 'line-color': '#285c4d', 'line-width': 2.5 }}
+                                        }},
+                                        {{
+                                            'id': 'gl-draw-point', 'type': 'circle',
+                                            'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'vertex'], ['!=', 'meta', 'midpoint'], ['!=', 'mode', 'static']],
+                                            'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                                        }},
+                                        {{
+                                            'id': 'gl-draw-vertex-inactive', 'type': 'circle',
+                                            'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                                            'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                                        }},
+                                        {{
+                                            'id': 'gl-draw-vertex-active', 'type': 'circle',
+                                            'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                                            'paint': {{ 'circle-radius': 7, 'circle-color': '#691C32', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }}
+                                        }},
+                                        {{
+                                            'id': 'gl-draw-midpoint', 'type': 'circle',
+                                            'filter': ['all', ['==', 'meta', 'midpoint'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                                            'paint': {{ 'circle-radius': 4.5, 'circle-color': '#DDC9A3', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#691C32' }}
+                                        }}
+                                    ]
+                                }});
+                                map.addControl(draw);
+
+                                let dockAbierto = true;
+                                function aplicarEstadoVisualDock() {{
+                                    const dock = document.getElementById('dock-panel');
+                                    const btnOpen = document.getElementById('btn-open-dock');
+                                    if (dock && btnOpen) {{
+                                        dock.style.display = dockAbierto ? 'block' : 'none';
+                                        btnOpen.style.display = dockAbierto ? 'none' : 'flex';
+                                    }}
+                                }}
+                                function toggleDock() {{
+                                    dockAbierto = !dockAbierto;
+                                    aplicarEstadoVisualDock();
+                                }}
+                                aplicarEstadoVisualDock();
+                                
+                                let gradientAbierto = false;
+                                function toggleGradient() {{
+                                    gradientAbierto = !gradientAbierto;
+                                    const panel = document.getElementById('gradient-panel-container');
+                                    const btn = document.getElementById('btn-open-gradient');
+                                    if (gradientAbierto) {{
+                                        panel.style.display = 'block';
+                                        btn.style.display = 'none';
+                                        if (drawAbierto) toggleDraw();
+                                    }} else {{
+                                        panel.style.display = 'none';
+                                        btn.style.display = 'flex';
+                                    }}
+                                }}
+
+                                let drawAbierto = false;
+                                function toggleDraw() {{
+                                    drawAbierto = !drawAbierto;
+                                    const panel = document.getElementById('draw-panel-container');
+                                    const btn = document.getElementById('btn-open-draw');
+                                    if (drawAbierto) {{
+                                        panel.style.display = 'block';
+                                        btn.style.display = 'none';
+                                        if (gradientAbierto) toggleGradient();
+                                    }} else {{
+                                        panel.style.display = 'none';
+                                        btn.style.display = 'flex';
+                                        detenerModoCirculo();
+                                        detenerModoBuffer();
+                                        limpiarHerramientasActivas();
+                                    }}
+                                }}
+
+                                function activarModoDibujo(mode) {{
+                                    detenerModoCirculo();
+                                    detenerModoBuffer();
+                                    limpiarHerramientasActivas();
+                                    map.getCanvas().style.cursor = 'crosshair'; 
+                                    if (mode === 'point') {{
+                                        document.getElementById('btn-tool-point').classList.add('active');
+                                        draw.changeMode('draw_point');
+                                    }} else if (mode === 'line_string') {{
+                                        document.getElementById('btn-tool-line').classList.add('active');
+                                        draw.changeMode('draw_line_string');
+                                    }} else if (mode === 'polygon') {{
+                                        document.getElementById('btn-tool-poly').classList.add('active');
+                                        draw.changeMode('draw_polygon');
+                                    }}
+                                }}
+
+                                function limpiarHerramientasActivas() {{
+                                    ['btn-tool-point', 'btn-tool-line', 'btn-tool-poly', 'btn-tool-circle', 'btn-tool-buffer'].forEach(id => {{
+                                        const el = document.getElementById(id);
+                                        if (el) el.classList.remove('active');
+                                    }});
+                                    map.getCanvas().style.cursor = ''; 
+                                }}
+
+                                function eliminarDibujoSeleccionado() {{
+                                    const sel = draw.getSelectedIds();
+                                    if (sel && sel.length > 0) {{
+                                        draw.delete(sel);
+                                    }} else {{
+                                        draw.deleteAll();
+                                    }}
+                                    document.getElementById('draw-measure-box').style.display = 'none';
+                                    limpiarRotulosLinea();
+                                    if (popupActivo) popupActivo.remove();
+                                    if (perfilAbierto) cerrarPerfilCorte();
+                                }}
+
+                                function descargarDibujosGeoJSON() {{
+                                    const data = draw.getAll();
+                                    if (!data || !data.features || data.features.length === 0) {{
+                                        alert("No hay geometrías trazadas en el mapa para exportar.");
+                                        return;
+                                    }}
+                                    const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: 'application/geo+json' }});
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = 'mediciones_piezometria.geojson';
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                }}
+
+                                function importarDibujosGeoJSON(e) {{
+                                    const file = e.target.files[0];
+                                    if (!file) return;
+                                    const reader = new FileReader();
+                                    reader.onload = function(evt) {{
+                                        try {{
+                                            const data = JSON.parse(evt.target.result);
+                                            if (data.type === "FeatureCollection" && data.features) {{
+                                                data.features.forEach(f => draw.add(f));
+                                                const bbox = turf.bbox(data);
+                                                map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                                                alert(`Se importaron ${{data.features.length}} geometrías exitosamente al mapa.`);
+                                            }} else if (data.type === "Feature") {{
+                                                draw.add(data);
+                                                const bbox = turf.bbox(data);
+                                                map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                                                alert("Se importó 1 geometría exitosamente.");
+                                            }} else {{
+                                                alert("El archivo no contiene un formato GeoJSON válido.");
+                                            }}
+                                        }} catch(err) {{
+                                            alert("Error al parsear el archivo GeoJSON: " + err.message);
+                                        }}
+                                    }};
+                                    reader.readAsText(file);
+                                    e.target.value = "";
+                                }}
+
+                                let modoCirculoActivo = false;
+                                let centroCirculo = null;
+
+                                function iniciarDibujoCirculo() {{
+                                    detenerModoBuffer();
+                                    limpiarHerramientasActivas();
+                                    draw.changeMode('simple_select');
+                                    modoCirculoActivo = true;
+                                    centroCirculo = null;
+                                    document.getElementById('btn-tool-circle').classList.add('active');
+                                    map.getCanvas().style.cursor = 'crosshair';
+                                    const box = document.getElementById('draw-measure-box');
+                                    box.style.display = 'block';
+                                    box.innerHTML = '<b>Paso 1:</b> Clic en el mapa para fijar el <b>CENTRO</b>.';
+                                }}
+
+                                function detenerModoCirculo() {{
+                                    modoCirculoActivo = false;
+                                    centroCirculo = null;
+                                    map.getCanvas().style.cursor = '';
+                                    const btn = document.getElementById('btn-tool-circle');
+                                    if (btn) btn.classList.remove('active');
+                                    if (map.getSource('temp-circle-src')) {{
+                                        map.getSource('temp-circle-src').setData({{ "type": "FeatureCollection", "features": [] }});
+                                    }}
+                                }}
+
+                                let modoBufferActivo = false;
+                                let radioBufferMetros = 500;
+
+                                function setBufferRadio(m) {{
+                                    document.getElementById('input-buffer-radio').value = m;
+                                    radioBufferMetros = m;
+                                    activarModoBuffer();
+                                }}
+
+                                function activarModoBuffer() {{
+                                    detenerModoCirculo();
+                                    limpiarHerramientasActivas();
+                                    draw.changeMode('simple_select');
+                                    modoBufferActivo = true;
+                                    const inputRadio = document.getElementById('input-buffer-radio');
+                                    radioBufferMetros = parseFloat(inputRadio.value) || 500;
+                                    document.getElementById('btn-tool-buffer').classList.add('active');
+                                    map.getCanvas().style.cursor = 'crosshair';
+                                    const box = document.getElementById('draw-measure-box');
+                                    box.style.display = 'block';
+                                    box.innerHTML = `<b>🎯 Buffer Fijo (${{radioBufferMetros}} m):</b> Clic en el mapa o sobre un pozo para fijar el radio de influencia.`;
+                                }}
+
+                                function detenerModoBuffer() {{
+                                    modoBufferActivo = false;
+                                    map.getCanvas().style.cursor = '';
+                                    const btn = document.getElementById('btn-tool-buffer');
+                                    if (btn) btn.classList.remove('active');
+                                }}
+
+                                document.getElementById('sel-basemap').addEventListener('change', (e) => {{
+                                    const selected = e.target.value;
+                                    const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
                                     
-                                    div.innerHTML = `
-                                    <div id="btn-open-gradient" class="leaflet-open-gradient-btn" title="Mostrar Gradiente Piezométrico" onclick="
-                                        document.getElementById('gradient-panel-container').style.display = 'block';
-                                        document.getElementById('btn-open-gradient').style.display = 'none';
-                                    ">
-                                        ☰
-                                    </div>
+                                    basemaps.forEach(id => {{
+                                        if (map.getLayer(id)) {{
+                                            map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
+                                        }}
+                                    }});
+                                }});
 
-                                    <div id="gradient-panel-container" class="gradient-docked-panel">
-                                        <div class="docked-gradient-header">
-                                            <span class="docked-gradient-close" onclick="
-                                                document.getElementById('gradient-panel-container').style.display = 'none';
-                                                document.getElementById('btn-open-gradient').style.display = 'flex';
-                                            " title="Ocultar">&times;</span>
-                                            <span class="docked-gradient-title">Gradiente Piezométrico</span>
-                                            <span class="docked-gradient-sub">{var_titulo_limpio}</span>
-                                        </div>
-                                        <div class="docked-gradient-body">
-                                            <div style="height: 10px; border-radius: 4px; background: linear-gradient(to right, #eff3ff, #bdd7e7, #6baed6, #3182bd, #08519c); border: 1px solid rgba(0,0,0,0.18); margin-bottom: 6px;"></div>
-                                            <div style="display: flex; justify-content: space-between; font-size: 10px; color: #333333; font-weight: 600;">
-                                                <span>{vmin_fmt}</span>
-                                                <span>{vmid_fmt}</span>
-                                                <span>{vmax_fmt}</span>
+                                const z_data = {z_data_json};
+                                const bounds = {bounds_json};
+                                const min_y = bounds[0][0], min_x = bounds[0][1];
+                                const max_y = bounds[1][0], max_x = bounds[1][1];
+                                const rows = z_data.length, cols = z_data[0].length;
+                                
+                                let popupActivo = null;
+
+                                map.on('load', () => {{
+                                    map.addSource('temp-circle-src', {{
+                                        type: 'geojson',
+                                        data: {{ "type": "FeatureCollection", "features": [] }}
+                                    }});
+                                    map.addLayer({{
+                                        id: 'temp-circle-fill', type: 'fill', source: 'temp-circle-src',
+                                        paint: {{ 'fill-color': '#008a3b', 'fill-opacity': 0.2 }}
+                                    }});
+                                    map.addLayer({{
+                                        id: 'temp-circle-line', type: 'line', source: 'temp-circle-src',
+                                        paint: {{ 'line-color': '#008a3b', 'line-width': 2, 'line-dasharray': [2, 2] }}
+                                    }});
+
+                                    const geoData = {geojson_geo_str};
+                                    if (geoData.features) {{
+                                        map.addSource('geo-src', {{ type: 'geojson', data: geoData }});
+                                        map.addLayer({{
+                                            id: 'geo-fill', type: 'fill', source: 'geo-src',
+                                            paint: {{ 'fill-color': ['get', 'COLOR_HEX'], 'fill-opacity': 0.5 }},
+                                            layout: {{ 'visibility': 'none' }}
+                                        }});
+                                        map.addLayer({{
+                                            id: 'geo-line', type: 'line', source: 'geo-src',
+                                            paint: {{ 'line-color': '#555', 'line-width': 0.5, 'line-opacity': 0.6 }},
+                                            layout: {{ 'visibility': 'none' }}
+                                        }});
+                                    }}
+
+                                    map.addSource('kriging-src', {{
+                                        type: 'image', url: 'data:image/png;base64,{img_krig_b64}', coordinates: {img_coords_json}
+                                    }});
+                                    map.addLayer({{
+                                        id: 'kriging-layer', type: 'raster', source: 'kriging-src',
+                                        paint: {{ 'raster-opacity': 0.65, 'raster-resampling': 'linear' }}
+                                    }});
+
+                                    map.addSource('iso-src', {{
+                                        type: 'image', url: 'data:image/png;base64,{img_iso_b64}', coordinates: {img_coords_json}
+                                    }});
+                                    map.addLayer({{ id: 'iso-layer', type: 'raster', source: 'iso-src', paint: {{ 'raster-opacity': 0.95 }} }});
+
+                                    map.addSource('vec-src', {{
+                                        type: 'image', url: 'data:image/png;base64,{img_flujo_b64}', coordinates: {img_coords_json}
+                                    }});
+                                    map.addLayer({{ id: 'vec-layer', type: 'raster', source: 'vec-src', paint: {{ 'raster-opacity': 0.9 }} }});
+
+                                    map.addSource('pozos-src', {{ type: 'geojson', data: {geojson_pozos_str} }});
+                                    map.addLayer({{
+                                        id: 'heat-layer', type: 'heatmap', source: 'pozos-src',
+                                        paint: {{
+                                            'heatmap-weight': ['interpolate', ['linear'], ['get', 'Valor'], {vmin}, 0, {vmax}, 1],
+                                            'heatmap-intensity': 1.5,
+                                            'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(40,92,77,0)', 0.2, '#285c4d', 0.6, '#b38e5d', 1.0, '#9f2241'],
+                                            'heatmap-radius': 30, 'heatmap-opacity': 0.6
+                                        }},
+                                        layout: {{ 'visibility': 'none' }}
+                                    }});
+
+                                    map.addLayer({{
+                                        id: 'pozos-layer', type: 'circle', source: 'pozos-src',
+                                        paint: {{
+                                            'circle-radius': 5,
+                                            'circle-color': ['get', 'Color'],
+                                            'circle-stroke-width': 1,
+                                            'circle-stroke-color': '#ffffff'
+                                        }}
+                                    }});
+
+                                    map.addSource('add-src', {{ type: 'geojson', data: {geojson_add_str} }});
+                                    map.addLayer({{
+                                        id: 'add-layer-manual', type: 'circle', source: 'add-src',
+                                        filter: ['==', ['get', 'fuente'], 'manual'],
+                                        paint: {{ 'circle-radius': 6, 'circle-color': '#d35400', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }}
+                                    }});
+                                    map.addLayer({{
+                                        id: 'add-layer-csv', type: 'circle', source: 'add-src',
+                                        filter: ['==', ['get', 'fuente'], 'csv'],
+                                        paint: {{ 'circle-radius': 6, 'circle-color': '#2980b9', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#ffffff' }}
+                                    }});
+
+                                    if ({ 'true' if tiene_repda_tab1 else 'false' }) {{
+                                        map.addSource('repda-src', {{ type: 'geojson', data: {geojson_repda_tab1_str} }});
+                                        map.addLayer({{
+                                            id: 'repda-halo-layer', type: 'circle', source: 'repda-src',
+                                            paint: {{ 'circle-radius': ['+', ['get', 'radio_px'], 1.5], 'circle-color': '#ffffff', 'circle-opacity': 0.95 }},
+                                            layout: {{ 'visibility': 'none' }}
+                                        }});
+                                        map.addLayer({{
+                                            id: 'repda-layer', type: 'circle', source: 'repda-src',
+                                            paint: {{
+                                                'circle-radius': ['get', 'radio_px'],
+                                                'circle-color': ['get', 'color'],
+                                                'circle-opacity': 0.88,
+                                                'circle-stroke-width': 1.2,
+                                                'circle-stroke-color': '#0f172a'
+                                            }},
+                                            layout: {{ 'visibility': 'none' }}
+                                        }});
+
+                                        map.on('click', 'repda-layer', (e) => {{
+                                            if (isDrawingMode()) return;
+                                            if (popupActivo) popupActivo.remove();
+                                            const p = e.features[0].properties;
+                                            const volFmt = p.volumen_m3 !== undefined ? Number(p.volumen_m3).toLocaleString('es-MX') : '--';
+                                            const volHm3 = p.volumen_hm3 !== undefined ? Number(p.volumen_hm3).toFixed(3) : '--';
+                                            const html = `
+                                                <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; min-width:210px; line-height:1.45;">
+                                                    <div style="font-weight:700; color:#691C32; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #691C32; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                                        <span>🏢 Concesión REPDA</span>
+                                                        <span style="font-size:9.5px; background:${{p.color}}; color:#fff; padding:1px 5px; border-radius:3px; font-weight:600;">${{p.uso}}</span>
+                                                    </div>
+                                                    <div><b>Titular:</b> ${{p.titular}}</div>
+                                                    <div><b>Folio Oficial:</b> <span style="font-family:monospace; color:#334155;">${{p.folio}}</span></div>
+                                                    ${{p.expediente ? `<div><b>Expediente:</b> <span style="font-family:monospace; color:#475569;">${{p.expediente}}</span></div>` : ''}}
+                                                    ${{p.fecha ? `<div><b>Fecha Registro:</b> ${{p.fecha}}</div>` : ''}}
+                                                    <div><b>Volumen:</b> <b style="color:#1e293b;">${{volFmt}} m³/año</b> (${{volHm3}} hm³/año)</div>
+                                                    ${{p.profundidad_m > 0 ? `<div><b>Profundidad Obra:</b> ${{p.profundidad_m}} m</div>` : ''}}
+                                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px; text-align:right;">
+                                                        ${{Number(p.lat).toFixed(4)}}° N, ${{Number(p.lon).toFixed(4)}}° W
+                                                    </div>
+                                                </div>
+                                            `;
+                                            popupActivo = new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+                                        }});
+                                    }}
+
+                                    // REPDA Nacional Completo MVT (PMTiles 461,914 concesiones)
+                                    let pmtilesUrlTab1 = '{url_pmtiles_srv_tab1}';
+                                    if (!pmtilesUrlTab1.startsWith('http://') && !pmtilesUrlTab1.startsWith('https://')) {{
+                                        pmtilesUrlTab1 = window.location.origin + pmtilesUrlTab1;
+                                    }}
+                                    map.addSource('repda-nacional-src', {{
+                                        type: 'vector',
+                                        url: 'pmtiles://' + pmtilesUrlTab1,
+                                        minzoom: 4,
+                                        maxzoom: 8
+                                    }});
+                                    map.addLayer({{
+                                        id: 'repda-nacional-layer',
+                                        type: 'circle',
+                                        source: 'repda-nacional-src',
+                                        'source-layer': 'repda',
+                                        layout: {{ 'visibility': 'none' }},
+                                        paint: {{
+                                            'circle-radius': [
+                                                'interpolate', ['linear'], ['zoom'],
+                                                4, 1.2,
+                                                7, 2.5,
+                                                10, 4.5,
+                                                14, 7.5
+                                            ],
+                                            'circle-color': [
+                                                'match', ['get', 'u'],
+                                                'AGRICOLA', '#16a34a',
+                                                'PUBLICO URBANO', '#2563eb',
+                                                'DOMESTICO', '#0284c7',
+                                                'INDUSTRIAL', '#dc2626',
+                                                'SERVICIOS', '#9333ea',
+                                                'PECUARIO', '#ca8a04',
+                                                'DIFERENTES USOS', '#0d9488',
+                                                'ACUACULTURA', '#06b6d4',
+                                                'AGROINDUSTRIAL', '#65a30d',
+                                                'COMERCIO', '#ea580c',
+                                                'ENERGIA ELECTRICA', '#eab308',
+                                                /* default */ '#475569'
+                                            ],
+                                            'circle-opacity': 0.85,
+                                            'circle-stroke-width': [
+                                                'interpolate', ['linear'], ['zoom'],
+                                                4, 0,
+                                                8, 0.4,
+                                                11, 1.0
+                                            ],
+                                            'circle-stroke-color': '#ffffff'
+                                        }}
+                                    }});
+
+                                    map.on('click', 'repda-nacional-layer', (e) => {{
+                                        if (isDrawingMode()) return;
+                                        if (popupActivo) popupActivo.remove();
+                                        const p = e.features[0].properties;
+                                        const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
+                                        const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                                        const html = `
+                                            <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; min-width:220px; line-height:1.45;">
+                                                <div style="font-weight:700; color:#166534; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #166534; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                                    <span>🇲🇽 Concesión REPDA Nacional</span>
+                                                    <span style="font-size:10px; background:#f1f5f9; color:#475569; padding:1px 5px; border-radius:4px;">${{p.f || '--'}}</span>
+                                                </div>
+                                                <div style="margin-bottom:3px;"><b>Titular:</b> <span style="color:#0f172a; font-weight:600;">${{p.t || '--'}}</span></div>
+                                                ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
+                                                <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
+                                                <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
+                                                <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W</div>
                                             </div>
-                                        </div>
-                                    </div>
+                                        `;
+                                        popupActivo = new maplibregl.Popup({{ className: 'gis-badge-popup' }}).setLngLat(e.lngLat).setHTML(html).addTo(map);
+                                    }});
+
+                                    map.on('mouseenter', 'repda-nacional-layer', () => {{ if (!isDrawingMode()) map.getCanvas().style.cursor = 'pointer'; }});
+                                    map.on('mouseleave', 'repda-nacional-layer', () => {{ if (!isDrawingMode()) map.getCanvas().style.cursor = ''; }});
+
+                                    const polyBounds = {poly_bounds_str};
+                                    if (polyBounds) {{
+                                        map.fitBounds([[polyBounds[0], polyBounds[1]], [polyBounds[2], polyBounds[3]]], {{ padding: 40 }});
+                                    }}
+                                }});
+
+                                const legContenedor = document.querySelector('.legend-panel');
+                                if (legContenedor) {{
+                                    legContenedor.addEventListener('keydown', function(e) {{ e.stopPropagation(); }});
+                                    legContenedor.addEventListener('keyup', function(e) {{ e.stopPropagation(); }});
+                                    legContenedor.addEventListener('keypress', function(e) {{ e.stopPropagation(); }});
+                                }}
+
+                                map.on('mousemove', (e) => {{
+                                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4) + '°';
+                                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4) + '°';
+                                    
+                                    const lat = e.lngLat.lat, lng = e.lngLat.lng;
+                                    if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
+                                        let r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
+                                        let c = Math.floor(((lng - min_x) / (max_x - min_x)) * (cols - 1));
+                                        r = Math.max(0, Math.min(rows - 1, r));
+                                        c = Math.max(0, Math.min(cols - 1, c));
+                                        const val = z_data[r][c];
+                                        if (val !== null) {{
+                                            document.getElementById('hud-ele').innerText = val.toFixed(2);
+                                        }} else {{
+                                            document.getElementById('hud-ele').innerText = '--';
+                                        }}
+                                    }} else {{
+                                        document.getElementById('hud-ele').innerText = '--';
+                                    }}
+
+                                    if (!modoCirculoActivo || !centroCirculo) return;
+                                    const actual = [e.lngLat.lng, e.lngLat.lat];
+                                    const radioKm = turf.distance(centroCirculo, actual, {{ units: 'kilometers' }});
+                                    if (radioKm > 0.0005) {{
+                                        const tempCircle = turf.circle(centroCirculo, radioKm, {{ steps: 48, units: 'kilometers' }});
+                                        if (map.getSource('temp-circle-src')) {{
+                                            map.getSource('temp-circle-src').setData(tempCircle);
+                                        }}
+                                        const radioM = (radioKm * 1000).toFixed(1);
+                                        const areaHa = (turf.area(tempCircle) / 10000).toFixed(2);
+                                        document.getElementById('draw-measure-box').innerHTML = 
+                                            `<b>Radio:</b> ${{radioM}} m (${{radioKm.toFixed(3)}} km)<br>` +
+                                            `<b>Área de Influencia:</b> ${{areaHa}} ha<br>` +
+                                            `<span style="color:#64748B; font-size:10px;">Clic para confirmar circunferencia</span>`;
+                                    }}
+                                }});
+
+                                map.on('click', (e) => {{
+                                    if (modoBufferActivo) {{
+                                        const coords = [e.lngLat.lng, e.lngLat.lat];
+                                        const radioKm = radioBufferMetros / 1000.0;
+                                        const circlePoly = turf.circle(coords, radioKm, {{ steps: 64, units: 'kilometers' }});
+                                        const areaHa = (turf.area(circlePoly) / 10000).toFixed(2);
+                                        circlePoly.properties = {{
+                                            esCirculo: true,
+                                            radioM: radioBufferMetros,
+                                            areaHa: areaHa
+                                        }};
+                                        draw.add(circlePoly);
+                                        detenerModoBuffer();
+                                        actualizarMedicionCompleta(circlePoly, true);
+                                        return;
+                                    }}
+
+                                    if (!modoCirculoActivo) return;
+                                    const coords = [e.lngLat.lng, e.lngLat.lat];
+                                    if (!centroCirculo) {{
+                                        centroCirculo = coords;
+                                        const box = document.getElementById('draw-measure-box');
+                                        box.innerHTML = '<b>Paso 2:</b> Mueve el cursor y haz un <b>segundo clic</b> para consolidar el radio.';
+                                    }} else {{
+                                        const radioKm = turf.distance(centroCirculo, coords, {{ units: 'kilometers' }});
+                                        if (radioKm > 0.001) {{
+                                            const circlePoly = turf.circle(centroCirculo, radioKm, {{ steps: 64, units: 'kilometers' }});
+                                            const radioM = Math.round(radioKm * 1000);
+                                            const areaHa = (turf.area(circlePoly) / 10000).toFixed(2);
+                                            circlePoly.properties = {{
+                                                esCirculo: true,
+                                                radioM: radioM,
+                                                areaHa: areaHa
+                                            }};
+                                            draw.add(circlePoly);
+                                            actualizarMedicionCompleta(circlePoly, true);
+                                        }}
+                                        detenerModoCirculo();
+                                    }}
+                                }});
+
+                                let lineaActualFeat = null;
+                                let perfilAbierto = false;
+                                let perfilActualData = null;
+
+                                function calcularPerfilLinea(feat) {{
+                                    if (!feat || !feat.geometry || feat.geometry.type !== 'LineString') return null;
+                                    const coords = feat.geometry.coordinates;
+                                    if (!coords || coords.length < 2) return null;
+                                    
+                                    const kmTotal = turf.length(feat, {{ units: 'kilometers' }});
+                                    if (kmTotal <= 0) return null;
+
+                                    const numPuntos = Math.min(100, Math.max(30, Math.round(kmTotal * 15)));
+                                    const stepKm = kmTotal / (numPuntos - 1);
+                                    const puntos = [];
+                                    let hMin = Infinity, hMax = -Infinity;
+                                    let hInicio = null, hFin = null;
+
+                                    for (let i = 0; i < numPuntos; i++) {{
+                                        const dKm = i * stepKm;
+                                        const pt = turf.along(feat, dKm, {{ units: 'kilometers' }});
+                                        const lng = pt.geometry.coordinates[0];
+                                        const lat = pt.geometry.coordinates[1];
+
+                                        let valZ = null;
+                                        if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
+                                            let r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
+                                            let c = Math.floor(((lng - min_x) / (max_x - min_x)) * (cols - 1));
+                                            r = Math.max(0, Math.min(rows - 1, r));
+                                            c = Math.max(0, Math.min(cols - 1, c));
+                                            valZ = z_data[r][c];
+                                        }}
+
+                                        if (valZ !== null && !isNaN(valZ)) {{
+                                            if (valZ < hMin) hMin = valZ;
+                                            if (valZ > hMax) hMax = valZ;
+                                            if (hInicio === null) hInicio = valZ;
+                                            hFin = valZ;
+                                        }}
+
+                                        puntos.push({{
+                                            dist_m: dKm * 1000,
+                                            dist_km: dKm,
+                                            lng: lng,
+                                            lat: lat,
+                                            z: valZ
+                                        }});
+                                    }}
+
+                                    const coordInicio = coords[0];
+                                    const coordFin = coords[coords.length - 1];
+                                    const rumbo = turf.bearing(coordInicio, coordFin);
+                                    const azimut = (rumbo + 360) % 360;
+
+                                    let cuadrante = "N";
+                                    if (azimut >= 337.5 || azimut < 22.5) cuadrante = "Norte (N)";
+                                    else if (azimut >= 22.5 && azimut < 67.5) cuadrante = "Noreste (NE)";
+                                    else if (azimut >= 67.5 && azimut < 112.5) cuadrante = "Este (E)";
+                                    else if (azimut >= 112.5 && azimut < 157.5) cuadrante = "Sureste (SE)";
+                                    else if (azimut >= 157.5 && azimut < 202.5) cuadrante = "Sur (S)";
+                                    else if (azimut >= 202.5 && azimut < 247.5) cuadrante = "Suroeste (SW)";
+                                    else if (azimut >= 247.5 && azimut < 292.5) cuadrante = "Oeste (W)";
+                                    else cuadrante = "Noroeste (NW)";
+
+                                    const deltaH = (hInicio !== null && hFin !== null) ? (hFin - hInicio) : 0;
+                                    const gradienteM_Km = (kmTotal > 0 && hInicio !== null && hFin !== null) ? Math.abs(deltaH) / kmTotal : 0;
+
+                                    let direccionFlujo = "Indeterminada";
+                                    if (hInicio !== null && hFin !== null) {{
+                                        if (hInicio > hFin + 0.05) direccionFlujo = "De A hacia A'";
+                                        else if (hFin > hInicio + 0.05) direccionFlujo = "De A' hacia A";
+                                        else direccionFlujo = "Gradiente uniforme / flujo laminar nulo";
+                                    }}
+
+                                    return {{
+                                        kmTotal: kmTotal,
+                                        mTotal: kmTotal * 1000,
+                                        azimut: azimut,
+                                        cuadrante: cuadrante,
+                                        hInicio: hInicio,
+                                        hFin: hFin,
+                                        deltaH: deltaH,
+                                        gradienteM_Km: gradienteM_Km,
+                                        direccionFlujo: direccionFlujo,
+                                        hMin: (hMin === Infinity) ? null : hMin,
+                                        hMax: (hMax === -Infinity) ? null : hMax,
+                                        puntos: puntos
+                                    }};
+                                }}
+
+                                function renderizarPerfilSvg(p) {{
+                                    const svg = document.getElementById('perfil-svg-chart');
+                                    if (!svg || !p || !p.puntos || p.puntos.length < 2) return;
+                                    
+                                    perfilActualData = p;
+                                    const box = svg.getBoundingClientRect();
+                                    const w = box.width || 560;
+                                    const h = box.height || 140;
+
+                                    const padL = 50, padR = 25, padT = 15, padB = 25;
+                                    const plotW = Math.max(10, w - padL - padR);
+                                    const plotH = Math.max(10, h - padT - padB);
+
+                                    let minZ = p.hMin !== null ? p.hMin : 0;
+                                    let maxZ = p.hMax !== null ? p.hMax : 100;
+                                    let spanZ = maxZ - minZ;
+                                    if (spanZ <= 0.01) spanZ = 1.0;
+                                    
+                                    minZ -= spanZ * 0.08;
+                                    maxZ += spanZ * 0.08;
+                                    spanZ = maxZ - minZ;
+
+                                    let dLine = "";
+                                    let primerX = null, primerY = null, ultimoX = null;
+
+                                    p.puntos.forEach((pt, idx) => {{
+                                        const x = padL + (pt.dist_m / p.mTotal) * plotW;
+                                        let y = padT + plotH / 2;
+                                        if (pt.z !== null && !isNaN(pt.z)) {{
+                                            y = padT + (1 - (pt.z - minZ) / spanZ) * plotH;
+                                        }}
+                                        if (idx === 0) {{
+                                            dLine += `M ${{x.toFixed(1)}} ${{y.toFixed(1)}}`;
+                                            primerX = x;
+                                            primerY = y;
+                                        }} else {{
+                                            dLine += ` L ${{x.toFixed(1)}} ${{y.toFixed(1)}}`;
+                                        }}
+                                        ultimoX = x;
+                                    }});
+
+                                    const yBase = padT + plotH;
+                                    const dArea = `${{dLine}} L ${{ultimoX.toFixed(1)}} ${{yBase}} L ${{primerX.toFixed(1)}} ${{yBase}} Z`;
+
+                                    const midZ = (p.hMin !== null && p.hMax !== null) ? ((p.hMin + p.hMax) / 2) : (minZ + spanZ/2);
+                                    const yMid = padT + (1 - (midZ - minZ) / spanZ) * plotH;
+                                    const yMinLine = padT + (1 - (p.hMin - minZ) / spanZ) * plotH;
+                                    const yMaxLine = padT + (1 - (p.hMax - minZ) / spanZ) * plotH;
+
+                                    let svgHtml = `
+                                        <defs>
+                                            <linearGradient id="perfilGrad" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="0%" stop-color="#285c4d" stop-opacity="0.4" />
+                                                <stop offset="100%" stop-color="#285c4d" stop-opacity="0.05" />
+                                            </linearGradient>
+                                        </defs>
+                                        <line x1="${{padL}}" y1="${{yMaxLine.toFixed(1)}}" x2="${{padL + plotW}}" y2="${{yMaxLine.toFixed(1)}}" stroke="#cbd5e1" stroke-dasharray="2,2"/>
+                                        <text x="${{padL - 6}}" y="${{(yMaxLine + 3).toFixed(1)}}" font-size="9" fill="#64748b" text-anchor="end">${{p.hMax !== null ? p.hMax.toFixed(1) : ''}}</text>
+                                        
+                                        <line x1="${{padL}}" y1="${{yMid.toFixed(1)}}" x2="${{padL + plotW}}" y2="${{yMid.toFixed(1)}}" stroke="#e2e8f0" stroke-dasharray="2,2"/>
+                                        <text x="${{padL - 6}}" y="${{(yMid + 3).toFixed(1)}}" font-size="9" fill="#64748b" text-anchor="end">${{midZ.toFixed(1)}}</text>
+                                        
+                                        <line x1="${{padL}}" y1="${{yMinLine.toFixed(1)}}" x2="${{padL + plotW}}" y2="${{yMinLine.toFixed(1)}}" stroke="#cbd5e1" stroke-dasharray="2,2"/>
+                                        <text x="${{padL - 6}}" y="${{(yMinLine + 3).toFixed(1)}}" font-size="9" fill="#64748b" text-anchor="end">${{p.hMin !== null ? p.hMin.toFixed(1) : ''}}</text>
+                                        
+                                        <line x1="${{padL}}" y1="${{yBase}}" x2="${{padL + plotW}}" y2="${{yBase}}" stroke="#94a3b8" stroke-width="1.5"/>
+                                        <text x="${{padL}}" y="${{yBase + 13}}" font-size="9" fill="#475569" text-anchor="start">0 m (A)</text>
+                                        <text x="${{padL + plotW/2}}" y="${{yBase + 13}}" font-size="9" fill="#475569" text-anchor="middle">${{(p.mTotal/2).toFixed(0)}} m</text>
+                                        <text x="${{padL + plotW}}" y="${{yBase + 13}}" font-size="9" fill="#475569" text-anchor="end">${{p.mTotal.toFixed(0)}} m (A')</text>
+
+                                        <path d="${{dArea}}" fill="url(#perfilGrad)" />
+                                        <path d="${{dLine}}" fill="none" stroke="#691C32" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+
+                                        <circle cx="${{primerX.toFixed(1)}}" cy="${{primerY.toFixed(1)}}" r="4.5" fill="#9f2241" stroke="#fff" stroke-width="1.5"/>
+                                        <circle cx="${{ultimoX.toFixed(1)}}" cy="${{(padT + (1 - (p.hFin - minZ) / spanZ) * plotH).toFixed(1)}}" r="4.5" fill="#285c4d" stroke="#fff" stroke-width="1.5"/>
+
+                                        <line id="svg-hover-line" x1="0" y1="${{padT}}" x2="0" y2="${{yBase}}" stroke="#691C32" stroke-width="1.2" stroke-dasharray="3,2" style="display:none;"/>
+                                        <circle id="svg-hover-circle" cx="0" cy="0" r="5" fill="#691C32" stroke="#fff" stroke-width="2" style="display:none;"/>
                                     `;
-                                    return div;
+
+                                    svg.innerHTML = svgHtml;
+                                    
+                                    svg.onmousemove = (e) => {{
+                                        const rect = svg.getBoundingClientRect();
+                                        const mouseX = e.clientX - rect.left;
+                                        if (mouseX < padL || mouseX > padL + plotW) {{
+                                            document.getElementById('svg-hover-line').style.display = 'none';
+                                            document.getElementById('svg-hover-circle').style.display = 'none';
+                                            document.getElementById('perfil-tooltip').style.display = 'none';
+                                            return;
+                                        }}
+                                        const ratio = (mouseX - padL) / plotW;
+                                        const targetDist = ratio * p.mTotal;
+                                        
+                                        let ptCercano = p.puntos[0];
+                                        let diffMin = Math.abs(p.puntos[0].dist_m - targetDist);
+                                        for (let i = 1; i < p.puntos.length; i++) {{
+                                            const diff = Math.abs(p.puntos[i].dist_m - targetDist);
+                                            if (diff < diffMin) {{
+                                                diffMin = diff;
+                                                ptCercano = p.puntos[i];
+                                            }}
+                                        }}
+
+                                        const hoverX = padL + (ptCercano.dist_m / p.mTotal) * plotW;
+                                        const hoverY = ptCercano.z !== null ? (padT + (1 - (ptCercano.z - minZ) / spanZ) * plotH) : (padT + plotH/2);
+
+                                        const hLine = document.getElementById('svg-hover-line');
+                                        const hCirc = document.getElementById('svg-hover-circle');
+                                        const tip = document.getElementById('perfil-tooltip');
+
+                                        hLine.setAttribute('x1', hoverX);
+                                        hLine.setAttribute('x2', hoverX);
+                                        hLine.style.display = 'block';
+
+                                        hCirc.setAttribute('cx', hoverX);
+                                        hCirc.setAttribute('cy', hoverY);
+                                        hCirc.style.display = 'block';
+
+                                        tip.style.display = 'block';
+                                        tip.innerHTML = `<b>Distancia:</b> ${{ptCercano.dist_m.toFixed(0)}} m | <b>{var_titulo_limpio}:</b> ${{ptCercano.z !== null ? ptCercano.z.toFixed(2) : '--'}}`;
+                                    }};
+
+                                    svg.onmouseleave = () => {{
+                                        const hLine = document.getElementById('svg-hover-line');
+                                        const hCirc = document.getElementById('svg-hover-circle');
+                                        const tip = document.getElementById('perfil-tooltip');
+                                        if (hLine) hLine.style.display = 'none';
+                                        if (hCirc) hCirc.style.display = 'none';
+                                        if (tip) tip.style.display = 'none';
+                                    }};
+                                }}
+
+                                function abrirPerfilCorte(feat) {{
+                                    const targetFeat = feat || lineaActualFeat;
+                                    if (!targetFeat) {{
+                                        alert("Trazar o seleccionar primero una línea en el mapa.");
+                                        return;
+                                    }}
+                                    const p = calcularPerfilLinea(targetFeat);
+                                    if (!p) return;
+
+                                    perfilAbierto = true;
+                                    const panel = document.getElementById('panel-perfil-corte');
+                                    panel.style.display = 'flex';
+
+                                    document.getElementById('perfil-header-resumen').innerText = 
+                                        `Longitud: ${{p.mTotal.toFixed(0)}} m | Azimut: ${{p.azimut.toFixed(1)}}° (${{p.cuadrante}}) | Gradiente: ${{p.gradienteM_Km.toFixed(3)}} m/km`;
+
+                                    const statsBox = document.getElementById('perfil-stats-box');
+                                    statsBox.innerHTML = `
+                                        <div class="perfil-stat-row"><span>Longitud A-A':</span> <b>${{p.mTotal.toFixed(0)}} m (${{p.kmTotal.toFixed(2)}} km)</b></div>
+                                        <div class="perfil-stat-row"><span>Azimut Geográfico:</span> <b>${{p.azimut.toFixed(1)}}° (${{p.cuadrante}})</b></div>
+                                        <div class="perfil-stat-row"><span>Cota en A:</span> <b>${{p.hInicio !== null ? p.hInicio.toFixed(2) + ' m' : '--'}}</b></div>
+                                        <div class="perfil-stat-row"><span>Cota en A':</span> <b>${{p.hFin !== null ? p.hFin.toFixed(2) + ' m' : '--'}}</b></div>
+                                        <div class="perfil-stat-row"><span>Desnivel (Δh):</span> <b>${{p.deltaH !== null ? p.deltaH.toFixed(2) + ' m' : '--'}}</b></div>
+                                        <div class="perfil-stat-row"><span>Gradiente Hidráulico:</span> <b>${{p.gradienteM_Km.toFixed(3)}} m/km</b></div>
+                                        <div class="perfil-stat-row" style="border-top:1px solid #e2e8f0; padding-top:4px;">
+                                            <span>Flujo Subterráneo:</span> <b style="color:#166534;">${{p.direccionFlujo}}</b>
+                                        </div>
+                                    `;
+
+                                    setTimeout(() => {{
+                                        renderizarPerfilSvg(p);
+                                    }}, 60);
+                                }}
+
+                                function cerrarPerfilCorte() {{
+                                    perfilAbierto = false;
+                                    document.getElementById('panel-perfil-corte').style.display = 'none';
+                                }}
+
+                                function descargarCsvPerfil() {{
+                                    if (!perfilActualData || !perfilActualData.puntos) {{
+                                        alert("No hay datos de perfil para exportar.");
+                                        return;
+                                    }}
+                                    let csv = "distancia_m,distancia_km,latitud,longitud,{var_titulo_limpio}\\n";
+                                    perfilActualData.puntos.forEach(p => {{
+                                        csv += `${{p.dist_m.toFixed(1)}},${{p.dist_km.toFixed(3)}},${{p.lat.toFixed(6)}},${{p.lng.toFixed(6)}},${{p.z !== null ? p.z.toFixed(2) : ""}}\\n`;
+                                    }});
+                                    const blob = new Blob([csv], {{ type: 'text/csv;charset=utf-8;' }});
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement('a');
+                                    a.href = url;
+                                    a.download = 'perfil_hidrogeologico_A_A.csv';
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                }}
+
+                                window.addEventListener('resize', () => {{
+                                    if (perfilAbierto && perfilActualData) {{
+                                        renderizarPerfilSvg(perfilActualData);
+                                    }}
+                                }});
+
+                                function obtenerInfoMedicion(feat) {{
+                                    if (!feat || !feat.geometry) return null;
+                                    const tipo = feat.geometry.type;
+                                    const props = feat.properties || {{}};
+
+                                    if (tipo === 'Point') {{
+                                        const c = feat.geometry.coordinates;
+                                        const lng = c[0], lat = c[1];
+                                        let valZ = null;
+                                        if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
+                                            let r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
+                                            let col = Math.floor(((lng - min_x) / (max_x - min_x)) * (cols - 1));
+                                            r = Math.max(0, Math.min(rows - 1, r));
+                                            col = Math.max(0, Math.min(cols - 1, col));
+                                            valZ = z_data[r][col];
+                                        }}
+                                        const cotaTxt = (valZ !== null && !isNaN(valZ)) ? `${{valZ.toFixed(2)}}` : 'S/D';
+                                        
+                                        return {{
+                                            coords: c,
+                                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📍 Punto de Sondeo</div>` +
+                                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                                   `<b>{var_titulo_limpio}:</b> <span style="color:#691C32; font-weight:700;">${{cotaTxt}}</span><br>` +
+                                                   `<span style="color:#64748B; font-size:9.5px;">${{lat.toFixed(4)}}° N, ${{lng.toFixed(4)}}° W</span>` +
+                                                   `</div>`,
+                                            panel: `<b>📍 Sondeo Piezométrico</b><br>` +
+                                                   `<b>Coordenadas:</b> ${{lat.toFixed(5)}}° N, ${{lng.toFixed(5)}}° W<br>` +
+                                                   `<b>{var_titulo_limpio}:</b> <span style="color:#691C32; font-weight:700;">${{cotaTxt}}</span>`
+                                        }};
+                                    }}
+
+                                    if (tipo === 'LineString') {{
+                                        lineaActualFeat = feat;
+                                        const km = turf.length(feat, {{ units: 'kilometers' }});
+                                        const p = calcularPerfilLinea(feat);
+                                        const distFormato = km < 1.0 ? `${{(km * 1000).toFixed(0)}} m` : `${{km.toFixed(2)}} km (${{(km * 1000).toFixed(0)}} m)`;
+                                        const azimutTxt = p ? `${{p.azimut.toFixed(0)}}° ${{p.cuadrante}}` : '--';
+                                        const gradTxt = p ? `${{p.gradienteM_Km.toFixed(2)}} m/km` : '--';
+                                        
+                                        const coordsPts = feat.geometry.coordinates;
+                                        const midCoord = coordsPts[Math.floor(coordsPts.length / 2)];
+
+                                        return {{
+                                            coords: midCoord,
+                                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📏 Transecto A - A'</div>` +
+                                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                                   `<b>Distancia:</b> ${{distFormato}}<br>` +
+                                                   `<b>Rumbo:</b> ${{azimutTxt}} · <b>Grad:</b> ${{gradTxt}}` +
+                                                   `</div>`,
+                                            panel: `<b>📏 Transecto de Corte A - A'</b><br>` +
+                                                   `<b>Longitud Total:</b> ${{distFormato}}<br>` +
+                                                   `<b>Azimut Geográfico:</b> ${{p ? p.azimut.toFixed(1) + '° (' + p.cuadrante + ')' : '--'}}<br>` +
+                                                   `<b>Cota en A:</b> ${{p && p.hInicio !== null ? p.hInicio.toFixed(2) + ' m' : '--'}}<br>` +
+                                                   `<b>Cota en A':</b> ${{p && p.hFin !== null ? p.hFin.toFixed(2) + ' m' : '--'}}<br>` +
+                                                   `<b>Gradiente Hidráulico:</b> ${{p ? p.gradienteM_Km.toFixed(3) + ' m/km' : '--'}}<br>` +
+                                                   `<b>Sentido del Flujo:</b> <span style="color:#166534; font-weight:600;">${{p ? p.direccionFlujo : '--'}}</span>` +
+                                                   `<button class="btn-tool" style="width:100%; margin-top:8px; background:#691C32; color:#fff; justify-content:center; border:none; padding:6px 8px; cursor:pointer;" onclick="abrirPerfilCorte()">📐 Ver Perfil de Corte A - A'</button>`
+                                        }};
+                                    }}
+
+                                    if (props.esCirculo || props.radioM) {{
+                                        const radioM = props.radioM || 500;
+                                        const areaHa = props.areaHa || (turf.area(feat) / 10000).toFixed(2);
+                                        const radioTxt = radioM >= 1000 ? `${{(radioM / 1000).toFixed(2)}} km` : `${{radioM}} m`;
+                                        return {{
+                                            coords: turf.centroid(feat).geometry.coordinates,
+                                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">🎯 Radio de Influencia</div>` +
+                                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                                   `<b>Radio:</b> ${{radioTxt}}<br>` +
+                                                   `<b>Superficie:</b> ${{areaHa}} ha` +
+                                                   `</div>`,
+                                            panel: `<b>🎯 Radio de Influencia / Buffer</b><br>` +
+                                                   `<b>Radio Fijo:</b> ${{radioTxt}}<br>` +
+                                                   `<b>Área de Influencia:</b> ${{areaHa}} ha<br>` +
+                                                   `<b>Perímetro:</b> ${{(2 * Math.PI * radioM / 1000).toFixed(2)}} km`
+                                        }};
+                                    }}
+
+                                    if (tipo === 'Polygon') {{
+                                        const m2 = turf.area(feat);
+                                        const ha = (m2 / 10000).toFixed(2);
+                                        const kmPerim = turf.length(turf.polygonToLine(feat), {{ units: 'kilometers' }}).toFixed(2);
+                                        return {{
+                                            coords: turf.centroid(feat).geometry.coordinates,
+                                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📐 Área Delimitada</div>` +
+                                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                                   `<b>Superficie:</b> ${{ha}} ha<br>` +
+                                                   `<b>Perímetro:</b> ${{kmPerim}} km` +
+                                                   `</div>`,
+                                            panel: `<b>📐 Polígono de Medición</b><br>` +
+                                                   `<b>Superficie:</b> ${{ha}} ha (${{Math.round(m2).toLocaleString()}} m²)<br>` +
+                                                   `<b>Perímetro:</b> ${{kmPerim}} km`
+                                        }};
+                                    }}
+                                    return null;
+                                }}
+
+                                let markerA = null;
+                                let markerB = null;
+
+                                function actualizarRotulosLinea(feat) {{
+                                    limpiarRotulosLinea();
+                                    if (!feat || !feat.geometry || feat.geometry.type !== 'LineString') return;
+                                    const coords = feat.geometry.coordinates;
+                                    if (!coords || coords.length < 2) return;
+                                    
+                                    const elA = document.createElement('div');
+                                    elA.className = 'label-marker-corte label-a';
+                                    elA.innerText = 'A';
+                                    elA.title = 'Extremo Inicial A del corte';
+                                    
+                                    const elB = document.createElement('div');
+                                    elB.className = 'label-marker-corte label-b';
+                                    elB.innerText = "A'";
+                                    elB.title = "Extremo Final A' del corte";
+                                    
+                                    markerA = new maplibregl.Marker({{ element: elA }}).setLngLat(coords[0]).addTo(map);
+                                    markerB = new maplibregl.Marker({{ element: elB }}).setLngLat(coords[coords.length - 1]).addTo(map);
+                                }}
+
+                                function limpiarRotulosLinea() {{
+                                    if (markerA) {{ markerA.remove(); markerA = null; }}
+                                    if (markerB) {{ markerB.remove(); markerB = null; }}
+                                }}
+
+                                function toggleMostrarBadges(mostrar) {{
+                                    if (!mostrar && popupActivo) {{
+                                        popupActivo.remove();
+                                    }} else if (mostrar) {{
+                                        const feats = draw.getAll().features;
+                                        if (feats && feats.length > 0) {{
+                                            actualizarMedicionCompleta(feats[feats.length - 1], true);
+                                        }}
+                                    }}
+                                }}
+
+                                function deseleccionarTodo() {{
+                                    draw.changeMode('simple_select', {{ featureIds: [] }});
+                                    if (popupActivo) popupActivo.remove();
+                                }}
+
+                                window.addEventListener('keydown', (e) => {{
+                                    if (e.key === 'Escape') {{
+                                        const m = draw.getMode();
+                                        if (m.startsWith('draw_') || modoCirculoActivo || modoBufferActivo) {{
+                                            draw.trash();
+                                            draw.changeMode('simple_select');
+                                            detenerModoCirculo();
+                                            detenerModoBuffer();
+                                            limpiarHerramientasActivas();
+                                            const b = document.getElementById('draw-measure-box');
+                                            if (b) b.style.display = 'none';
+                                            limpiarRotulosLinea();
+                                        }}
+                                    }}
+                                }});
+
+                                function actualizarMedicionCompleta(feat, mostrarBadge) {{
+                                    if (!feat) return;
+                                    const info = obtenerInfoMedicion(feat);
+                                    if (!info) return;
+
+                                    const box = document.getElementById('draw-measure-box');
+                                    if (box) {{
+                                        box.style.display = 'block';
+                                        box.innerHTML = info.panel;
+                                    }}
+
+                                    if (feat.geometry.type === 'LineString') {{
+                                        actualizarRotulosLinea(feat);
+                                    }} else {{
+                                        limpiarRotulosLinea();
+                                    }}
+
+                                    const chkBadge = document.getElementById('chk-show-badge');
+                                    const permitirBadge = chkBadge ? chkBadge.checked : true;
+
+                                    if (mostrarBadge && permitirBadge) {{
+                                        if (popupActivo) popupActivo.remove();
+                                        popupActivo = new maplibregl.Popup({{ closeOnClick: true, offset: 12, className: 'gis-badge-popup' }})
+                                            .setLngLat(info.coords)
+                                            .setHTML(info.badge)
+                                            .addTo(map);
+                                    }} else if (!permitirBadge && popupActivo) {{
+                                        popupActivo.remove();
+                                    }}
+                                }}
+
+                                map.on('draw.render', () => {{
+                                    const mode = draw.getMode();
+                                    const box = document.getElementById('draw-measure-box');
+                                    if (mode === 'draw_line_string' && box) {{
+                                        box.style.display = 'block';
+                                        box.innerHTML = `<b>📏 Trazando línea...</b><br><span style="color:#64748B; font-size:10px;">Clic para fijar puntos. <b>Doble clic</b> para finalizar.</span>`;
+                                    }} else if (mode === 'draw_polygon' && box) {{
+                                        box.style.display = 'block';
+                                        box.innerHTML = `<b>📐 Trazando polígono...</b><br><span style="color:#64748B; font-size:10px;">Clic para fijar esquinas. <b>Doble clic</b> para cerrar.</span>`;
+                                    }}
+                                }});
+
+                                map.on('draw.create', (e) => {{
+                                    if (e.features && e.features.length > 0) {{
+                                        const feat = e.features[0];
+                                        actualizarMedicionCompleta(feat, true);
+                                    }}
+                                    limpiarHerramientasActivas();
+                                }});
+
+                                map.on('draw.update', (e) => {{
+                                    if (e.features && e.features.length > 0) {{
+                                        const feat = e.features[0];
+                                        if (feat.geometry.type === 'LineString' && perfilAbierto) {{
+                                            abrirPerfilCorte(feat);
+                                        }}
+                                        actualizarMedicionCompleta(feat, true);
+                                    }}
+                                }});
+
+                                map.on('draw.selectionchange', (e) => {{
+                                    if (e.features && e.features.length > 0) {{
+                                        const feat = e.features[0];
+                                        actualizarMedicionCompleta(feat, true);
+                                    }} else {{
+                                        if (popupActivo) {{
+                                            popupActivo.remove();
+                                            popupActivo = null;
+                                        }}
+                                    }}
+                                }});
+
+                                function isDrawingMode() {{
+                                    try {{
+                                        return draw.getMode() !== 'simple_select' || modoCirculoActivo || modoBufferActivo;
+                                    }} catch(e) {{ return false; }}
+                                }}
+
+                                map.on('click', 'pozos-layer', (e) => {{
+                                    if (isDrawingMode()) return;
+                                    if (popupActivo) popupActivo.remove();
+                                    const p = e.features[0].properties;
+                                    popupActivo = new maplibregl.Popup().setLngLat(e.lngLat)
+                                        .setHTML(`<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:160px;">
+                                                    <h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">📍 Pozo: ${{p.Pozo}}</h4>
+                                                    <b>${{p.Variable}}:</b> ${{p.Valor}}<br>
+                                                    <b>Año Objetivo:</b> ${{p.Año}}<br>
+                                                    <b>Origen:</b> ${{p.Tipo || 'Medición Real'}}<br>
+                                                    <b>Año Medido:</b> ${{p.Año_Medido || p.Año}}
+                                                  </div>`)
+                                        .addTo(map);
+                                }});
+
+                                map.on('click', 'add-layer-manual', (e) => showAddPopup(e));
+                                map.on('click', 'add-layer-csv', (e) => showAddPopup(e));
+
+                                function showAddPopup(e) {{
+                                    if (isDrawingMode()) return;
+                                    if (popupActivo) popupActivo.remove();
+                                    const p = e.features[0].properties;
+                                    let html = `<div style="font-family:'Segoe UI',sans-serif; font-size:12px; min-width:150px;"><h4 style="margin:0 0 5px 0; color:#691C32; border-bottom:1px solid #ddd; padding-bottom:3px;">${{p.nombre}}</h4><b>Tipo:</b> ${{p.tipo}}<br>`;
+                                    let attrs = p.atributos;
+                                    if (typeof attrs === 'string') {{
+                                        try {{ attrs = JSON.parse(attrs); }} catch(err) {{ attrs = {{}}; }}
+                                    }}
+                                    for (const [k, v] of Object.entries(attrs || {{}})) {{ html += `<b>${{k}}:</b> ${{v}}<br>`; }}
+                                    html += `</div>`;
+                                    popupActivo = new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+                                }}
+                                
+                                map.on('click', 'geo-fill', (e) => {{
+                                    if (isDrawingMode()) return;
+                                    const puntosClickeados = map.queryRenderedFeatures(e.point, {{
+                                        layers: ['pozos-layer', 'add-layer-manual', 'add-layer-csv']
+                                    }});
+                                    if (puntosClickeados.length > 0) return;
+
+                                    if (popupActivo) popupActivo.remove();
+                                    const p = e.features[0].properties;
+                                    const formacion = (p.FORMACION && p.FORMACION !== 'null' && p.FORMACION !== 'NINGUNO') ? p.FORMACION : 'Formación No Asignada';
+                                    const claveSgm = p["{col_sel_geo}"] || p.ETIQUETA_LITO || 'S/C';
+                                    const litologia = p.LITOLOGIA || 'Indiferenciada';
+                                    const roca = p.ROCA || 'Sedimentaria';
+                                    const colorHex = p.COLOR_HEX || '#B0BEC5';
+                                    
+                                    let edadGeo = p.PERIODO || '';
+                                    if (p.EDINICIO || p.EDFINAL) {{
+                                        const ini = p.EDINICIO || '';
+                                        const fin = p.EDFINAL || '';
+                                        edadGeo += (ini === fin || !fin) ? ` (${{ini}})` : ` (${{ini}} - ${{fin}})`;
+                                    }}
+                                    if (!edadGeo.trim()) edadGeo = p.ERA || 'S/D';
+
+                                    let html = `
+                                        <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5; min-width:200px;">
+                                            <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
+                                                <div style="display:flex; align-items:center; gap:6px;">
+                                                    <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block;"></span>
+                                                    <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{formacion}}</h4>
+                                                </div>
+                                                <span style="background:#F1F5F9; border:1px solid #CBD5E1; color:#334155; font-size:9.5px; font-weight:700; padding:1px 4px; border-radius:3px;">${{claveSgm}}</span>
+                                            </div>
+                                            <b>Litología:</b> <span style="color:#0f172a; font-weight:600;">${{litologia}}</span><br>
+                                            <b>Tipo de Roca:</b> ${{roca}}<br>
+                                            <b>Edad Geológica:</b> ${{edadGeo}}<br>
+                                            <span style="color:#64748B; font-size:10px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
+                                        </div>
+                                    `;
+                                    popupActivo = new maplibregl.Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+                                }});
+
+                                const capasInteractivas = ['pozos-layer', 'add-layer-manual', 'add-layer-csv', 'geo-fill', 'repda-layer'];
+                                capasInteractivas.forEach(capa => {{
+                                    map.on('mouseenter', capa, () => {{
+                                        if (!isDrawingMode()) map.getCanvas().style.cursor = 'pointer';
+                                    }});
+                                    map.on('mouseleave', capa, () => {{
+                                        if (!isDrawingMode()) map.getCanvas().style.cursor = '';
+                                    }});
+                                }});
+
+                                const toggleLayer = (chkId, layerIds, legId = null) => {{
+                                    const chk = document.getElementById(chkId);
+                                    if (chk) {{
+                                        chk.addEventListener('change', (e) => {{
+                                            const vis = e.target.checked ? 'visible' : 'none';
+                                            layerIds.forEach(id => {{ if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis); }});
+                                            if (legId) {{
+                                                const leg = document.getElementById(legId);
+                                                if (leg) leg.style.display = e.target.checked ? 'block' : 'none';
+                                            }}
+                                        }});
+                                    }}
                                 }};
-                                gradControl.addTo({{{{this._parent.get_name()}}}});
-                                {{% endmacro %}}
-                                """)
-                        m.add_child(ControlesVisualesMapa())
-                        
-                        Fullscreen(position='topright', title='Pantalla completa', title_cancel='Salir de pantalla completa', force_separate_button=True).add_to(m)
-                        folium.LayerControl(position='topright', collapsed=True).add_to(m)
-                        
-                        st_folium(m, height=720, use_container_width=True, returned_objects=[])
 
-                        # =======================================================
-                        # 📥 DESCARGA DIRECTA SIG (GEOTIFF, SHAPEFILE, GEOJSON)
-                        # =======================================================
+                                toggleLayer('chk-kriging', ['kriging-layer']);
+                                toggleLayer('chk-iso', ['iso-layer']);
+                                toggleLayer('chk-vec', ['vec-layer']);
+                                toggleLayer('chk-heat', ['heat-layer']);
+                                toggleLayer('chk-pozos', ['pozos-layer'], 'leg-pozos');
+                                toggleLayer('chk-repda', ['repda-halo-layer', 'repda-layer'], 'leg-repda');
+                                toggleLayer('chk-repda-nac', ['repda-nacional-layer'], 'leg-repda-nac');
+                                toggleLayer('chk-manual', ['add-layer-manual'], 'leg-manual');
+                                toggleLayer('chk-csv', ['add-layer-csv'], 'leg-csv');
+                                toggleLayer('chk-geo', ['geo-fill', 'geo-line'], 'leg-geo');
+
+                                const chkGeo = document.getElementById('chk-geo');
+                                if (chkGeo) {{
+                                    chkGeo.addEventListener('change', (e) => {{
+                                        const secOpacGeo = document.getElementById('sec-opac-geo');
+                                        if (secOpacGeo) {{
+                                            secOpacGeo.style.display = e.target.checked ? 'block' : 'none';
+                                        }}
+                                    }});
+                                }}
+
+                                let isDraggingPopup = false;
+                                window.addEventListener('mousemove', (e) => {{
+                                    if (!isDraggingPopup || !popupActivo) return;
+                                    const rect = map.getCanvasContainer().getBoundingClientRect();
+                                    const point = [e.clientX - rect.left, e.clientY - rect.top];
+                                    popupActivo.setLngLat(map.unproject(point));
+                                }});
+
+                                window.addEventListener('mouseup', () => {{
+                                    if (isDraggingPopup) {{
+                                        isDraggingPopup = false;
+                                        map.dragPan.enable();
+                                    }}
+                                }});
+
+                                const observerPopups = new MutationObserver((mutations) => {{
+                                    mutations.forEach((mutation) => {{
+                                        mutation.addedNodes.forEach((node) => {{
+                                            if (node.classList && node.classList.contains('maplibregl-popup') && node.classList.contains('transparent-popup')) {{
+                                                if (popupActivo && !node.dataset.draggable) {{
+                                                    node.dataset.draggable = "true";
+                                                    node.style.cursor = 'move';
+                                                    node.addEventListener('mousedown', (e) => {{
+                                                        isDraggingPopup = true;
+                                                        map.dragPan.disable();
+                                                        e.stopPropagation();
+                                                    }});
+                                                }}
+                                            }}
+                                        }});
+                                    }});
+                                }});
+                                observerPopups.observe(document.body, {{ childList: true, subtree: true }});
+
+                            </script>
+                        </body>
+                        </html>
+                        """
+                        components.html(html_maplibre, height=720)
+
                         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
-                        with st.expander("📥 Descargar Capas en Formatos SIG (GeoTIFF, Shapefile, GeoJSON)", expanded=True):
-                            st.caption("Archivos 100% compatibles con QGIS, ArcGIS, Google Earth y modelación numérica.")
-                            col_d1, col_d2, col_d3 = st.columns(3)
+                        with st.container(border=True):
+                            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:8px; font-size:13px;'>💾 EXPORTACIÓN DE RESULTADOS SIG Y MODELACIÓN (CERO-RERUN)</p>", unsafe_allow_html=True)
+                            c_d1, c_d2, c_d3, c_d4 = st.columns(4)
 
-                            with col_d1:
-                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>🌊 1. Superficie Kriging</p>", unsafe_allow_html=True)
-                                st.download_button("🗺️ GeoTIFF Ráster (.tif)", data=geotiff_bytes, file_name=f"kriging_{clave_actual}_{var_real}.tif", mime="image/tiff", use_container_width=True)
-                                if shp_krig_zip:
-                                    st.download_button("📦 Shapefile Malla (.zip)", data=shp_krig_zip, file_name=f"kriging_malla_{clave_actual}.zip", mime="application/zip", use_container_width=True)
-                                st.download_button("📄 GeoJSON Malla (.geojson)", data=geojson_krig, file_name=f"kriging_malla_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                            btn_tif = generar_enlace_descarga(
+                                geotiff_bytes, f"kriging_{clave_actual}_{var_real}_{anio_sel}.tif", 
+                                "image/tiff", "🗺️ GeoTIFF Ráster (.tif)"
+                            )
+                            c_d1.markdown(btn_tif, unsafe_allow_html=True)
 
-                            with col_d2:
-                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>📏 2. Isolíneas / Isopiezas</p>", unsafe_allow_html=True)
-                                if shp_iso_zip:
-                                    st.download_button("📦 Shapefile Líneas (.zip)", data=shp_iso_zip, file_name=f"isopiezas_{clave_actual}.zip", mime="application/zip", use_container_width=True)
-                                st.download_button("📄 GeoJSON Líneas (.geojson)", data=geojson_iso, file_name=f"isopiezas_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                            if shp_krig_zip:
+                                btn_shp_malla = generar_enlace_descarga(
+                                    shp_krig_zip, f"kriging_malla_{clave_actual}_{anio_sel}.zip", 
+                                    "application/zip", "📦 Shapefile Malla (.zip)"
+                                )
+                                c_d2.markdown(btn_shp_malla, unsafe_allow_html=True)
+                            else:
+                                btn_json_malla = generar_enlace_descarga(
+                                    geojson_krig, f"kriging_malla_{clave_actual}_{anio_sel}.geojson",
+                                    "application/geo+json", "📄 GeoJSON Malla"
+                                )
+                                c_d2.markdown(btn_json_malla, unsafe_allow_html=True)
 
-                            with col_d3:
-                                st.markdown("<p style='font-size:13px; font-weight:700; color:#1E293B; margin:0 0 6px 0;'>🧭 3. Vectores de Flujo</p>", unsafe_allow_html=True)
-                                if shp_flujo_zip:
-                                    st.download_button("📦 Shapefile Vectores (.zip)", data=shp_flujo_zip, file_name=f"vectores_flujo_{clave_actual}.zip", mime="application/zip", use_container_width=True)
-                                st.download_button("📄 GeoJSON Vectores (.geojson)", data=geojson_flujo, file_name=f"vectores_flujo_{clave_actual}.geojson", mime="application/geo+json", use_container_width=True)
+                            if shp_iso_zip:
+                                btn_shp_iso = generar_enlace_descarga(
+                                    shp_iso_zip, f"isopiezas_{clave_actual}_{anio_sel}.zip", 
+                                    "application/zip", "📏 Shapefile Isopiezas (.zip)"
+                                )
+                                c_d3.markdown(btn_shp_iso, unsafe_allow_html=True)
+                            else:
+                                btn_json_iso = generar_enlace_descarga(
+                                    geojson_iso, f"isopiezas_{clave_actual}_{anio_sel}.geojson", 
+                                    "application/geo+json", "📄 GeoJSON Isopiezas"
+                                )
+                                c_d3.markdown(btn_json_iso, unsafe_allow_html=True)
+
+                            if shp_flujo_zip:
+                                btn_shp_flujo = generar_enlace_descarga(
+                                    shp_flujo_zip, f"vectores_flujo_{clave_actual}_{anio_sel}.zip", 
+                                    "application/zip", "🧭 Shapefile Vectores (.zip)"
+                                )
+                                c_d4.markdown(btn_shp_flujo, unsafe_allow_html=True)
+                            else:
+                                btn_json_flujo = generar_enlace_descarga(
+                                    geojson_flujo, f"vectores_flujo_{clave_actual}_{anio_sel}.geojson", 
+                                    "application/geo+json", "📄 GeoJSON Vectores"
+                                )
+                                c_d4.markdown(btn_json_flujo, unsafe_allow_html=True)
+                        
+                        if dic_leyenda_rocas:
+                            st.markdown(f"""
+                                <div style='background-color:#F8FAFC; border-left:4px solid #691C32; padding:10px 14px; border-radius:4px; margin-top:10px; margin-bottom:8px;'>
+                                    <span style='font-size:12.5px; font-weight:bold; color:#691C32;'>SIMBOLOGÍA LITOLÓGICA OFICIAL (SGM - INEGI)</span>
+                                    <span style='font-size:11px; color:#64748B; margin-left:14px;'><b>Origen de Reglas:</b> {ORIGEN_SGM_GLOBAL} | <b>Campo:</b> <code>{col_sel_geo}</code></span>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                            items_html = [
+                                f"<div style='display:inline-flex; align-items:center; margin-right:18px; margin-bottom:6px;'>"
+                                f"<span style='width:16px; height:16px; background-color:{color}; border-radius:3px; display:inline-block; margin-right:7px; border:1px solid rgba(0,0,0,0.3);'></span>"
+                                f"<span style='font-size:11.5px; font-weight:700; color:#1E293B;'>{roca}</span>"
+                                f"</div>"
+                                for roca, color in dic_leyenda_rocas.items()
+                            ]
+                            st.markdown(f"<div style='background-color:#ffffff; padding:12px; border-radius:6px; border:1px solid #E2E8F0; line-height:1.6;'>{''.join(items_html)}</div>", unsafe_allow_html=True)
+
+                        try:
+                            if gdf_geo is not None and not gdf_geo.empty:
+                                with st.expander("🔬 Inspeccionar Tabla de Atributos Vectoriales de la Capa SGM", expanded=False):
+                                    st.dataframe(gdf_geo.drop(columns=["geometry"], errors="ignore").head(20), use_container_width=True)
+                        except NameError:
+                            pass
+
             else:
                 st.warning("⚠️ Se requieren al menos 4 pozos con coordenadas y elevación de terreno válidas para resolver la matriz matemática de interpolación.")
     renderizar_pestaña_mapa()
+    
+# =======================================================
+# 📉 INCISO A: EVOLUCIÓN DEL NIVEL ESTÁTICO (Δh) Y CONOS DE ABATIMIENTO
+# =======================================================
+with tab_evolucion:
+    @st.fragment
+    def renderizar_pestaña_evolucion():
+        st.markdown("""
+            <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
+                <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">📉 DIAGNÓSTICO DE EVOLUCIÓN PIEZOMÉTRICA Y CONOS DE ABATIMIENTO (Δh = ht₂ - ht₁)</span><br>
+                <span style="font-size: 11.5px; color: #475569;">
+                    Evaluación espacio-temporal del potencial hidráulico conforme al procedimiento de balance geohidrológico (NOM-011-CONAGUA-2015).
+                    Identifica núcleos concéntricos de sobreexplotación (conos de abatimiento) y cuantifica el cambio en el volumen de almacenamiento (ΔV = ∬ Δh · Sy dA).
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        anios_disp_evo = sorted([int(a) for a in df_ac['Año'].dropna().unique().tolist()])
+        if len(anios_disp_evo) < 2:
+            st.warning("⚠️ Se requieren datos de al menos 2 años distintos en este acuífero para evaluar la evolución temporal.")
+            return
+
+        idx_def_t1 = 0
+        idx_def_t2 = len(anios_disp_evo) - 1
+        if idx_def_t2 > 5:
+            idx_def_t1 = max(0, idx_def_t2 - 10)
+
+        with st.container(border=True):
+            c_e1, c_e2, c_e3, c_e4 = st.columns([1.1, 1.1, 1.3, 1.1])
+            anio_t1 = c_e1.selectbox("Año Base (t₁):", anios_disp_evo, index=idx_def_t1, key="sel_evo_t1")
+            anio_t2 = c_e2.selectbox("Año Comparativo (t₂):", anios_disp_evo, index=idx_def_t2, key="sel_evo_t2")
+            modo_sync_evo = c_e3.selectbox("Sincronización de Pozos:", ["Interpolación Temporal", "Corte Estricto"], index=0, key="sel_evo_sync")
+            sy_param = c_e4.number_input("Coef. Almacenamiento (Sy):", min_value=0.001, max_value=0.35, value=0.08, step=0.01, format="%.3f", key="sel_evo_sy", help="Rendimiento específico Sy conforme a la NOM-011. Típicos: Granular 0.05-0.15, Rocas fracturadas 0.01-0.05.")
+
+            c_e5, c_e6, c_e7 = st.columns([1.2, 1.6, 1.2])
+            modelo_krig_evo = c_e5.selectbox("Semivariograma Kriging:", ["Esférico", "Lineal", "Gaussiano", "Exponencial"], index=0, key="sel_evo_vario")
+
+            geom_oficial = st.session_state.get("poligono_personalizado", None)
+            if geom_oficial is None:
+                geom_oficial = poligono_oficial_geom
+
+            opciones_delimitacion_evo = ["Pozos de Monitoreo (Envolvente Convexa)"]
+            if geom_oficial is not None:
+                opciones_delimitacion_evo.insert(0, "Polígono Oficial del Acuífero")
+
+            modo_delimitacion_evo = c_e6.selectbox(
+                "Delimitar interpolación por:", 
+                opciones_delimitacion_evo, 
+                index=0, 
+                key="sel_evo_delim"
+            )
+
+            intervalo_iso_evo = c_e7.selectbox(
+                "Intervalo Isolíneas (Δh):",
+                [1.0, 2.0, 5.0, 10.0],
+                index=1,
+                format_func=lambda x: f"Cada {x:.1f} m",
+                key="sel_evo_iso_step"
+            )
+
+        if anio_t1 >= anio_t2:
+            st.error("⚠️ El Año Base (t₁) debe ser estrictamente anterior al Año Comparativo (t₂). Por favor ajuste los selectores de fecha.")
+            return
+
+        modo_p = "interpolado" if modo_sync_evo == "Interpolación Temporal" else "estricto"
+        df_sync_t1 = obtener_red_sincronizada(df_ac, anio_t1, var_nombre='Carga_Hidraulica', modo=modo_p)
+        df_sync_t2 = obtener_red_sincronizada(df_ac, anio_t2, var_nombre='Carga_Hidraulica', modo=modo_p)
+
+        if len(df_sync_t1) < 4 or len(df_sync_t2) < 4:
+            st.warning(f"⚠️ Se requieren al menos 4 pozos válidos por año para interpolar. Pozos t₁ ({anio_t1}): {len(df_sync_t1)} | Pozos t₂ ({anio_t2}): {len(df_sync_t2)}.")
+            return
+
+        if modo_delimitacion_evo == "Polígono Oficial del Acuífero" and geom_oficial is not None:
+            delim_geom = geom_oficial
+            bounds_lim = geom_oficial.bounds
+            label_delimitacion = "Polígono Oficial del Acuífero"
+        else:
+            x_pozos = np.concatenate([df_sync_t1['Longitud'].values, df_sync_t2['Longitud'].values])
+            y_pozos = np.concatenate([df_sync_t1['Latitud'].values, df_sync_t2['Latitud'].values])
+            try:
+                hull = ConvexHull(np.column_stack((x_pozos, y_pozos)))
+                hull_pts = np.column_stack((x_pozos[hull.vertices], y_pozos[hull.vertices]))
+                hull_loop = np.vstack([hull_pts, hull_pts[0]])
+                delim_geom = Polygon(hull_loop)
+                bounds_lim = delim_geom.bounds
+            except Exception:
+                delim_geom = None
+                bounds_lim = None
+            label_delimitacion = "Envolvente Convexa de Pozos"
+
+        with st.spinner("Modelando superficies piezométricas t₁ y t₂ mediante Kriging Ordinario..."):
+            res_k1 = resolver_malla_kriging(df_sync_t1, 'Carga_Hidraulica', modelo_krig_evo, bounds_limite=bounds_lim, resolucion=120)
+            res_k2 = resolver_malla_kriging(df_sync_t2, 'Carga_Hidraulica', modelo_krig_evo, bounds_limite=bounds_lim, resolucion=120)
+
+            if res_k1[0] is None:
+                st.error(f"Error resolviendo Kriging para {anio_t1}: {res_k1[1]}")
+                return
+            if res_k2[0] is None:
+                st.error(f"Error resolviendo Kriging para {anio_t2}: {res_k2[1]}")
+                return
+
+            X, Y, Z1, grid_x, grid_y, bounds = res_k1[0], res_k1[1], res_k1[2], res_k1[3], res_k1[4], res_k1[5]
+            Z2 = res_k2[2]
+            delta_Z = Z2 - Z1
+
+        pts_grid = np.column_stack((X.ravel(), Y.ravel()))
+        inside_mask = None
+        if delim_geom is not None:
+            try:
+                if delim_geom.geom_type == 'Polygon':
+                    path_poly = MplPath(np.array(delim_geom.exterior.coords))
+                    inside_mask = path_poly.contains_points(pts_grid).reshape(X.shape)
+                elif delim_geom.geom_type == 'MultiPolygon':
+                    mask_accum = np.zeros(len(pts_grid), dtype=bool)
+                    for poly_sub in delim_geom.geoms:
+                        p_sub = MplPath(np.array(poly_sub.exterior.coords))
+                        mask_accum |= p_sub.contains_points(pts_grid)
+                    inside_mask = mask_accum.reshape(X.shape)
+            except Exception:
+                inside_mask = None
+        if inside_mask is None:
+            inside_mask = np.ones(X.shape, dtype=bool)
+
+        delta_Z_masked = np.where(inside_mask, delta_Z, np.nan)
+
+        z_list = []
+        for row in delta_Z_masked:
+            r_vals = []
+            for val in row:
+                if np.isnan(val):
+                    r_vals.append(None)
+                else:
+                    r_vals.append(round(float(val), 2))
+            z_list.append(r_vals)
+        z_data_json = json.dumps(z_list)
+        bounds_json = json.dumps(bounds)
+
+        lat_media = float(np.mean([bounds[0][0], bounds[1][0]]))
+        dx_m = abs(grid_x[1] - grid_x[0]) * 111320.0 * math.cos(math.radians(lat_media))
+        dy_m = abs(grid_y[1] - grid_y[0]) * 111320.0
+        dA_m2 = dx_m * dy_m
+        dA_km2 = dA_m2 / 1e6
+
+        dt_anios = max(1, anio_t2 - anio_t1)
+        valid_mask = inside_mask & (~np.isnan(delta_Z))
+        delta_vals = delta_Z[valid_mask]
+
+        if len(delta_vals) > 0:
+            delta_V_m3 = float(np.sum(delta_vals * sy_param * dA_m2))
+            delta_V_hm3 = delta_V_m3 / 1e6
+            tasa_V_anual_hm3 = delta_V_hm3 / dt_anios
+
+            min_dh = float(np.min(delta_vals))
+            max_dh = float(np.max(delta_vals))
+            mean_dh = float(np.mean(delta_vals))
+
+            caida_max_m = abs(min_dh) if min_dh < 0 else 0.0
+            tasa_caida_max = caida_max_m / dt_anios
+
+            n_total = len(delta_vals)
+            n_abat = np.sum(delta_vals < -0.1)
+            n_recup = np.sum(delta_vals > 0.1)
+
+            area_total_km2 = n_total * dA_km2
+            area_abat_km2 = n_abat * dA_km2
+            area_recup_km2 = n_recup * dA_km2
+            pct_abat = (area_abat_km2 / area_total_km2 * 100.0) if area_total_km2 > 0 else 0.0
+            pct_recup = (area_recup_km2 / area_total_km2 * 100.0) if area_total_km2 > 0 else 0.0
+        else:
+            delta_V_hm3, tasa_V_anual_hm3 = 0.0, 0.0
+            caida_max_m, tasa_caida_max, mean_dh = 0.0, 0.0, 0.0
+            area_total_km2, area_abat_km2, pct_abat = 0.0, 0.0, 0.0
+
+        with st.container(border=True):
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                "Cambio Almacenamiento (ΔV)",
+                f"{delta_V_hm3:,.2f} hm³",
+                f"{tasa_V_anual_hm3:+,.2f} hm³/año (NOM-011)",
+                delta_color="normal" if delta_V_hm3 >= 0 else "inverse",
+                help="Volumen total de agua subterránea acumulado (+) o perdido (-) por desalmacenamiento en el periodo analizado."
+            )
+            m2.metric(
+                "Descenso Máximo Puntual",
+                f"{caida_max_m:.2f} m",
+                f"-{tasa_caida_max:.2f} m/año",
+                delta_color="inverse" if caida_max_m > 0 else "off",
+                help="Máxima caída puntual de carga hidráulica detectada en la superficie piezométrica."
+            )
+            m3.metric(
+                "Evolución Media Ponderada",
+                f"{mean_dh:+.2f} m",
+                f"{mean_dh / dt_anios:+.2f} m/año",
+                delta_color="normal" if mean_dh >= 0 else "inverse",
+                help="Variación promedio ponderada de la carga hidráulica en toda la superficie del acuífero."
+            )
+            m4.metric(
+                "Superficie en Abatimiento",
+                f"{area_abat_km2:,.1f} km²",
+                f"{pct_abat:.1f}% del área acuífera",
+                delta_color="inverse" if pct_abat > 30 else "normal",
+                help="Área del acuífero donde el nivel estático descendió más de 0.1 m."
+            )
+
+        df_pz_evo = []
+        m_t1 = df_sync_t1.set_index('Pozo')
+        m_t2 = df_sync_t2.set_index('Pozo')
+        pozos_comunes = sorted(list(set(m_t1.index).intersection(set(m_t2.index))))
+
+        features_pozos_evo = []
+        for pz in pozos_comunes:
+            r1 = m_t1.loc[pz]
+            r2 = m_t2.loc[pz]
+            if isinstance(r1, pd.DataFrame): r1 = r1.iloc[0]
+            if isinstance(r2, pd.DataFrame): r2 = r2.iloc[0]
+
+            ch1 = float(r1['Carga_Hidraulica'])
+            ch2 = float(r2['Carga_Hidraulica'])
+            dh = ch2 - ch1
+            tasa = dh / dt_anios
+
+            if tasa <= -1.5:
+                cond = "Abatimiento Crítico"
+                col_p = "#990000"
+            elif tasa <= -0.5:
+                cond = "Abatimiento Moderado"
+                col_p = "#d9534f"
+            elif tasa < 0.0:
+                cond = "Abatimiento Leve"
+                col_p = "#f0ad4e"
+            elif tasa == 0.0:
+                cond = "Equilibrio"
+                col_p = "#6c757d"
+            else:
+                cond = "Recuperación"
+                col_p = "#0275d8"
+
+            lat_p = float(r1['Latitud'])
+            lon_p = float(r1['Longitud'])
+            elev_p = float(r1.get('Elev.Terr', np.nan))
+
+            rec_pz = {
+                'Pozo': str(pz),
+                'Latitud': lat_p,
+                'Longitud': lon_p,
+                'Elev_Terr': elev_p,
+                f'Carga_{anio_t1}_msnm': round(ch1, 2),
+                f'Carga_{anio_t2}_msnm': round(ch2, 2),
+                'Delta_h_m': round(dh, 2),
+                'Tasa_m_anio': round(tasa, 2),
+                'Condicion': cond,
+                'Color': col_p
+            }
+            df_pz_evo.append(rec_pz)
+            features_pozos_evo.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon_p, lat_p]},
+                "properties": rec_pz
+            })
+        df_pz_evo = pd.DataFrame(df_pz_evo)
+        geojson_pozos_evo_str = json.dumps({"type": "FeatureCollection", "features": features_pozos_evo})
+
+        # Carga e integración espacial de Concesiones REPDA (Inciso D: Causa vs Efecto)
+        resumen_repda = cargar_resumen_repda(clave_actual)
+        df_repda_pts, geojson_repda_str, tiene_repda_pts = cargar_concesiones_repda_puntos(clave_actual, st.session_state.get("repda_custom_df"))
+
+        vol_en_abatimiento_m3 = 0.0
+        vol_total_muestra_m3 = 0.0
+        n_repda_en_abat = 0
+        n_repda_total = len(df_repda_pts)
+
+        interp_dh = None
+        try:
+            interp_dh = RegularGridInterpolator((grid_y, grid_x), delta_Z_masked, bounds_error=False, fill_value=np.nan)
+        except Exception:
+            interp_dh = None
+
+        features_repda_enriquecidas = []
+        if tiene_repda_pts:
+            try:
+                repda_fc = json.loads(geojson_repda_str)
+                for feat in repda_fc.get("features", []):
+                    props = feat.get("properties", {})
+                    lon_pt = feat["geometry"]["coordinates"][0]
+                    lat_pt = feat["geometry"]["coordinates"][1]
+
+                    dh_val = float(interp_dh((lat_pt, lon_pt))) if interp_dh is not None else np.nan
+                    v_m3 = float(props.get("volumen_m3", 0.0))
+                    vol_total_muestra_m3 += v_m3
+
+                    if not np.isnan(dh_val):
+                        dh_val_round = round(dh_val, 2)
+                        if dh_val <= -1.5:
+                            diag_rep = "🚨 Núcleo de Abatimiento Crítico"
+                            col_diag = "#990000"
+                            es_abat = True
+                        elif dh_val <= -0.5:
+                            diag_rep = "⚠️ Cono de Abatimiento Moderado"
+                            col_diag = "#d9534f"
+                            es_abat = True
+                        elif dh_val < -0.1:
+                            diag_rep = "📉 Cono de Abatimiento Leve"
+                            col_diag = "#f0ad4e"
+                            es_abat = True
+                        elif dh_val <= 0.1:
+                            diag_rep = "⚖️ Balance Neutro / Equilibrio"
+                            col_diag = "#64748b"
+                            es_abat = False
+                        else:
+                            diag_rep = "💧 Área de Recuperación Freática"
+                            col_diag = "#0275d8"
+                            es_abat = False
+                    else:
+                        dh_val_round = None
+                        diag_rep = "⚪ Fuera de Envolvente Interpolada"
+                        col_diag = "#94a3b8"
+                        es_abat = False
+
+                    if es_abat:
+                        vol_en_abatimiento_m3 += v_m3
+                        n_repda_en_abat += 1
+
+                    props["dh_local"] = dh_val_round
+                    props["diagnostico_evo"] = diag_rep
+                    props["color_diagnostico"] = col_diag
+                    feat["properties"] = props
+                    features_repda_enriquecidas.append(feat)
+
+                geojson_repda_str = json.dumps({"type": "FeatureCollection", "features": features_repda_enriquecidas})
+            except Exception:
+                pass
+
+        pct_vol_en_abat = (vol_en_abatimiento_m3 / vol_total_muestra_m3 * 100.0) if vol_total_muestra_m3 > 0 else 0.0
+        pct_pozos_en_abat = (n_repda_en_abat / n_repda_total * 100.0) if n_repda_total > 0 else 0.0
+
+        img_evo_png, vmin_evo, vmax_evo = render_imagen_evolucion_divergente(X, Y, delta_Z_masked, bounds)
+        img_iso_png, geojson_iso_bytes, shp_iso_zip = render_imagen_isolineas_evolucion(X, Y, delta_Z_masked, bounds, intervalo_iso_evo, clave_actual)
+        geotiff_evo_bytes = generar_geotiff_bytes(delta_Z_masked, bounds)
+
+        img_evo_b64 = base64.b64encode(img_evo_png).decode('utf-8')
+        img_iso_b64 = base64.b64encode(img_iso_png).decode('utf-8')
+
+        if delim_geom is not None:
+            poly_geojson_obj = {"type": "Feature", "geometry": mapping(delim_geom), "properties": {"nombre": label_delimitacion}}
+            poly_geojson_str = json.dumps(poly_geojson_obj)
+            poly_bounds_json = json.dumps(list(delim_geom.bounds))
+            centro_lon = float(delim_geom.centroid.x)
+            centro_lat = float(delim_geom.centroid.y)
+        else:
+            poly_geojson_str = "null"
+            poly_bounds_json = json.dumps([[bounds[0][1], bounds[0][0]], [bounds[1][1], bounds[1][0]]])
+            centro_lon = float((bounds[0][1] + bounds[1][1]) / 2.0)
+            centro_lat = float((bounds[0][0] + bounds[1][0]) / 2.0)
+
+        min_y, min_x = bounds[0]
+        max_y, max_x = bounds[1]
+        img_coords_json = json.dumps([
+            [min_x, max_y], [max_x, max_y], [max_x, min_y], [min_x, min_y]
+        ])
+
+        span_edit = 'contenteditable="true" spellcheck="false" title="Haz clic para editar este texto" class="txt-leyenda-editable"'
+
+        leyenda_repda_html = ""
+        if tiene_repda_pts:
+            leyenda_repda_html = f"""
+            <div id="leg-repda" style="margin-top:5px; border-top: 1px solid #eee; padding-top:4px;">
+                <b style="color:#691C32; font-size:11px;"><span {span_edit}>Concesiones REPDA ({n_repda_total})</span></b><br>
+                <div style="font-size:9.5px; color:#64748B; margin-bottom:3px;"><span {span_edit}>Radio proporcional a √Volumen</span></div>
+                <i class="circle" style="background:#16a34a;"></i> <span {span_edit}>Agrícola</span><br>
+                <i class="circle" style="background:#2563eb;"></i> <span {span_edit}>Público Urbano</span><br>
+                <i class="circle" style="background:#d97706;"></i> <span {span_edit}>Industrial</span><br>
+                <i class="circle" style="background:#9333ea;"></i> <span {span_edit}>Servicios / Comercial</span><br>
+                <i class="circle" style="background:#06b6d4;"></i> <span {span_edit}>Doméstico</span><br>
+                <i class="circle" style="background:#ec4899;"></i> <span {span_edit}>Diferentes Usos</span><br>
+            </div>
+            """
+
+        leyenda_html_evo = f"""
+        <b style="color:#691C32; font-size: 12px;"><span {span_edit}>Simbología Evolución</span></b><br>
+        <div id="leg-pozos" style="margin-top:4px;">
+            <i style="background:#990000;"></i> <span {span_edit}>Abatimiento Crítico (&lt; -1.5 m/año)</span><br>
+            <i style="background:#d9534f;"></i> <span {span_edit}>Abatimiento Moderado (-1.5 a -0.5)</span><br>
+            <i style="background:#f0ad4e;"></i> <span {span_edit}>Abatimiento Leve (-0.5 a 0.0)</span><br>
+            <i style="background:#0275d8;"></i> <span {span_edit}>Recuperación Freática (&gt; 0.0 m/año)</span><br>
+        </div>
+        <div id="leg-poly" style="margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">
+            <i class="square" style="background:rgba(105,28,50,0.08); border: 1.5px dashed #691C32;"></i> <span {span_edit}>{label_delimitacion}</span><br>
+        </div>
+        {leyenda_repda_html}
+        <div id="leg-repda-nac" style="display: none; margin-top:5px; border-top: 1px solid #eee; padding-top:4px;">
+            <b style="color:#166534; font-size:11px;"><span {span_edit}>🇲🇽 REPDA Nacional (461,914)</span></b><br>
+            <div style="font-size:9.5px; color:#64748B; margin-bottom:3px;"><span {span_edit}>Uso Oficial Registrado</span></div>
+            <i class="circle" style="background:#16a34a;"></i> <span {span_edit}>Agrícola</span><br>
+            <i class="circle" style="background:#2563eb;"></i> <span {span_edit}>Público Urbano</span><br>
+            <i class="circle" style="background:#ca8a04;"></i> <span {span_edit}>Pecuario</span><br>
+            <i class="circle" style="background:#dc2626;"></i> <span {span_edit}>Industrial</span><br>
+            <i class="circle" style="background:#9333ea;"></i> <span {span_edit}>Servicios</span><br>
+            <i class="circle" style="background:#0284c7;"></i> <span {span_edit}>Doméstico</span><br>
+            <i class="circle" style="background:#0d9488;"></i> <span {span_edit}>Diferentes Usos</span><br>
+        </div>
+        """
+
+        url_pmtiles_srv_tab2 = obtener_url_pmtiles()
+
+        html_maplibre_evo = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <title>Evolución Piezométrica MapLibre</title>
+            <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+            <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+            <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+            <script src="https://unpkg.com/pmtiles@2.11.0/dist/index.js"></script>
+            
+            <!-- Librerías Vectoriales para Dibujo y Cálculo Geodésico -->
+            <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" type="text/css" />
+            <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+            <style>
+                body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
+                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #ffffff; border-radius: 8px; }}
+                
+                .txt-leyenda-editable {{ 
+                    cursor: text; padding: 1px 4px; border-radius: 3px; outline: none; 
+                    border-bottom: 1px dashed transparent; transition: background-color 0.2s; 
+                }}
+                .txt-leyenda-editable:hover {{ 
+                    background-color: rgba(0,0,0,0.05); border-bottom: 1px dashed #888; 
+                }}
+                .txt-leyenda-editable:focus {{ 
+                    background-color: #ffffff; border-bottom: 1.5px solid #2980b9; 
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.15); 
+                }}
+
+                .gis-badge-popup .maplibregl-popup-content {{
+                    background: rgba(255, 255, 255, 0.95) !important;
+                    backdrop-filter: blur(8px) !important;
+                    border: 1px solid #CBD5E1 !important;
+                    border-top: 3px solid #691C32 !important;
+                    border-radius: 6px !important;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16) !important;
+                    padding: 8px 12px !important;
+                    font-family: 'Segoe UI', Arial, sans-serif !important;
+                    line-height: 1.4 !important;
+                    pointer-events: auto !important;
+                }}
+                .gis-badge-popup .maplibregl-popup-tip {{
+                    border-top-color: rgba(255, 255, 255, 0.95) !important;
+                }}
+                .gis-badge-popup .maplibregl-popup-close-button {{
+                    font-size: 14px !important;
+                    color: #64748B !important;
+                    padding: 2px 5px !important;
+                    right: 2px !important;
+                    top: 2px !important;
+                    cursor: pointer !important;
+                }}
+                .gis-badge-popup .maplibregl-popup-close-button:hover {{
+                    color: #DC2626 !important;
+                    background: transparent !important;
+                }}
+
+                .hud-elevation {{
+                    position: absolute; top: 12px; right: 55px; z-index: 1000;
+                    background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
+                    color: #1e293b; padding: 7px 14px; border-radius: 8px;
+                    border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                    font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
+                }}
+                .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+                
+                .btn-open-dock-circle {{
+                    position: absolute; top: 12px; left: 12px; z-index: 1000;
+                    background: #691C32; color: #ffffff; width: 38px; height: 38px;
+                    border-radius: 50%; border: 1.5px solid #DDC9A3;
+                    box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+                    font-size: 19px; font-weight: bold; cursor: pointer;
+                    display: flex; align-items: center; justify-content: center;
+                    transition: all 0.2s ease;
+                }}
+                .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.1); }}
+                
+                .workbench-dock {{
+                    position: absolute; top: 12px; left: 12px; z-index: 2000;
+                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                    width: 280px; border-radius: 10px; overflow: hidden;
+                    box-shadow: 0 6px 20px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
+                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+                    font-size: 11.5px; color: #1E293B;
+                }}
+                .dock-header {{ 
+                    background: #691C32; color: white; padding: 9px 12px; 
+                    font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
+                }}
+                .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
+                .dock-section {{ margin-bottom: 12px; }}
+                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
+                .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+                
+                .legend-panel {{
+                    position: absolute; bottom: 35px; left: 12px; z-index: 1000;
+                    background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 8px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 11px; line-height: 1.6;
+                    border: 1px solid #E2E8F0; max-width: 280px; pointer-events: auto;
+                }}
+                .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #ccc; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }}
+                .legend-panel .square {{ border-radius: 2px; }}
+                
+                .leaflet-open-gradient-btn {{
+                    position: absolute; top: 160px; right: 10px; z-index: 1000;
+                    background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
+                    border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                    transition: background 0.2s ease;
+                }}
+                .leaflet-open-gradient-btn:hover {{ background: #88102B !important; }}
+
+                .gradient-docked-panel {{
+                    position: absolute; top: 160px; right: 50px; z-index: 2000;
+                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                    width: 230px; border-radius: 8px; overflow: hidden;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                    font-size: 11px; color: #1E293B;
+                }}
+                .docked-gradient-header {{
+                    background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                    font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                    border-bottom: 1px solid #e2e8f0;
+                }}
+                .docked-gradient-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; }}
+                .docked-gradient-close:hover {{ color: #dc2626; }}
+                .docked-gradient-body {{ padding: 10px; }}
+                .gradient-bar {{ height: 10px; border-radius: 4px; background: linear-gradient(to right, #b2182b, #ef8a62, #fddbc7, #f7f7f7, #d1e5f0, #67a9cf, #2166ac); margin: 6px 0; border: 1px solid #ccc; }}
+                .gradient-labels {{ display: flex; justify-content: space-between; font-weight: bold; color: #333; }}
+
+                .leaflet-open-draw-btn {{
+                    position: absolute; top: 200px; right: 10px; z-index: 1000;
+                    background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
+                    border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                    transition: background 0.2s ease;
+                }}
+                .leaflet-open-draw-btn:hover {{ background: #88102B !important; }}
+
+                .draw-docked-panel {{
+                    position: absolute; top: 160px; right: 50px; z-index: 2000;
+                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                    width: 275px; border-radius: 8px; overflow: hidden;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                    font-size: 11px; color: #1E293B;
+                }}
+                .docked-draw-header {{
+                    background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                    font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                    border-bottom: 1px solid #e2e8f0; font-size: 11.5px;
+                }}
+                .docked-draw-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; font-weight: bold; }}
+                .docked-draw-close:hover {{ color: #dc2626; }}
+                .docked-draw-body {{ padding: 10px; }}
+
+                .draw-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 8px; }}
+                .btn-tool {{
+                    background: #ffffff; border: 1px solid #CBD5E1; border-radius: 5px;
+                    padding: 5px 6px; font-size: 10.5px; font-weight: 600; color: #334155;
+                    display: flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; transition: all 0.15s ease;
+                }}
+                .btn-tool svg {{ width: 13px; height: 13px; stroke: #691C32; fill: none; stroke-width: 2; flex-shrink: 0; }}
+                .btn-tool:hover {{ background: #f1f5f9; border-color: #691C32; color: #691C32; }}
+                .btn-tool.active {{ background: #691C32; border-color: #691C32; color: #ffffff; }}
+                .btn-tool.active svg {{ stroke: #ffffff; }}
+
+                .btn-preset {{
+                    flex: 1; padding: 3px 4px; font-size: 10px; font-weight: 600;
+                    border: 1px solid #cbd5e1; border-radius: 3px; background: #f8fafc;
+                    color: #475569; cursor: pointer; transition: all 0.15s ease; text-align: center;
+                }}
+                .btn-preset:hover {{ background: #e2e8f0; color: #1e293b; border-color: #691C32; }}
+
+                .draw-measure-box {{
+                    background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 5px;
+                    padding: 8px 10px; font-size: 11px; line-height: 1.45; color: #14532D;
+                    margin-bottom: 8px; display: none;
+                }}
+                .draw-measure-box b {{ color: #166534; }}
+
+                .draw-actions {{ display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px; }}
+                .btn-action-sm {{
+                    flex: 1; padding: 5px 8px; font-size: 10.5px; font-weight: 600;
+                    border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff;
+                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                    gap: 5px; transition: all 0.15s ease; color: #334155;
+                }}
+                .btn-action-sm svg {{ width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }}
+                .btn-action-sm:hover {{ background: #f8fafc; border-color: #94A3B8; }}
+                .btn-action-sm.danger {{ color: #dc2626; border-color: #fecaca; }}
+                .btn-action-sm.danger:hover {{ background: #fef2f2; border-color: #dc2626; }}
+
+                .label-marker-corte {{
+                    width: 22px; height: 22px; border-radius: 50%;
+                    color: #ffffff; font-weight: 800; font-size: 11px;
+                    display: flex; align-items: center; justify-content: center;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.35); border: 2px solid #ffffff;
+                    pointer-events: none; font-family: 'Segoe UI', Arial, sans-serif;
+                }}
+                .label-marker-corte.label-a {{ background: #691C32; }}
+                .label-marker-corte.label-b {{ background: #166534; }}
+            </style>
+        </head>
+        <body>
+            <div id="map"></div>
+
+            <div class="hud-elevation">
+                <div><b>LON:</b> <span id="hud-lon">--</span></div>
+                <div><b>LAT:</b> <span id="hud-lat">--</span></div>
+                <div style="color:#008a3b;"><b>Δh:</b> <span id="hud-ele">--</span></div>
+            </div>
+
+            <div id="btn-open-dock" class="btn-open-dock-circle" onclick="toggleDock()" title="Abrir Herramientas Visuales">
+                ☰
+            </div>
+
+            <div id="dock-panel" class="workbench-dock" style="display: none;">
+                <div class="dock-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>🛠️ Capas Visuales</span>
+                    </div>
+                    <button onclick="toggleDock()" style="background:transparent; border:none; color:white; font-size:16px; font-weight:bold; cursor:pointer; line-height:1; padding:2px 5px;" title="Contraer panel">✕</button>
+                </div>
+                <div class="dock-body">
+                    <div class="dock-section">
+                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🌍 Mapa Base:</label>
+                        <select id="sel-basemap" class="slider-ctrl" style="padding: 4px; border-radius: 4px; border: 1px solid #ccc; width: 100%; background: #f8fafc;">
+                            <option value="base-light-layer">Gris Claro (Esri)</option>
+                            <option value="base-sat-layer">Satélite (Esri)</option>
+                            <option value="base-topo-layer">Topográfico (Esri)</option>
+                            <option value="base-osm-layer">OpenStreetMap</option>
+                            <option value="base-street-layer">Estándar (Esri)</option>
+                            <option value="base-terrain-layer">Terreno (Esri)</option>
+                            <option value="base-ocean-layer">Océanos (Esri)</option>
+                            <option value="base-dark-layer">Gris Oscuro (Esri)</option>
+                            <option value="base-google-layer">Google Satelital gris 35%</option>
+                        </select>
+                    </div>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                    <div class="dock-section">
+                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Malla Δh: <span id="val-opac">70%</span></label>
+                        <input type="range" class="slider-ctrl" id="slider-opac" min="0" max="1" step="0.05" value="0.70" oninput="cambiarOpacidadEvo(this.value)">
+                    </div>
+                    <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                    <div class="dock-section">
+                        <label><input type="checkbox" id="chk-kriging" checked> 🌊 Malla Divergente Δh</label>
+                        <label><input type="checkbox" id="chk-iso" checked> 📏 Isolíneas de Descenso</label>
+                        <label><input type="checkbox" id="chk-pozos" checked> 📍 Red Piezométrica</label>
+                        <label><input type="checkbox" id="chk-poly" checked> 🗺️ {label_delimitacion}</label>
+                        <label style="display: {'flex' if tiene_repda_pts else 'none'};"><input type="checkbox" id="chk-repda" checked> 🏢 Concesiones REPDA ({n_repda_total})</label>
+                        <label style="display: flex;"><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="legend-panel">
+                {leyenda_html_evo}
+            </div>
+
+            <div id="btn-open-gradient" class="leaflet-open-gradient-btn" onclick="toggleGradient()" title="Mostrar Gradiente">
+                <div style="width: 14px; height: 14px; background: linear-gradient(to bottom, #b2182b, #2166ac); border: 1px solid #fff; border-radius: 2px;"></div>
+            </div>
+
+            <div id="gradient-panel-container" class="gradient-docked-panel" style="display: none;">
+                <div class="docked-gradient-header">
+                    <span>Gradiente Piezométrico (Δh)</span>
+                    <span class="docked-gradient-close" onclick="toggleGradient()" title="Ocultar">&times;</span>
+                </div>
+                <div class="docked-gradient-body">
+                    <b style="color:#691C32; font-size:11px;">Evolución del Nivel ({anio_t2} - {anio_t1})</b>
+                    <div class="gradient-bar"></div>
+                    <div class="gradient-labels">
+                        <span style="color:#990000;">{vmin_evo:.1f} m</span>
+                        <span style="color:#2C3E50;">0.0 m</span>
+                        <span style="color:#0055AA;">+{vmax_evo:.1f} m</span>
+                    </div>
+                    <div style="font-size:9.5px; color:#64748B; margin-top:5px; text-align:center;">Rojo: Abatimiento | Azul: Recuperación</div>
+                </div>
+            </div>
+
+            <div id="btn-open-draw" class="leaflet-open-draw-btn" onclick="toggleDraw()" title="Herramientas de Dibujo y Medición">
+                <svg viewBox="0 0 24 24" style="width:16px; height:16px; stroke:#ffffff; fill:none; stroke-width:2;">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+                    <circle cx="12" cy="12" r="2"/>
+                </svg>
+            </div>
+
+            <div id="draw-panel-container" class="draw-docked-panel" style="display: none;">
+                <div class="docked-draw-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <svg viewBox="0 0 24 24" style="width:14px; height:14px; stroke:#691C32; fill:none; stroke-width:2;">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                            <polyline points="2 17 12 22 22 17"/>
+                            <polyline points="2 12 12 17 22 12"/>
+                        </svg>
+                        <span>Gabinete de Evolución (Δh)</span>
+                    </div>
+                    <span class="docked-draw-close" onclick="toggleDraw()" title="Ocultar">&times;</span>
+                </div>
+                <div class="docked-draw-body">
+                    <div class="draw-grid">
+                        <button id="btn-tool-point" class="btn-tool" onclick="activarModoDibujo('point')" title="Sondear variación de nivel Δh puntual">
+                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+                            Punto
+                        </button>
+                        <button id="btn-tool-line" class="btn-tool" onclick="activarModoDibujo('line_string')" title="Trazar transecto A-A' de variación de nivel">
+                            <svg viewBox="0 0 24 24"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="2.5"/><circle cx="20" cy="4" r="2.5"/></svg>
+                            Corte A-A'
+                        </button>
+                        <button id="btn-tool-poly" class="btn-tool" onclick="activarModoDibujo('polygon')" title="Calcular superficie del área delimitada">
+                            <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 18 20 6 20 2 8.5"/></svg>
+                            Polígono
+                        </button>
+                    </div>
+
+                    <!-- Sección de Buffer / Cono de Influencia Fijo -->
+                    <div style="margin: 8px 0; border-top: 1px solid #f1f5f9; padding-top: 8px;">
+                        <div style="font-weight: 700; color: #1e293b; font-size: 10.5px; margin-bottom: 5px;">
+                            <span>🎯 Radio de Influencia / Cono</span>
+                        </div>
+                        <div style="display:flex; gap: 4px; align-items: center; margin-bottom: 5px;">
+                            <input type="number" id="input-buffer-radio" value="500" min="20" max="50000" step="50" 
+                                   style="width: 70px; padding: 4px 6px; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 4px;" title="Radio en metros">
+                            <span style="font-size: 11px; color: #64748b;">m</span>
+                            <button id="btn-tool-buffer" class="btn-tool" style="flex:1; padding: 4px 6px; font-size: 10.5px; justify-content: center;" onclick="activarModoBuffer()" title="Clic en mapa o pozo para fijar radio">
+                                Fijar Radio
+                            </button>
+                        </div>
+                        <div style="display: flex; gap: 4px;">
+                            <button class="btn-preset" onclick="setBufferRadio(250)">250m</button>
+                            <button class="btn-preset" onclick="setBufferRadio(500)">500m</button>
+                            <button class="btn-preset" onclick="setBufferRadio(1000)">1km</button>
+                            <button class="btn-preset" onclick="setBufferRadio(2000)">2km</button>
+                        </div>
+                    </div>
+
+                    <!-- Controles de Modo Captura Limpia y Bloqueo -->
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin: 6px 0; background:#f8fafc; padding: 4px 6px; border-radius:4px; border:1px solid #e2e8f0;">
+                        <label style="font-size:10px; color:#475569; display:flex; align-items:center; gap:5px; cursor:pointer;" title="Ocultar popups flotantes para capturas de pantalla 100% limpias">
+                            <input type="checkbox" id="chk-show-badge" checked onchange="toggleMostrarBadges(this.checked)">
+                            <span>Etiqueta en mapa</span>
+                        </label>
+                        <button class="btn-preset" onclick="deseleccionarTodo()" title="Ocultar nodos de edición para fotos de reporte" style="padding:2px 6px; font-size:9.5px;">
+                            👁️ Ocultar Nodos
+                        </button>
+                    </div>
+
+                    <div id="draw-measure-box" class="draw-measure-box"></div>
+
+                    <div class="draw-actions">
+                        <button class="btn-action-sm danger" onclick="eliminarDibujoSeleccionado()" title="Borrar selección o todos los trazos">
+                            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            Limpiar
+                        </button>
+                        <button class="btn-action-sm" onclick="descargarDibujosGeoJSON()" title="Descargar trazos en GeoJSON para QGIS/ArcGIS">
+                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Exportar
+                        </button>
+                        <button class="btn-action-sm" onclick="document.getElementById('input-import-geojson').click()" title="Cargar archivo GeoJSON al visor">
+                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            Importar
+                        </button>
+                        <input type="file" id="input-import-geojson" accept=".geojson,.json" style="display:none;" onchange="importarDibujosGeoJSON(event)">
+                    </div>
+                </div>
+            </div>
+
+            <script>
+                const z_data = {z_data_json};
+                const bounds = {bounds_json};
+                const min_y = bounds[0][0], min_x = bounds[0][1];
+                const max_y = bounds[1][0], max_x = bounds[1][1];
+                const rows = z_data.length;
+                const cols = z_data[0].length;
+
+                const polyGeojson = {poly_geojson_str};
+                const polyBounds = {poly_bounds_json};
+
+                let dockAbierto = false;
+                function aplicarEstadoVisualDock() {{
+                    const panel = document.getElementById('dock-panel');
+                    const btnOpen = document.getElementById('btn-open-dock');
+                    if (panel && btnOpen) {{
+                        panel.style.display = dockAbierto ? 'block' : 'none';
+                        btnOpen.style.display = dockAbierto ? 'none' : 'flex';
+                    }}
+                }}
+                function toggleDock() {{
+                    dockAbierto = !dockAbierto;
+                    aplicarEstadoVisualDock();
+                }}
+                aplicarEstadoVisualDock();
+
+                let gradientAbierto = false;
+                function toggleGradient() {{
+                    gradientAbierto = !gradientAbierto;
+                    const panel = document.getElementById('gradient-panel-container');
+                    const btn = document.getElementById('btn-open-gradient');
+                    if (gradientAbierto) {{
+                        panel.style.display = 'block';
+                        btn.style.display = 'none';
+                        if (drawAbierto) toggleDraw();
+                    }} else {{
+                        panel.style.display = 'none';
+                        btn.style.display = 'flex';
+                    }}
+                }}
+
+                const iconExpandSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+                const iconCompressSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+
+                let protocol = new pmtiles.Protocol();
+                maplibregl.addProtocol("pmtiles", protocol.tile);
+
+                const map = new maplibregl.Map({{
+                    container: 'map',
+                    style: {{
+                        'version': 8,
+                        'sources': {{
+                            'base-light': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                            'base-sat': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, Maxar' }},
+                            'base-topo': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                            'base-osm': {{ 'type': 'raster', 'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'], 'tileSize': 256, 'attribution': '© OpenStreetMap' }},
+                            'base-street': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                            'base-terrain': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                            'base-ocean': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, GEBCO' }},
+                            'base-dark': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                            'base-google': {{ 'type': 'raster', 'tiles': ['https://mt1.google.com/vt/lyrs=s&x={{x}}&y={{y}}&z={{z}}'], 'tileSize': 256, 'attribution': 'Google Satellite' }}
+                        }},
+                        'layers': [
+                            {{ 'id': 'base-light-layer', 'type': 'raster', 'source': 'base-light', 'layout': {{'visibility': 'visible'}} }},
+                            {{ 'id': 'base-sat-layer', 'type': 'raster', 'source': 'base-sat', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-topo-layer', 'type': 'raster', 'source': 'base-topo', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-osm-layer', 'type': 'raster', 'source': 'base-osm', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-street-layer', 'type': 'raster', 'source': 'base-street', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-terrain-layer', 'type': 'raster', 'source': 'base-terrain', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-ocean-layer', 'type': 'raster', 'source': 'base-ocean', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-dark-layer', 'type': 'raster', 'source': 'base-dark', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-google-layer', 'type': 'raster', 'source': 'base-google', 'layout': {{'visibility': 'none'}}, 'paint': {{'raster-opacity': 0.35, 'raster-saturation': -1.0}} }}
+                        ]
+                    }},
+                    center: [{centro_lon}, {centro_lat}],
+                    zoom: 9.5,
+                    attributionControl: false,
+                    preserveDrawingBuffer: true
+                }});
+
+                class CustomFullscreenControl {{
+                    onAdd(mapInstance) {{
+                        this._map = mapInstance;
+                        this._container = document.createElement('div');
+                        this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.innerHTML = iconExpandSVG;
+                        btn.title = 'Pantalla Completa';
+                        btn.style.width = '30px';
+                        btn.style.height = '30px';
+                        btn.style.display = 'flex';
+                        btn.style.alignItems = 'center';
+                        btn.style.justifyContent = 'center';
+                        btn.style.cursor = 'pointer';
+
+                        btn.addEventListener('click', () => {{
+                            if (!document.fullscreenElement) {{
+                                document.documentElement.requestFullscreen().catch(err => alert(err.message));
+                            }} else {{
+                                if (document.exitFullscreen) document.exitFullscreen();
+                            }}
+                        }});
+
+                        document.addEventListener('fullscreenchange', () => {{
+                            btn.innerHTML = document.fullscreenElement ? iconCompressSVG : iconExpandSVG;
+                            btn.title = document.fullscreenElement ? 'Salir de Pantalla Completa' : 'Pantalla Completa';
+                            setTimeout(() => {{ mapInstance.resize(); }}, 200);
+                        }});
+
+                        this._container.appendChild(btn);
+                        return this._container;
+                    }}
+                    onRemove() {{
+                        this._container.parentNode.removeChild(this._container);
+                        this._map = undefined;
+                    }}
+                }}
+
+                map.addControl(new CustomFullscreenControl(), 'top-right');
+                map.addControl(new maplibregl.NavigationControl(), 'top-right');
+                map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
+
+                const draw = new MapboxDraw({{
+                    displayControlsDefault: false,
+                    controls: {{}},
+                    userProperties: true,
+                    styles: [
+                        {{
+                            'id': 'gl-draw-line', 'type': 'line',
+                            'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+                            'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                            'paint': {{ 'line-color': '#9f2241', 'line-width': 3, 'line-dasharray': [0.2, 2] }}
+                        }},
+                        {{
+                            'id': 'gl-draw-polygon-fill', 'type': 'fill',
+                            'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'fill-color': '#285c4d', 'fill-opacity': 0.25 }}
+                        }},
+                        {{
+                            'id': 'gl-draw-polygon-stroke', 'type': 'line',
+                            'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                            'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                            'paint': {{ 'line-color': '#285c4d', 'line-width': 2.5 }}
+                        }},
+                        {{
+                            'id': 'gl-draw-point', 'type': 'circle',
+                            'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'vertex'], ['!=', 'meta', 'midpoint'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                        }},
+                        {{
+                            'id': 'gl-draw-vertex-inactive', 'type': 'circle',
+                            'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                        }},
+                        {{
+                            'id': 'gl-draw-vertex-active', 'type': 'circle',
+                            'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 7, 'circle-color': '#691C32', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }}
+                        }},
+                        {{
+                            'id': 'gl-draw-midpoint', 'type': 'circle',
+                            'filter': ['all', ['==', 'meta', 'midpoint'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 4.5, 'circle-color': '#DDC9A3', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#691C32' }}
+                        }}
+                    ]
+                }});
+                map.addControl(draw);
+
+                let drawAbierto = false;
+                function toggleDraw() {{
+                    drawAbierto = !drawAbierto;
+                    const panel = document.getElementById('draw-panel-container');
+                    const btn = document.getElementById('btn-open-draw');
+                    if (drawAbierto) {{
+                        panel.style.display = 'block';
+                        btn.style.display = 'none';
+                        if (gradientAbierto) toggleGradient();
+                    }} else {{
+                        panel.style.display = 'none';
+                        btn.style.display = 'flex';
+                        detenerModoBuffer();
+                        limpiarHerramientasActivas();
+                    }}
+                }}
+
+                function activarModoDibujo(mode) {{
+                    detenerModoBuffer();
+                    limpiarHerramientasActivas();
+                    map.getCanvas().style.cursor = 'crosshair'; 
+                    if (mode === 'point') {{
+                        document.getElementById('btn-tool-point').classList.add('active');
+                        draw.changeMode('draw_point');
+                    }} else if (mode === 'line_string') {{
+                        document.getElementById('btn-tool-line').classList.add('active');
+                        draw.changeMode('draw_line_string');
+                    }} else if (mode === 'polygon') {{
+                        document.getElementById('btn-tool-poly').classList.add('active');
+                        draw.changeMode('draw_polygon');
+                    }}
+                }}
+
+                function limpiarHerramientasActivas() {{
+                    ['btn-tool-point', 'btn-tool-line', 'btn-tool-poly', 'btn-tool-buffer'].forEach(id => {{
+                        const el = document.getElementById(id);
+                        if (el) el.classList.remove('active');
+                    }});
+                    map.getCanvas().style.cursor = ''; 
+                }}
+
+                let modoBufferActivo = false;
+                let radioBufferMetros = 500;
+
+                function setBufferRadio(m) {{
+                    document.getElementById('input-buffer-radio').value = m;
+                    radioBufferMetros = m;
+                    activarModoBuffer();
+                }}
+
+                function activarModoBuffer() {{
+                    limpiarHerramientasActivas();
+                    draw.changeMode('simple_select');
+                    modoBufferActivo = true;
+                    const inputRadio = document.getElementById('input-buffer-radio');
+                    radioBufferMetros = parseFloat(inputRadio.value) || 500;
+                    document.getElementById('btn-tool-buffer').classList.add('active');
+                    map.getCanvas().style.cursor = 'crosshair';
+                    const box = document.getElementById('draw-measure-box');
+                    box.style.display = 'block';
+                    box.innerHTML = `<b>🎯 Buffer Fijo (${{radioBufferMetros}} m):</b> Clic en el mapa para situar radio de influencia.`;
+                }}
+
+                function detenerModoBuffer() {{
+                    modoBufferActivo = false;
+                    map.getCanvas().style.cursor = '';
+                    const btn = document.getElementById('btn-tool-buffer');
+                    if (btn) btn.classList.remove('active');
+                }}
+
+                function eliminarDibujoSeleccionado() {{
+                    const sel = draw.getSelectedIds();
+                    if (sel && sel.length > 0) {{
+                        draw.delete(sel);
+                    }} else {{
+                        draw.deleteAll();
+                    }}
+                    document.getElementById('draw-measure-box').style.display = 'none';
+                    limpiarRotulosLinea();
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                }}
+
+                function descargarDibujosGeoJSON() {{
+                    const data = draw.getAll();
+                    if (!data || !data.features || data.features.length === 0) {{
+                        alert("No hay geometrías trazadas en el mapa para exportar.");
+                        return;
+                    }}
+                    const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: 'application/geo+json' }});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'mediciones_evolucion_dh.geojson';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }}
+
+                function importarDibujosGeoJSON(e) {{
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {{
+                        try {{
+                            const data = JSON.parse(evt.target.result);
+                            if (data.type === "FeatureCollection" && data.features) {{
+                                data.features.forEach(f => draw.add(f));
+                                const bbox = turf.bbox(data);
+                                map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                                alert(`Se importaron ${{data.features.length}} geometrías exitosamente.`);
+                            }} else if (data.type === "Feature") {{
+                                draw.add(data);
+                                const bbox = turf.bbox(data);
+                                map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                                alert("Se importó 1 geometría exitosamente.");
+                            }} else {{
+                                alert("Formato GeoJSON no válido.");
+                            }}
+                        }} catch(err) {{
+                            alert("Error al leer archivo: " + err.message);
+                        }}
+                    }};
+                    reader.readAsText(file);
+                    e.target.value = "";
+                }}
+
+                let markerA = null;
+                let markerB = null;
+                let popupDibujoActivo = null;
+
+                function actualizarRotulosLinea(feat) {{
+                    limpiarRotulosLinea();
+                    if (!feat || !feat.geometry || feat.geometry.type !== 'LineString') return;
+                    const coords = feat.geometry.coordinates;
+                    if (!coords || coords.length < 2) return;
+                    
+                    const elA = document.createElement('div');
+                    elA.className = 'label-marker-corte label-a';
+                    elA.innerText = 'A';
+                    elA.title = 'Extremo Inicial A del corte';
+                    
+                    const elB = document.createElement('div');
+                    elB.className = 'label-marker-corte label-b';
+                    elB.innerText = "A'";
+                    elB.title = "Extremo Final A' del corte";
+                    
+                    markerA = new maplibregl.Marker({{ element: elA }}).setLngLat(coords[0]).addTo(map);
+                    markerB = new maplibregl.Marker({{ element: elB }}).setLngLat(coords[coords.length - 1]).addTo(map);
+                }}
+
+                function limpiarRotulosLinea() {{
+                    if (markerA) {{ markerA.remove(); markerA = null; }}
+                    if (markerB) {{ markerB.remove(); markerB = null; }}
+                }}
+
+                function toggleMostrarBadges(mostrar) {{
+                    if (!mostrar && popupDibujoActivo) {{
+                        popupDibujoActivo.remove();
+                    }} else if (mostrar) {{
+                        const feats = draw.getAll().features;
+                        if (feats && feats.length > 0) {{
+                            actualizarMedicionCompleta(feats[feats.length - 1], true);
+                        }}
+                    }}
+                }}
+
+                function deseleccionarTodo() {{
+                    draw.changeMode('simple_select', {{ featureIds: [] }});
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                }}
+
+                window.addEventListener('keydown', (e) => {{
+                    if (e.key === 'Escape') {{
+                        const m = draw.getMode();
+                        if (m.startsWith('draw_') || modoBufferActivo) {{
+                            draw.trash();
+                            draw.changeMode('simple_select');
+                            detenerModoBuffer();
+                            limpiarHerramientasActivas();
+                            const b = document.getElementById('draw-measure-box');
+                            if (b) b.style.display = 'none';
+                            limpiarRotulosLinea();
+                        }}
+                    }}
+                }});
+
+                function obtenerInfoMedicion(feat) {{
+                    if (!feat || !feat.geometry) return null;
+                    const tipo = feat.geometry.type;
+                    const props = feat.properties || {{}};
+
+                    if (tipo === 'Point') {{
+                        const c = feat.geometry.coordinates;
+                        const lng = c[0], lat = c[1];
+                        let valZ = null;
+                        if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
+                            let r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
+                            let col = Math.floor(((lng - min_x) / (max_x - min_x)) * (cols - 1));
+                            r = Math.max(0, Math.min(rows - 1, r));
+                            col = Math.max(0, Math.min(cols - 1, col));
+                            valZ = z_data[r][col];
+                        }}
+                        const valTxt = (valZ !== null && !isNaN(valZ)) ? (valZ > 0 ? '+' : '') + valZ.toFixed(2) + ' m' : 'S/D';
+                        const diagTxt = valZ !== null ? (valZ < -0.1 ? '🚨 Abatimiento Freático' : (valZ > 0.1 ? '🟢 Recuperación de Nivel' : 'Estabilidad')) : '';
+                        
+                        return {{
+                            coords: c,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📍 Sondeo de Variación (Δh)</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Evolución:</b> <span style="color:${{valZ < 0 ? '#990000' : '#0055aa'}}; font-weight:700;">${{valTxt}}</span><br>` +
+                                   `<span style="color:#64748B; font-size:9.5px;">${{lat.toFixed(4)}}° N, ${{lng.toFixed(4)}}° W</span>` +
+                                   `</div>`,
+                            panel: `<b>📍 Sondeo de Evolución Δh</b><br>` +
+                                   `<b>Coordenadas:</b> ${{lat.toFixed(5)}}° N, ${{lng.toFixed(5)}}° W<br>` +
+                                   `<b>Variación Estimada:</b> <span style="color:${{valZ < 0 ? '#990000' : '#0055aa'}}; font-weight:700;">${{valTxt}}</span><br>` +
+                                   `<b>Diagnóstico:</b> ${{diagTxt}}`
+                        }};
+                    }}
+
+                    if (tipo === 'LineString') {{
+                        const coordsPts = feat.geometry.coordinates;
+                        const km = turf.length(feat, {{ units: 'kilometers' }});
+                        const distFormato = km < 1.0 ? `${{(km * 1000).toFixed(0)}} m` : `${{km.toFixed(2)}} km`;
+                        
+                        const cA = coordsPts[0];
+                        const cB = coordsPts[coordsPts.length - 1];
+                        const rumbo = turf.bearing(cA, cB);
+                        const azimut = (rumbo + 360) % 360;
+
+                        let zA = null, zB = null;
+                        if (cA[1] >= min_y && cA[1] <= max_y && cA[0] >= min_x && cA[0] <= max_x) {{
+                            let r = Math.max(0, Math.min(rows - 1, Math.floor(((cA[1] - min_y) / (max_y - min_y)) * (rows - 1))));
+                            let c = Math.max(0, Math.min(cols - 1, Math.floor(((cA[0] - min_x) / (max_x - min_x)) * (cols - 1))));
+                            zA = z_data[r][c];
+                        }}
+                        if (cB[1] >= min_y && cB[1] <= max_y && cB[0] >= min_x && cB[0] <= max_x) {{
+                            let r = Math.max(0, Math.min(rows - 1, Math.floor(((cB[1] - min_y) / (max_y - min_y)) * (rows - 1))));
+                            let c = Math.max(0, Math.min(cols - 1, Math.floor(((cB[0] - min_x) / (max_x - min_x)) * (cols - 1))));
+                            zB = z_data[r][c];
+                        }}
+
+                        const zATxt = zA !== null ? (zA > 0 ? '+' : '') + zA.toFixed(2) + ' m' : '--';
+                        const zBTxt = zB !== null ? (zB > 0 ? '+' : '') + zB.toFixed(2) + ' m' : '--';
+                        const deltaZ = (zA !== null && zB !== null) ? (zB - zA) : null;
+                        const deltaZTxt = deltaZ !== null ? (deltaZ > 0 ? '+' : '') + deltaZ.toFixed(2) + ' m' : '--';
+                        const midCoord = coordsPts[Math.floor(coordsPts.length / 2)];
+
+                        return {{
+                            coords: midCoord,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📏 Transecto A - A' (Δh)</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Longitud:</b> ${{distFormato}} · <b>Azimut:</b> ${{azimut.toFixed(0)}}°<br>` +
+                                   `<b>Δh en A:</b> ${{zATxt}} | <b>Δh en A':</b> ${{zBTxt}}` +
+                                   `</div>`,
+                            panel: `<b>📏 Transecto de Variación A - A'</b><br>` +
+                                   `<b>Longitud Total:</b> ${{distFormato}}<br>` +
+                                   `<b>Azimut Geográfico:</b> ${{azimut.toFixed(1)}}°<br>` +
+                                   `<b>Δh en Extremo A:</b> ${{zATxt}}<br>` +
+                                   `<b>Δh en Extremo A':</b> ${{zBTxt}}<br>` +
+                                   `<b>Diferencial (A' - A):</b> <b style="color:#691C32;">${{deltaZTxt}}</b>`
+                        }};
+                    }}
+
+                    if (props.esCirculo || props.radioM) {{
+                        const radioM = props.radioM || 500;
+                        const areaHa = props.areaHa || (turf.area(feat) / 10000).toFixed(2);
+                        const radioTxt = radioM >= 1000 ? `${{(radioM / 1000).toFixed(2)}} km` : `${{radioM}} m`;
+                        return {{
+                            coords: turf.centroid(feat).geometry.coordinates,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">🎯 Radio de Influencia</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Radio:</b> ${{radioTxt}}<br>` +
+                                   `<b>Superficie:</b> ${{areaHa}} ha` +
+                                   `</div>`,
+                            panel: `<b>🎯 Radio de Influencia / Cono</b><br>` +
+                                   `<b>Radio:</b> ${{radioTxt}}<br>` +
+                                   `<b>Área Cubierta:</b> ${{areaHa}} ha<br>` +
+                                   `<b>Perímetro:</b> ${{(2 * Math.PI * radioM / 1000).toFixed(2)}} km`
+                        }};
+                    }}
+
+                    if (tipo === 'Polygon') {{
+                        const m2 = turf.area(feat);
+                        const ha = (m2 / 10000).toFixed(2);
+                        const km2 = (m2 / 1e6).toFixed(2);
+                        const kmPerim = turf.length(turf.polygonToLine(feat), {{ units: 'kilometers' }}).toFixed(2);
+                        return {{
+                            coords: turf.centroid(feat).geometry.coordinates,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📐 Área Delimitada</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Superficie:</b> ${{ha}} ha (${{km2}} km²)<br>` +
+                                   `<b>Perímetro:</b> ${{kmPerim}} km` +
+                                   `</div>`,
+                            panel: `<b>📐 Polígono de Medición</b><br>` +
+                                   `<b>Superficie:</b> ${{ha}} ha (${{km2}} km²)<br>` +
+                                   `<b>Perímetro:</b> ${{kmPerim}} km`
+                        }};
+                    }}
+                    return null;
+                }}
+
+                function actualizarMedicionCompleta(feat, mostrarBadge) {{
+                    if (!feat) return;
+                    const info = obtenerInfoMedicion(feat);
+                    if (!info) return;
+
+                    const box = document.getElementById('draw-measure-box');
+                    if (box) {{
+                        box.style.display = 'block';
+                        box.innerHTML = info.panel;
+                    }}
+
+                    if (feat.geometry.type === 'LineString') {{
+                        actualizarRotulosLinea(feat);
+                    }} else {{
+                        limpiarRotulosLinea();
+                    }}
+
+                    const chkBadge = document.getElementById('chk-show-badge');
+                    const permitirBadge = chkBadge ? chkBadge.checked : true;
+
+                    if (mostrarBadge && permitirBadge) {{
+                        if (popupDibujoActivo) popupDibujoActivo.remove();
+                        popupDibujoActivo = new maplibregl.Popup({{ closeOnClick: true, offset: 12, className: 'gis-badge-popup' }})
+                            .setLngLat(info.coords)
+                            .setHTML(info.badge)
+                            .addTo(map);
+                    }}
+                }}
+
+                map.on('draw.create', (e) => {{
+                    if (e.features && e.features[0]) actualizarMedicionCompleta(e.features[0], true);
+                    limpiarHerramientasActivas();
+                }});
+                map.on('draw.update', (e) => {{
+                    if (e.features && e.features[0]) actualizarMedicionCompleta(e.features[0], false);
+                }});
+                map.on('draw.selectionchange', (e) => {{
+                    if (e.features && e.features.length > 0) {{
+                        actualizarMedicionCompleta(e.features[0], true);
+                    }}
+                }});
+                map.on('draw.delete', () => {{
+                    document.getElementById('draw-measure-box').style.display = 'none';
+                    limpiarRotulosLinea();
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                }});
+
+                map.on('click', (e) => {{
+                    if (modoBufferActivo) {{
+                        const coords = [e.lngLat.lng, e.lngLat.lat];
+                        const radioKm = radioBufferMetros / 1000.0;
+                        const circlePoly = turf.circle(coords, radioKm, {{ steps: 64, units: 'kilometers' }});
+                        const areaHa = (turf.area(circlePoly) / 10000).toFixed(2);
+                        circlePoly.properties = {{
+                            esCirculo: true,
+                            radioM: radioBufferMetros,
+                            areaHa: areaHa
+                        }};
+                        draw.add(circlePoly);
+                        detenerModoBuffer();
+                        actualizarMedicionCompleta(circlePoly, true);
+                    }}
+                }});
+
+                map.on('load', function() {{
+                    if (polyGeojson) {{
+                        map.addSource('poly-src', {{ type: 'geojson', data: polyGeojson }});
+                        map.addLayer({{
+                            id: 'poly-layer-fill', type: 'fill', source: 'poly-src',
+                            paint: {{ 'fill-color': '#000000', 'fill-opacity': 0.02 }}
+                        }});
+                        map.addLayer({{
+                            id: 'poly-layer-line', type: 'line', source: 'poly-src',
+                            paint: {{ 'line-color': '#691C32', 'line-width': 2.2, 'line-dasharray': [3, 1.5] }}
+                        }});
+                    }}
+
+                    map.addSource('kriging-src', {{
+                        type: 'image', url: 'data:image/png;base64,{img_evo_b64}', coordinates: {img_coords_json}
+                    }});
+                    map.addLayer({{
+                        id: 'kriging-layer', type: 'raster', source: 'kriging-src',
+                        paint: {{ 'raster-opacity': 0.70, 'raster-resampling': 'linear' }}
+                    }});
+
+                    map.addSource('iso-src', {{
+                        type: 'image', url: 'data:image/png;base64,{img_iso_b64}', coordinates: {img_coords_json}
+                    }});
+                    map.addLayer({{
+                        id: 'iso-layer', type: 'raster', source: 'iso-src',
+                        paint: {{ 'raster-opacity': 0.95 }}
+                    }});
+
+                    map.addSource('pozos-src', {{ type: 'geojson', data: {geojson_pozos_evo_str} }});
+                    map.addLayer({{
+                        id: 'pozos-layer', type: 'circle', source: 'pozos-src',
+                        paint: {{
+                            'circle-radius': 6.5,
+                            'circle-color': ['get', 'Color'],
+                            'circle-stroke-width': 1.5,
+                            'circle-stroke-color': '#ffffff'
+                        }}
+                    }});
+
+                    if ({ 'true' if tiene_repda_pts else 'false' }) {{
+                        map.addSource('repda-src', {{
+                            type: 'geojson',
+                            data: {geojson_repda_str}
+                        }});
+                        map.addLayer({{
+                            id: 'repda-halo-layer', type: 'circle', source: 'repda-src',
+                            paint: {{
+                                'circle-radius': ['+', ['get', 'radio_px'], 1.5],
+                                'circle-color': '#ffffff',
+                                'circle-opacity': 0.95
+                            }}
+                        }});
+                        map.addLayer({{
+                            id: 'repda-layer', type: 'circle', source: 'repda-src',
+                            paint: {{
+                                'circle-radius': ['get', 'radio_px'],
+                                'circle-color': ['get', 'color'],
+                                'circle-opacity': 0.88,
+                                'circle-stroke-width': 1.2,
+                                'circle-stroke-color': '#0f172a'
+                            }}
+                        }});
+
+                        map.on('click', 'repda-layer', function(e) {{
+                            const p = e.features[0].properties;
+                            const volFmt = p.volumen_m3 !== undefined ? Number(p.volumen_m3).toLocaleString('es-MX') : '--';
+                            const volHm3 = p.volumen_hm3 !== undefined ? Number(p.volumen_hm3).toFixed(3) : '--';
+                            const dhTxt = (p.dh_local !== undefined && p.dh_local !== null) ? ((p.dh_local > 0 ? '+' : '') + Number(p.dh_local).toFixed(2) + ' m') : 'Sin datos';
+                            const colDiag = p.color_diagnostico || '#64748b';
+                            const diagTxt = p.diagnostico_evo || 'Sin diagnóstico';
+
+                            const html = `
+                                <div style="font-family:Segoe UI, sans-serif; font-size:11.5px; min-width:215px; line-height:1.45;">
+                                    <div style="font-weight:700; color:#691C32; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #691C32; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                        <span>🏢 Concesión REPDA</span>
+                                        <span style="font-size:9.5px; background:${{p.color}}; color:#fff; padding:1px 5px; border-radius:3px; font-weight:600;">${{p.uso}}</span>
+                                    </div>
+                                    <div><b>Titular:</b> ${{p.titular}}</div>
+                                    <div><b>Folio Oficial:</b> <span style="font-family:monospace; color:#334155;">${{p.folio}}</span></div>
+                                    ${{p.expediente ? `<div><b>Expediente:</b> <span style="font-family:monospace; color:#475569;">${{p.expediente}}</span></div>` : ''}}
+                                    ${{p.fecha ? `<div><b>Fecha Registro:</b> ${{p.fecha}}</div>` : ''}}
+                                    <div><b>Volumen Concesionado:</b> <b style="color:#1e293b;">${{volFmt}} m³/año</b> (${{volHm3}} hm³/año)</div>
+                                    ${{p.profundidad_m > 0 ? `<div><b>Profundidad Obra:</b> ${{p.profundidad_m}} m</div>` : ''}}
+                                    <div style="margin-top:6px; padding:5px 8px; border-radius:4px; font-size:10.5px; background:#f8fafc; border-left:3px solid ${{colDiag}};">
+                                        <b>Evolución Local (Δh):</b> <span style="font-weight:700; color:${{colDiag}};">${{dhTxt}}</span><br>
+                                        <b>Diagnóstico Causa/Efecto:</b> <span style="font-weight:600; color:${{colDiag}};">${{diagTxt}}</span>
+                                    </div>
+                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px; text-align:right;">
+                                        ${{Number(p.lat).toFixed(4)}}° N, ${{Number(p.lon).toFixed(4)}}° W
+                                    </div>
+                                </div>
+                            `;
+                            new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                                .setLngLat(e.lngLat)
+                                .setHTML(html)
+                                .addTo(map);
+                        }});
+                        map.on('mouseenter', 'repda-layer', function() {{ map.getCanvas().style.cursor = 'pointer'; }});
+                        map.on('mouseleave', 'repda-layer', function() {{ map.getCanvas().style.cursor = ''; }});
+                    }}
+
+                    // REPDA Nacional Completo MVT (PMTiles 461,914 concesiones)
+                    let pmtilesUrlTab2 = '{url_pmtiles_srv_tab2}';
+                    if (!pmtilesUrlTab2.startsWith('http://') && !pmtilesUrlTab2.startsWith('https://')) {{
+                        pmtilesUrlTab2 = window.location.origin + pmtilesUrlTab2;
+                    }}
+                    map.addSource('repda-nacional-src', {{
+                        type: 'vector',
+                        url: 'pmtiles://' + pmtilesUrlTab2,
+                        minzoom: 4,
+                        maxzoom: 8
+                    }});
+                    map.addLayer({{
+                        id: 'repda-nacional-layer',
+                        type: 'circle',
+                        source: 'repda-nacional-src',
+                        'source-layer': 'repda',
+                        layout: {{ 'visibility': 'none' }},
+                        paint: {{
+                            'circle-radius': [
+                                'interpolate', ['linear'], ['zoom'],
+                                4, 1.2,
+                                7, 2.5,
+                                10, 4.5,
+                                14, 7.5
+                            ],
+                            'circle-color': [
+                                'match', ['get', 'u'],
+                                'AGRICOLA', '#16a34a',
+                                'PUBLICO URBANO', '#2563eb',
+                                'DOMESTICO', '#0284c7',
+                                'INDUSTRIAL', '#dc2626',
+                                'SERVICIOS', '#9333ea',
+                                'PECUARIO', '#ca8a04',
+                                'DIFERENTES USOS', '#0d9488',
+                                'ACUACULTURA', '#06b6d4',
+                                'AGROINDUSTRIAL', '#65a30d',
+                                'COMERCIO', '#ea580c',
+                                'ENERGIA ELECTRICA', '#eab308',
+                                /* default */ '#475569'
+                            ],
+                            'circle-opacity': 0.85,
+                            'circle-stroke-width': [
+                                'interpolate', ['linear'], ['zoom'],
+                                4, 0,
+                                8, 0.4,
+                                11, 1.0
+                            ],
+                            'circle-stroke-color': '#ffffff'
+                        }}
+                    }});
+
+                    map.on('click', 'repda-nacional-layer', function(e) {{
+                        const p = e.features[0].properties;
+                        const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
+                        const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                            .setLngLat(e.lngLat)
+                            .setHTML(`
+                                <div style="font-family:Segoe UI,sans-serif; font-size:11.5px; min-width:220px; line-height:1.45;">
+                                    <div style="font-weight:700; color:#166534; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #166534; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                        <span>🇲🇽 Concesión REPDA Nacional</span>
+                                        <span style="font-size:10px; background:#f1f5f9; color:#475569; padding:1px 5px; border-radius:4px;">${{p.f || '--'}}</span>
+                                    </div>
+                                    <div style="margin-bottom:3px;"><b>Titular:</b> <span style="color:#0f172a; font-weight:600;">${{p.t || '--'}}</span></div>
+                                    ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
+                                    <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
+                                    <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
+                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W</div>
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+                    map.on('mouseenter', 'repda-nacional-layer', function() {{ map.getCanvas().style.cursor = 'pointer'; }});
+                    map.on('mouseleave', 'repda-nacional-layer', function() {{ map.getCanvas().style.cursor = ''; }});
+
+                    if (polyBounds) {{
+                        map.fitBounds([[polyBounds[0], polyBounds[1]], [polyBounds[2], polyBounds[3]]], {{ padding: 35 }});
+                    }}
+                }});
+
+                document.getElementById('sel-basemap').addEventListener('change', (e) => {{
+                    const selected = e.target.value;
+                    const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
+                    basemaps.forEach(id => {{
+                        if (map.getLayer(id)) {{
+                            map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
+                        }}
+                    }});
+                }});
+
+                function cambiarOpacidadEvo(val) {{
+                    document.getElementById('val-opac').innerText = Math.round(val * 100) + '%';
+                    if (map.getLayer('kriging-layer')) {{
+                        map.setPaintProperty('kriging-layer', 'raster-opacity', parseFloat(val));
+                    }}
+                }}
+
+                document.getElementById('chk-kriging').addEventListener('change', (e) => {{
+                    if (map.getLayer('kriging-layer')) {{
+                        map.setLayoutProperty('kriging-layer', 'visibility', e.target.checked ? 'visible' : 'none');
+                    }}
+                }});
+
+                document.getElementById('chk-iso').addEventListener('change', (e) => {{
+                    if (map.getLayer('iso-layer')) {{
+                        map.setLayoutProperty('iso-layer', 'visibility', e.target.checked ? 'visible' : 'none');
+                    }}
+                }});
+
+                document.getElementById('chk-pozos').addEventListener('change', (e) => {{
+                    if (map.getLayer('pozos-layer')) {{
+                        map.setLayoutProperty('pozos-layer', 'visibility', e.target.checked ? 'visible' : 'none');
+                    }}
+                }});
+
+                const chkRepda = document.getElementById('chk-repda');
+                if (chkRepda) {{
+                    chkRepda.addEventListener('change', (e) => {{
+                        const vis = e.target.checked ? 'visible' : 'none';
+                        if (map.getLayer('repda-layer')) map.setLayoutProperty('repda-layer', 'visibility', vis);
+                        if (map.getLayer('repda-halo-layer')) map.setLayoutProperty('repda-halo-layer', 'visibility', vis);
+                    }});
+                }}
+
+                const chkRepdaNac = document.getElementById('chk-repda-nac');
+                if (chkRepdaNac) {{
+                    chkRepdaNac.addEventListener('change', (e) => {{
+                        const vis = e.target.checked ? 'visible' : 'none';
+                        if (map.getLayer('repda-nacional-layer')) map.setLayoutProperty('repda-nacional-layer', 'visibility', vis);
+                        const legNac = document.getElementById('leg-repda-nac');
+                        if (legNac) legNac.style.display = e.target.checked ? 'block' : 'none';
+                    }});
+                }}
+
+                document.getElementById('chk-poly').addEventListener('change', (e) => {{
+                    if (map.getLayer('poly-layer-line')) {{
+                        const vis = e.target.checked ? 'visible' : 'none';
+                        map.setLayoutProperty('poly-layer-line', 'visibility', vis);
+                        map.setLayoutProperty('poly-layer-fill', 'visibility', vis);
+                    }}
+                }});
+
+                map.on('mousemove', (e) => {{
+                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4) + '°';
+                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4) + '°';
+                    const lat = e.lngLat.lat, lng = e.lngLat.lng;
+                    if (lat >= min_y && lat <= max_y && lng >= min_x && lng <= max_x) {{
+                        let r = Math.floor(((lat - min_y) / (max_y - min_y)) * (rows - 1));
+                        let c = Math.floor(((lng - min_x) / (max_x - min_x)) * (cols - 1));
+                        r = Math.max(0, Math.min(rows - 1, r));
+                        c = Math.max(0, Math.min(cols - 1, c));
+                        const val = z_data[r][c];
+                        if (val !== null) {{
+                            document.getElementById('hud-ele').innerText = (val > 0 ? '+' : '') + val.toFixed(2) + ' m';
+                            document.getElementById('hud-ele').style.color = val < 0 ? '#990000' : (val > 0 ? '#0055AA' : '#2C3E50');
+                        }} else {{
+                            document.getElementById('hud-ele').innerText = '--';
+                        }}
+                    }} else {{
+                        document.getElementById('hud-ele').innerText = '--';
+                    }}
+                }});
+
+                map.on('click', 'pozos-layer', function(e) {{
+                    const p = e.features[0].properties;
+                    const html = `
+                        <div style="font-family:Segoe UI, sans-serif; font-size:11.5px; min-width:190px;">
+                            <div style="font-weight:700; color:#691C32; font-size:12px; margin-bottom:4px; border-bottom:1px solid #e2e8f0; padding-bottom:2px;">
+                                📍 Pozo: ${{p.Pozo}}
+                            </div>
+                            <div><b>Carga ${{p.Carga_{anio_t1}_msnm !== undefined ? '{anio_t1}' : ''}}:</b> ${{p.Carga_{anio_t1}_msnm}} msnm</div>
+                            <div><b>Carga ${{p.Carga_{anio_t2}_msnm !== undefined ? '{anio_t2}' : ''}}:</b> ${{p.Carga_{anio_t2}_msnm}} msnm</div>
+                            <div style="margin-top:5px; padding-top:4px; border-top:1px dashed #cbd5e1;">
+                                <b>Evolución Total (Δh):</b> <span style="font-weight:700; color:${{p.Delta_h_m < 0 ? '#990000' : '#0055aa'}};">${{p.Delta_h_m}} m</span><br>
+                                <b>Tasa Anual:</b> ${{p.Tasa_m_anio}} m/año<br>
+                                <b>Condición:</b> <span style="font-weight:600;">${{p.Condicion}}</span>
+                            </div>
+                        </div>
+                    `;
+                    new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                        .setLngLat(e.lngLat)
+                        .setHTML(html)
+                        .addTo(map);
+                }});
+
+                map.on('mouseenter', 'pozos-layer', function() {{ map.getCanvas().style.cursor = 'pointer'; }});
+                map.on('mouseleave', 'pozos-layer', function() {{ map.getCanvas().style.cursor = ''; }});
+
+                const legContenedor = document.querySelector('.legend-panel');
+                if (legContenedor) {{
+                    legContenedor.addEventListener('keydown', function(e) {{ e.stopPropagation(); }});
+                    legContenedor.addEventListener('keyup', function(e) {{ e.stopPropagation(); }});
+                    legContenedor.addEventListener('keypress', function(e) {{ e.stopPropagation(); }});
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        components.html(html_maplibre_evo, height=650)
+
+        st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+        col_an1, col_an2 = st.columns([1.15, 1.85], gap="large")
+
+        with col_an1:
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:6px; font-size:13px;'>🚨 NÚCLEOS Y CONOS DE ABATIMIENTO ACTIVO</p>", unsafe_allow_html=True)
+            if not df_pz_evo.empty:
+                df_conos = df_pz_evo[df_pz_evo['Delta_h_m'] < 0].sort_values(by='Delta_h_m', ascending=True)
+                if not df_conos.empty:
+                    df_tabla_conos = df_conos[['Pozo', f'Carga_{anio_t1}_msnm', f'Carga_{anio_t2}_msnm', 'Delta_h_m', 'Tasa_m_anio', 'Condicion']].copy()
+                    df_tabla_conos.columns = ['Pozo', f'Carga {anio_t1}', f'Carga {anio_t2}', 'Δh (m)', 'Tasa (m/año)', 'Severidad']
+                    st.dataframe(df_tabla_conos, use_container_width=True, hide_index=True, height=260)
+                else:
+                    st.success("🎉 No se registraron conos de abatimiento ni descensos piezométricos en los pozos evaluados.")
+            else:
+                st.info("Sin pozos coincidentes entre ambos años seleccionados.")
+
+        with col_an2:
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:6px; font-size:13px;'>📊 DISTRIBUCIÓN SUPERFICIAL POR RANGO DE EVOLUCIÓN</p>", unsafe_allow_html=True)
+            if len(delta_vals) > 0:
+                categorias = [
+                    ("Crítico (< -15 m)", np.sum(delta_vals < -15.0) * dA_km2, "#780016"),
+                    ("Severo (-15 a -10 m)", np.sum((delta_vals >= -15.0) & (delta_vals < -10.0)) * dA_km2, "#a8112c"),
+                    ("Moderado (-10 a -5 m)", np.sum((delta_vals >= -10.0) & (delta_vals < -5.0)) * dA_km2, "#d9534f"),
+                    ("Leve (-5 a -1 m)", np.sum((delta_vals >= -5.0) & (delta_vals < -1.0)) * dA_km2, "#f0ad4e"),
+                    ("Equilibrio (-1 a +1 m)", np.sum((delta_vals >= -1.0) & (delta_vals <= 1.0)) * dA_km2, "#94a3b8"),
+                    ("Recuperación (> +1 m)", np.sum(delta_vals > 1.0) * dA_km2, "#0275d8")
+                ]
+                df_dist = pd.DataFrame([{
+                    "Rango": c[0],
+                    "Área (km²)": round(c[1], 1),
+                    "Porcentaje (%)": round((c[1] / area_total_km2 * 100.0) if area_total_km2 > 0 else 0, 1),
+                    "Color": c[2]
+                } for c in categorias])
+
+                fig_dist = px.bar(
+                    df_dist, x="Área (km²)", y="Rango", orientation="h",
+                    text="Área (km²)", color="Rango",
+                    color_discrete_map={row["Rango"]: row["Color"] for _, row in df_dist.iterrows()}
+                )
+                fig_dist.update_layout(
+                    height=260, margin=dict(l=10, r=20, t=10, b=10),
+                    showlegend=False, yaxis=dict(autorange="reversed"),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
+                )
+                fig_dist.update_traces(texttemplate='%{text:,.1f} km²', textposition='outside')
+                st.plotly_chart(fig_dist, use_container_width=True)
+
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:8px; font-size:13px;'>💾 EXPORTACIÓN DE RESULTADOS SIG Y TABULARES (CERO-RERUN)</p>", unsafe_allow_html=True)
+            c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+
+            btn_tif = generar_enlace_descarga(
+                geotiff_evo_bytes, f"geotiff_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.tif",
+                "image/tiff", "🗺️ GeoTIFF Δh (Ráster 32-bit)"
+            )
+            c_d1.markdown(btn_tif, unsafe_allow_html=True)
+
+            if shp_iso_zip:
+                btn_shp = generar_enlace_descarga(
+                    shp_iso_zip, f"isolineas_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.zip",
+                    "application/zip", "📦 Shapefile ZIP Isolíneas"
+                )
+                c_d2.markdown(btn_shp, unsafe_allow_html=True)
+            else:
+                c_d2.info("SHP no disponible")
+
+            btn_json = generar_enlace_descarga(
+                geojson_iso_bytes, f"isolineas_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.geojson",
+                "application/json", "🌐 GeoJSON Isolíneas"
+            )
+            c_d3.markdown(btn_json, unsafe_allow_html=True)
+
+            if not df_pz_evo.empty:
+                csv_bytes = df_pz_evo.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                btn_csv = generar_enlace_descarga(
+                    csv_bytes, f"diagnostico_pozos_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.csv",
+                    "text/csv", "📊 CSV Diagnóstico Pozos"
+                )
+                c_d4.markdown(btn_csv, unsafe_allow_html=True)
+            else:
+                c_d4.info("Sin pozos a exportar")
+
+        # =======================================================
+        # 🏢 INCISO D: CORRELACIÓN ESPACIAL CAUSA VS EFECTO (REPDA)
+        # =======================================================
+        st.markdown("<div style='margin-top: 18px;'></div>", unsafe_allow_html=True)
+        st.markdown("""
+            <div style="background-color: #f8fafc; border-left: 4px solid #166534; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
+                <span style="font-weight: 700; color: #166534; font-size: 13.5px;">🏢 CORRELACIÓN ESPACIAL CAUSA VS EFECTO (EXTRACCIONES REPDA VS ABATIMIENTOS)</span><br>
+                <span style="font-size: 11.5px; color: #475569;">
+                    Contraste geohidrológico entre los volúmenes de extracción concesionados (Causa: bombeo registrado en el REPDA)
+                    y el abatimiento piezométrico observado en el acuífero (Efecto: conos de depresión y descenso de carga Δh).
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+
+        with st.container(border=True):
+            r_c1, r_c2, r_c3, r_c4 = st.columns(4)
+            
+            vol_oficial_hm3 = resumen_repda.get("volumen_total_hm3", 0.0) if resumen_repda else 0.0
+            tot_aprov = resumen_repda.get("total_aprovechamientos", 0) if resumen_repda else 0
+            uso_max = resumen_repda.get("uso_predominante", "N/D") if resumen_repda else "N/D"
+            pct_max = resumen_repda.get("pct_predominante", 0.0) if resumen_repda else 0.0
+
+            r_c1.metric(
+                "Volumen Concesionado Oficial",
+                f"{vol_oficial_hm3:,.2f} hm³/año",
+                f"{tot_aprov} captaciones censadas (CONAGUA)",
+                delta_color="off",
+                help="Volumen total de derechos de extracción de aguas subterráneas inscritos en el REPDA para este acuífero."
+            )
+
+            vol_abat_hm3 = vol_en_abatimiento_m3 / 1e6
+            r_c2.metric(
+                "Extracción en Conos Activos",
+                f"{vol_abat_hm3:,.2f} hm³/año",
+                f"{pct_vol_en_abat:.1f}% del volumen muestreado",
+                delta_color="inverse" if pct_vol_en_abat > 50 else "normal",
+                help="Volumen concesionado cuyos pozos caen en sectores con descenso piezométrico activo (Δh < -0.1 m)."
+            )
+
+            r_c3.metric(
+                "Aprovechamientos en Abatimiento",
+                f"{n_repda_en_abat} de {n_repda_total} pozos",
+                f"{pct_pozos_en_abat:.1f}% de las captaciones",
+                delta_color="inverse" if pct_pozos_en_abat > 50 else "normal",
+                help="Número de captaciones georreferenciadas que coinciden espacialmente con conos de depresión."
+            )
+
+            r_c4.metric(
+                "Uso Predominante",
+                f"{uso_max}",
+                f"{pct_max:.1f}% del volumen concesionado",
+                delta_color="off",
+                help="Uso consuntivo con mayor asignación volumétrica de aguas subterráneas en el acuífero."
+            )
+
+        if tiene_repda_pts:
+            if pct_vol_en_abat >= 60.0:
+                diag_box_bg = "#fef2f2"
+                diag_box_border = "#dc2626"
+                diag_box_txt = "#991b1b"
+                icono_diag = "🚨"
+                dictamen = f"<b>ALTA CONCENTRACIÓN CAUSAL:</b> El <b>{pct_vol_en_abat:.1f}%</b> del volumen concesionado muestreado ({vol_abat_hm3:,.2f} hm³/año) se concentra en zonas con abatimiento piezométrico activo (Δh &lt; -0.1 m). Los centros de bombeo del uso <b>{uso_max}</b> actúan como inductores geométricos directos de los conos de depresión identificados."
+            elif pct_vol_en_abat >= 30.0:
+                diag_box_bg = "#fffbeb"
+                diag_box_border = "#d97706"
+                diag_box_txt = "#92400e"
+                icono_diag = "⚠️"
+                dictamen = f"<b>CORRELACIÓN MODERADA:</b> El <b>{pct_vol_en_abat:.1f}%</b> del volumen concesionado ({vol_abat_hm3:,.2f} hm³/año) opera en sectores con descensos piezométricos. Existe correspondencia espacial entre los núcleos de extracción y la formación de gradientes convergentes."
+            else:
+                diag_box_bg = "#f0fdf4"
+                diag_box_border = "#16a34a"
+                diag_box_txt = "#166534"
+                icono_diag = "⚖️"
+                dictamen = f"<b>CORRELACIÓN DISPERSA O EN EQUILIBRIO:</b> Solo el <b>{pct_vol_en_abat:.1f}%</b> del volumen concesionado evaluado coincide con áreas de descenso piezométrico. El acuífero presenta áreas de extracción con amortiguamiento hidrogeológico o recarga localizada."
+
+            st.markdown(f"""
+                <div style="background-color: {diag_box_bg}; border-left: 4px solid {diag_box_border}; padding: 10px 14px; border-radius: 6px; margin: 10px 0; color: {diag_box_txt}; font-size: 12px; line-height: 1.5;">
+                    <span style="font-size: 14px; margin-right: 6px;">{icono_diag}</span>{dictamen}
+                </div>
+            """, unsafe_allow_html=True)
+
+        col_rep1, col_rep2 = st.columns([1.15, 1.85], gap="large")
+        with col_rep1:
+            st.markdown("<p style='font-weight:700; color:#166534; margin-bottom:6px; font-size:13px;'>📋 DISTRIBUCIÓN OFICIAL POR TIPO DE USO (CONAGUA)</p>", unsafe_allow_html=True)
+            if resumen_repda and not resumen_repda["df_usos"].empty:
+                df_u_show = resumen_repda["df_usos"][["Uso", "Volumen_hm3", "Pct_Volumen"]].copy()
+                df_u_show.columns = ["Uso", "Volumen (hm³/año)", "% Total"]
+                df_u_show["Volumen (hm³/año)"] = df_u_show["Volumen (hm³/año)"].apply(lambda x: f"{x:,.2f}")
+                df_u_show["% Total"] = df_u_show["% Total"].apply(lambda x: f"{x:.1f}%")
+                st.dataframe(df_u_show, use_container_width=True, hide_index=True, height=240)
+            else:
+                st.info("No se encontró desglose volumétrico por uso en el registro REPDA para este acuífero.")
+
+        with col_rep2:
+            st.markdown("<p style='font-weight:700; color:#166534; margin-bottom:6px; font-size:13px;'>📊 ESTRUCTURA VOLUMÉTRICA DE LA EXTRACCIÓN SUBTERRÁNEA</p>", unsafe_allow_html=True)
+            if resumen_repda and not resumen_repda["df_usos"].empty:
+                df_plot_u = resumen_repda["df_usos"].copy()
+                fig_rep_u = px.bar(
+                    df_plot_u, x="Volumen_hm3", y="Uso", orientation="h",
+                    text="Volumen_hm3", color="Uso",
+                    color_discrete_map={
+                        row["Uso"]: get_repda_uso_color(row["Uso"]) for _, row in df_plot_u.iterrows()
+                    }
+                )
+                fig_rep_u.update_layout(
+                    height=240, margin=dict(l=10, r=20, t=10, b=10),
+                    showlegend=False, yaxis=dict(autorange="reversed"),
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)"
+                )
+                fig_rep_u.update_traces(texttemplate='%{text:,.2f} hm³', textposition='outside')
+                st.plotly_chart(fig_rep_u, use_container_width=True)
+            else:
+                st.info("Sin datos para graficar la distribución de usos.")
+
+        if tiene_repda_pts:
+            st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
+            geojson_repda_bytes = geojson_repda_str.encode('utf-8')
+            btn_repda_json = generar_enlace_descarga(
+                geojson_repda_bytes, f"concesiones_repda_{clave_actual}.geojson",
+                "application/json", "🏢 Descargar Concesiones REPDA con Diagnóstico Δh (GeoJSON)"
+            )
+            st.markdown(btn_repda_json, unsafe_allow_html=True)
+
+    renderizar_pestaña_evolucion()
+
+# =======================================================
+# 🎯 INCISO C: DIAGNÓSTICO DE ZONAS CIEGAS Y COBERTURA DE LA RED
+# =======================================================
+def calcular_cobertura_y_zonas_ciegas(df_pozos, radio_km, geom_acuifero, min_area_vacio_km2=25.0):
+    import pyproj
+    from shapely.geometry import Point, Polygon, MultiPolygon
+    from shapely.ops import unary_union, transform
+
+    if df_pozos is None or df_pozos.empty or geom_acuifero is None:
+        return None
+
+    centro_lon = float(geom_acuifero.centroid.x)
+    centro_lat = float(geom_acuifero.centroid.y)
+
+    utm_zone = int((centro_lon + 180) / 6) + 1
+    epsg_utm = 32600 + utm_zone if centro_lat >= 0 else 32700 + utm_zone
+
+    to_utm = pyproj.Transformer.from_crs('EPSG:4326', f'EPSG:{epsg_utm}', always_xy=True).transform
+    to_wgs = pyproj.Transformer.from_crs(f'EPSG:{epsg_utm}', 'EPSG:4326', always_xy=True).transform
+
+    try:
+        poly_acuifero_utm = transform(to_utm, geom_acuifero)
+    except Exception:
+        return None
+
+    area_total_km2 = float(poly_acuifero_utm.area / 1e6)
+    if area_total_km2 <= 0:
+        return None
+
+    radio_m = float(radio_km) * 1000.0
+    bufs_utm_list = []
+
+    df_unicos = df_pozos.dropna(subset=['Longitud', 'Latitud']).drop_duplicates(subset=['Longitud', 'Latitud'])
+    if df_unicos.empty:
+        return None
+
+    for _, r in df_unicos.iterrows():
+        try:
+            p_utm = transform(to_utm, Point(float(r['Longitud']), float(r['Latitud'])))
+            bufs_utm_list.append(p_utm.buffer(radio_m, quad_segs=16))
+        except Exception:
+            continue
+
+    if not bufs_utm_list:
+        return None
+
+    union_bufs_utm = unary_union(bufs_utm_list)
+
+    try:
+        cubierta_utm = poly_acuifero_utm.intersection(union_bufs_utm)
+    except Exception:
+        cubierta_utm = Polygon()
+
+    try:
+        ciega_utm = poly_acuifero_utm.difference(union_bufs_utm)
+    except Exception:
+        ciega_utm = Polygon()
+
+    area_cubierta_km2 = float(cubierta_utm.area / 1e6) if (cubierta_utm and not cubierta_utm.is_empty) else 0.0
+    area_ciega_km2 = float(ciega_utm.area / 1e6) if (ciega_utm and not ciega_utm.is_empty) else 0.0
+
+    pct_cubierta = (area_cubierta_km2 / area_total_km2 * 100.0) if area_total_km2 > 0 else 0.0
+    pct_ciega = (area_ciega_km2 / area_total_km2 * 100.0) if area_total_km2 > 0 else 0.0
+
+    cubierta_wgs = transform(to_wgs, cubierta_utm) if (cubierta_utm and not cubierta_utm.is_empty) else None
+    ciega_wgs = transform(to_wgs, ciega_utm) if (ciega_utm and not ciega_utm.is_empty) else None
+
+    propuestas = []
+    if ciega_utm and not ciega_utm.is_empty:
+        geoms_ciegas = [ciega_utm] if ciega_utm.geom_type == 'Polygon' else [g for g in ciega_utm.geoms if g.geom_type in ['Polygon', 'MultiPolygon']]
+        geoms_ordenadas = sorted(geoms_ciegas, key=lambda g: g.area, reverse=True)
+
+        pts_pozos_utm = [transform(to_utm, Point(float(r['Longitud']), float(r['Latitud']))) for _, r in df_unicos.iterrows()]
+
+        idx_p = 1
+        for g_vacio in geoms_ordenadas:
+            a_vacio_km2 = float(g_vacio.area / 1e6)
+            if a_vacio_km2 >= float(min_area_vacio_km2):
+                p_rep_utm = g_vacio.representative_point()
+                p_rep_wgs = transform(to_wgs, p_rep_utm)
+
+                d_min_m = min([p_rep_utm.distance(p_exist) for p_exist in pts_pozos_utm]) if pts_pozos_utm else 0.0
+                d_min_km = d_min_m / 1000.0
+
+                if a_vacio_km2 >= 150.0 or d_min_km >= radio_km * 2.5:
+                    prioridad = "Muy Alta"
+                elif a_vacio_km2 >= 75.0 or d_min_km >= radio_km * 1.8:
+                    prioridad = "Alta"
+                elif a_vacio_km2 >= 35.0:
+                    prioridad = "Media"
+                else:
+                    prioridad = "Moderada"
+
+                propuestas.append({
+                    'ID': f"PROP-{idx_p:02d}",
+                    'Longitud': round(float(p_rep_wgs.x), 5),
+                    'Latitud': round(float(p_rep_wgs.y), 5),
+                    'Area_Vacio_km2': round(a_vacio_km2, 1),
+                    'Dist_Pozo_km': round(d_min_km, 1),
+                    'Prioridad': prioridad
+                })
+                idx_p += 1
+
+    df_propuestas = pd.DataFrame(propuestas)
+
+    n_pozos = len(df_unicos)
+    densidad_pozos_1000km2 = (n_pozos / area_total_km2 * 1000.0) if area_total_km2 > 0 else 0.0
+    km2_por_pozo = (area_total_km2 / n_pozos) if n_pozos > 0 else 0.0
+
+    if pct_cubierta >= 70.0:
+        diagnostico_txt = "Cobertura Alta (Suficiente)"
+        color_diag = "#166534"
+    elif pct_cubierta >= 45.0:
+        diagnostico_txt = "Cobertura Moderada (Aceptable)"
+        color_diag = "#b45309"
+    else:
+        diagnostico_txt = "Cobertura Deficiente (Crítica)"
+        color_diag = "#991b1b"
+
+    return {
+        'area_total_km2': area_total_km2,
+        'area_cubierta_km2': area_cubierta_km2,
+        'area_ciega_km2': area_ciega_km2,
+        'pct_cubierta': pct_cubierta,
+        'pct_ciega': pct_ciega,
+        'n_pozos': n_pozos,
+        'densidad_1000km2': densidad_pozos_1000km2,
+        'km2_por_pozo': km2_por_pozo,
+        'diagnostico': diagnostico_txt,
+        'color_diagnostico': color_diag,
+        'cubierta_wgs': cubierta_wgs,
+        'ciega_wgs': ciega_wgs,
+        'df_propuestas': df_propuestas,
+        'epsg_utm': epsg_utm
+    }
+
+with tab_cobertura:
+    @st.fragment
+    def renderizar_pestaña_cobertura():
+        st.markdown("""
+            <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
+                <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">🎯 DIAGNÓSTICO DE COBERTURA Y DETECCIÓN DE ZONAS CIEGAS DE LA RED PIEZOMÉTRICA</span><br>
+                <span style="font-size: 11.5px; color: #475569;">
+                    Evaluación geoespacial de la representatividad espacial de los pozos de observación conforme a las directrices de la CONAGUA y la Guía de Prácticas Hidrológicas de la OMM (Nº 168).
+                    Identifica vacíos de monitoreo (zonas ciegas) e infiere ubicaciones óptimas para la densificación o expansión de la red de monitoreo.
+                </span>
+            </div>
+        """, unsafe_allow_html=True)
+
+        anios_disp_cob = sorted([int(a) for a in df_ac['Año'].dropna().unique().tolist()])
+        opciones_anios = ["Todos los Pozos Históricos"] + [str(a) for a in anios_disp_cob[::-1]]
+
+        geom_oficial = st.session_state.get("poligono_personalizado", None)
+        if geom_oficial is None:
+            geom_oficial = poligono_oficial_geom
+
+        opciones_delimitacion = ["Pozos de Monitoreo (Envolvente Convexa)"]
+        if geom_oficial is not None:
+            opciones_delimitacion.insert(0, "Polígono Oficial del Acuífero")
+
+        with st.container(border=True):
+            c_c1, c_c2, c_c3, c_c4 = st.columns([1.2, 1.4, 1.4, 1.1])
+            sel_conjunto = c_c1.selectbox("Conjunto de Pozos:", opciones_anios, index=0, key="sel_cob_conjunto")
+            radio_km = c_c2.selectbox(
+                "Radio de Representatividad (R):",
+                [2.5, 5.0, 7.5, 10.0, 15.0, 20.0],
+                index=1,
+                format_func=lambda x: f"{x:.1f} km (Diámetro: {x*2:.0f} km)",
+                key="sel_cob_radio",
+                help="Radio de representatividad piezométrica. CONAGUA/OMM recomiendan 3-5 km en acuíferos sobreexplotados y 5-10 km en monitoreo regional."
+            )
+            modo_delim = c_c3.selectbox(
+                "Delimitar Acuífero por:",
+                opciones_delimitacion,
+                index=0,
+                key="sel_cob_delim"
+            )
+            min_vacio = c_c4.selectbox(
+                "Umbral Vacío Crítico:",
+                [10, 25, 50, 100],
+                index=1,
+                format_func=lambda x: f"> {x} km²",
+                key="sel_cob_umbral_vacio",
+                help="Superficie mínima contigua de zona ciega para clasificarla como candidato prioritario a nuevo pozo."
+            )
+
+        if sel_conjunto == "Todos los Pozos Históricos":
+            df_pozos_cob = df_ac.sort_values(by='Año').groupby('Pozo').last().reset_index()
+        else:
+            anio_target = int(sel_conjunto)
+            df_pozos_cob = obtener_red_sincronizada(df_ac, anio_target, var_nombre='Carga_Hidraulica', modo='interpolado')
+
+        if df_pozos_cob.empty:
+            st.warning("⚠️ No se encontraron pozos válidos para el conjunto seleccionado.")
+            return
+
+        df_unicos = df_pozos_cob.dropna(subset=['Longitud', 'Latitud']).drop_duplicates(subset=['Longitud', 'Latitud'])
+
+        if modo_delim == "Polígono Oficial del Acuífero" and geom_oficial is not None:
+            geom_activa = geom_oficial
+        else:
+            x_pozos = df_unicos['Longitud'].values
+            y_pozos = df_unicos['Latitud'].values
+            try:
+                hull = ConvexHull(np.column_stack((x_pozos, y_pozos)))
+                hull_pts = np.column_stack((x_pozos[hull.vertices], y_pozos[hull.vertices]))
+                hull_loop = np.vstack([hull_pts, hull_pts[0]])
+                geom_activa = Polygon(hull_loop)
+            except Exception:
+                geom_activa = None
+
+        if geom_activa is None:
+            st.warning("⚠️ No se pudo determinar el polígono del acuífero para la delimitación.")
+            return
+
+        with st.spinner("Analizando representatividad espacial y calculando zonas ciegas..."):
+            res = calcular_cobertura_y_zonas_ciegas(df_unicos, radio_km, geom_activa, min_vacio)
+
+        if res is None:
+            st.error("No se pudo calcular la cobertura espacial con la geometría proporcionada.")
+            return
+
+        with st.container(border=True):
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                "Superficie Monitoreada",
+                f"{res['area_cubierta_km2']:,.1f} km²",
+                f"{res['pct_cubierta']:.1f}% de cobertura",
+                delta_color="normal" if res['pct_cubierta'] >= 60 else "inverse",
+                help="Área del acuífero ubicada dentro del radio de influencia hidrogeológica de al menos un pozo de monitoreo."
+            )
+            m2.metric(
+                "Superficie en Zona Ciega",
+                f"{res['area_ciega_km2']:,.1f} km²",
+                f"{res['pct_ciega']:.1f}% desatendido",
+                delta_color="inverse" if res['pct_ciega'] > 40 else "normal",
+                help="Superficie del acuífero desprovista de pozos de observación activos. La interpolación en estas áreas extrapola con alta incertidumbre."
+            )
+            m3.metric(
+                "Densidad de la Red",
+                f"{res['densidad_1000km2']:.2f} pozos / 1000 km²",
+                f"1 pozo cada {res['km2_por_pozo']:.1f} km²",
+                help="Densidad media de pozos de monitoreo en relación con la superficie acuífera."
+            )
+            m4.metric(
+                "Diagnóstico OMM y Vacíos",
+                f"{len(res['df_propuestas'])} vacíos críticos",
+                res['diagnostico'],
+                delta_color="normal" if res['pct_cubierta'] >= 60 else "inverse",
+                help="Número de núcleos o vacíos territoriales prioritarios detectados donde se sugiere densificar la red."
+            )
+
+        # Preparación GeoJSON
+        gdf_ac_poly = gpd.GeoDataFrame([{'NOMBRE': 'Acuífero'}], geometry=[geom_activa], crs="EPSG:4326")
+        geojson_acuifero_str = gdf_ac_poly.to_json()
+
+        gdf_cub = None
+        if res['cubierta_wgs'] is not None and not res['cubierta_wgs'].is_empty:
+            geoms_c = [res['cubierta_wgs']] if res['cubierta_wgs'].geom_type == 'Polygon' else list(res['cubierta_wgs'].geoms)
+            gdf_cub = gpd.GeoDataFrame([{'ID': i, 'TIPO': 'Cobertura Activa'} for i in range(len(geoms_c))], geometry=geoms_c, crs="EPSG:4326")
+            geojson_cubierta_str = gdf_cub.to_json()
+        else:
+            geojson_cubierta_str = '{"type":"FeatureCollection","features":[]}'
+
+        gdf_cie = None
+        if res['ciega_wgs'] is not None and not res['ciega_wgs'].is_empty:
+            geoms_ci = [res['ciega_wgs']] if res['ciega_wgs'].geom_type == 'Polygon' else [g for g in res['ciega_wgs'].geoms if g.geom_type in ['Polygon', 'MultiPolygon']]
+            gdf_cie = gpd.GeoDataFrame([{'ID': i, 'TIPO': 'Zona Ciega'} for i, g in enumerate(geoms_ci)], geometry=geoms_ci, crs="EPSG:4326")
+            geojson_ciega_str = gdf_cie.to_json()
+        else:
+            geojson_ciega_str = '{"type":"FeatureCollection","features":[]}'
+
+        features_pz = []
+        for _, r in df_unicos.iterrows():
+            features_pz.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [float(r['Longitud']), float(r['Latitud'])]},
+                "properties": {
+                    "Pozo": str(r['Pozo']),
+                    "Radio_km": float(radio_km),
+                    "Lat": round(float(r['Latitud']), 5),
+                    "Lon": round(float(r['Longitud']), 5)
+                }
+            })
+        geojson_pozos_str = json.dumps({"type": "FeatureCollection", "features": features_pz})
+
+        features_prop = []
+        for _, r in res['df_propuestas'].iterrows():
+            features_prop.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [float(r['Longitud']), float(r['Latitud'])]},
+                "properties": {
+                    "ID": str(r['ID']),
+                    "Area_Vacio_km2": float(r['Area_Vacio_km2']),
+                    "Dist_Pozo_km": float(r['Dist_Pozo_km']),
+                    "Prioridad": str(r['Prioridad'])
+                }
+            })
+        geojson_propuestas_str = json.dumps({"type": "FeatureCollection", "features": features_prop})
+
+        features_add = []
+        for pt in st.session_state.get("marcadores_piezo", []):
+            fuente = pt.get("fuente", "manual")
+            color = "#2980b9" if fuente == "csv" else "#d35400"
+            features_add.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [pt['lon'], pt['lat']]},
+                "properties": {"nombre": pt['nombre'], "tipo": pt.get('tipo', 'Desconocido'), "color": color}
+            })
+        geojson_add_str = json.dumps({"type": "FeatureCollection", "features": features_add})
+
+        bounds_lim = list(geom_activa.bounds)
+        poly_bounds_str = json.dumps(bounds_lim)
+        centro_lon = float(geom_activa.centroid.x)
+        centro_lat = float(geom_activa.centroid.y)
+
+        shp_ciegas_zip = empaquetar_shapefile_zip(gdf_cie, f"zonas_ciegas_{clave_actual}") if (gdf_cie is not None and not gdf_cie.empty) else None
+        shp_cubierta_zip = empaquetar_shapefile_zip(gdf_cub, f"cobertura_buffers_{clave_actual}") if (gdf_cub is not None and not gdf_cub.empty) else None
+        
+        gdf_prop = None
+        if not res['df_propuestas'].empty:
+            pts_geom_prop = [Point(xy) for xy in zip(res['df_propuestas']['Longitud'], res['df_propuestas']['Latitud'])]
+            gdf_prop = gpd.GeoDataFrame(res['df_propuestas'], geometry=pts_geom_prop, crs="EPSG:4326")
+            shp_propuestas_zip = empaquetar_shapefile_zip(gdf_prop, f"propuesta_nuevos_pozos_{clave_actual}")
+        else:
+            shp_propuestas_zip = None
+
+        # Integración Concesiones REPDA y Puntos de Referencia para Tab 3
+        df_repda_pts_tab3, geojson_repda_tab3_str, tiene_repda_tab3 = cargar_concesiones_repda_puntos(
+            clave_actual, st.session_state.get("repda_custom_df")
+        )
+        n_repda_tab3 = len(df_repda_pts_tab3) if tiene_repda_tab3 else 0
+
+        hay_manual_cob = any(pt.get("fuente") != "csv" for pt in st.session_state.get("marcadores_piezo", []))
+        hay_csv_cob = any(pt.get("fuente") == "csv" for pt in st.session_state.get("marcadores_piezo", []))
+
+        span_edit = 'contenteditable="true" spellcheck="false" class="txt-leyenda-editable"'
+        leyenda_repda_cob_html = f'''<div id="leg-repda" style="margin-top:2px; display:none;"><i style="background:#2563EB; border:1px solid #1D4ED8;"></i> <span {span_edit}>Captaciones REPDA ({n_repda_tab3:,})</span></div>''' if tiene_repda_tab3 else ""
+        leyenda_manual_cob_html = f'''<div id="leg-manual" style="margin-top:2px;"><i style="background:#d35400;"></i> <span {span_edit}>Punto de Referencia Manual</span></div>''' if hay_manual_cob else ""
+        leyenda_csv_cob_html = f'''<div id="leg-csv" style="margin-top:2px;"><i style="background:#2980b9;"></i> <span {span_edit}>Punto Cargado por CSV</span></div>''' if hay_csv_cob else ""
+
+        chk_repda_html = f'<label id="lbl-repda" style="display:flex;"><input type="checkbox" id="chk-repda"> 🏢 Concesiones REPDA ({n_repda_tab3:,})</label>' if tiene_repda_tab3 else ''
+        chk_manual_html = '<label id="lbl-manual" style="display:flex;"><input type="checkbox" id="chk-manual" checked> 📍 Referencias Manuales</label>' if hay_manual_cob else ''
+        chk_csv_html = '<label id="lbl-csv" style="display:flex;"><input type="checkbox" id="chk-csv" checked> 📄 Pozos Adicionales CSV</label>' if hay_csv_cob else ''
+        url_pmtiles_srv = obtener_url_pmtiles()
+        html_maplibre_cob = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <title>Diagnóstico de Zonas Ciegas MapLibre</title>
+            <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+            <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+            <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+            <script src="https://unpkg.com/pmtiles@2.11.0/dist/index.js"></script>
+            
+            <!-- Librerías Vectoriales para Dibujo y Cálculo Geodésico -->
+            <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" type="text/css" />
+            <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+            <style>
+                body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
+                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #ffffff; border-radius: 8px; }}
+
+                .txt-leyenda-editable {{ 
+                    cursor: text; padding: 1px 4px; border-radius: 3px; outline: none; 
+                    border-bottom: 1px dashed transparent; transition: background-color 0.2s; 
+                }}
+                .txt-leyenda-editable:hover {{ 
+                    background-color: rgba(0,0,0,0.05); border-bottom: 1px dashed #888; 
+                }}
+                .txt-leyenda-editable:focus {{ 
+                    background-color: #ffffff; border-bottom: 1.5px solid #2980b9; 
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.15); 
+                }}
+
+                .gis-badge-popup .maplibregl-popup-content {{
+                    background: rgba(255, 255, 255, 0.96) !important;
+                    backdrop-filter: blur(8px) !important;
+                    border: 1px solid #CBD5E1 !important;
+                    border-top: 3px solid #691C32 !important;
+                    border-radius: 6px !important;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16) !important;
+                    padding: 8px 12px !important;
+                    font-family: 'Segoe UI', Arial, sans-serif !important;
+                    line-height: 1.4 !important;
+                }}
+                .gis-badge-popup .maplibregl-popup-tip {{ border-top-color: rgba(255, 255, 255, 0.96) !important; }}
+
+                .hud-elevation {{
+                    position: absolute; top: 12px; right: 55px; z-index: 1000;
+                    background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
+                    color: #1e293b; padding: 7px 14px; border-radius: 8px;
+                    border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                    font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
+                }}
+                .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+
+                .btn-open-dock-circle {{
+                    position: absolute; top: 12px; left: 12px; z-index: 1000;
+                    background: #691C32; color: #ffffff; width: 38px; height: 38px;
+                    border-radius: 50%; border: 1.5px solid #DDC9A3;
+                    box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+                    font-size: 19px; font-weight: bold; cursor: pointer;
+                    display: flex; align-items: center; justify-content: center;
+                    transition: all 0.2s ease;
+                }}
+                .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.1); }}
+
+                .workbench-dock {{
+                    position: absolute; top: 12px; left: 12px; z-index: 2000;
+                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                    width: 280px; border-radius: 10px; overflow: hidden;
+                    box-shadow: 0 6px 20px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
+                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+                    font-size: 11.5px; color: #1E293B;
+                }}
+                .dock-header {{ 
+                    background: #691C32; color: white; padding: 9px 12px; 
+                    font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
+                }}
+                .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
+                .dock-section {{ margin-bottom: 12px; }}
+                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
+                .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+
+                .legend-panel {{
+                    position: absolute; bottom: 25px; left: 12px; z-index: 1000;
+                    background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 8px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15); font-size: 11px; line-height: 1.6;
+                    border: 1px solid #E2E8F0; max-width: 290px; pointer-events: auto;
+                }}
+                .legend-panel i {{ width: 12px; height: 12px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 1px solid #ccc; }}
+                .legend-panel .square {{ border-radius: 2px; }}
+
+                .leaflet-open-draw-btn {{
+                    position: absolute; top: 160px; right: 10px; z-index: 1000;
+                    background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
+                    border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                    transition: background 0.2s ease;
+                }}
+                .leaflet-open-draw-btn:hover {{ background: #88102B !important; }}
+
+                .draw-docked-panel {{
+                    position: absolute; top: 160px; right: 50px; z-index: 2000;
+                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                    width: 275px; border-radius: 8px; overflow: hidden;
+                    box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                    font-size: 11px; color: #1E293B;
+                }}
+                .docked-draw-header {{
+                    background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                    font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                    border-bottom: 1px solid #e2e8f0; font-size: 11.5px;
+                }}
+                .docked-draw-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; font-weight: bold; }}
+                .docked-draw-close:hover {{ color: #dc2626; }}
+                .docked-draw-body {{ padding: 10px; }}
+
+                .draw-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 8px; }}
+                .btn-tool {{
+                    background: #ffffff; border: 1px solid #CBD5E1; border-radius: 5px;
+                    padding: 5px 6px; font-size: 10.5px; font-weight: 600; color: #334155;
+                    display: flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; transition: all 0.15s ease;
+                }}
+                .btn-tool svg {{ width: 13px; height: 13px; stroke: #691C32; fill: none; stroke-width: 2; flex-shrink: 0; }}
+                .btn-tool:hover {{ background: #f1f5f9; border-color: #691C32; color: #691C32; }}
+                .btn-tool.active {{ background: #691C32; border-color: #691C32; color: #ffffff; }}
+                .btn-tool.active svg {{ stroke: #ffffff; }}
+
+                .btn-preset {{
+                    flex: 1; padding: 3px 4px; font-size: 10px; font-weight: 600;
+                    border: 1px solid #cbd5e1; border-radius: 3px; background: #f8fafc;
+                    color: #475569; cursor: pointer; transition: all 0.15s ease; text-align: center;
+                }}
+                .btn-preset:hover {{ background: #e2e8f0; color: #1e293b; border-color: #691C32; }}
+
+                .draw-measure-box {{
+                    background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 5px;
+                    padding: 8px 10px; font-size: 11px; line-height: 1.45; color: #14532D;
+                    margin-bottom: 8px; display: none;
+                }}
+                .draw-measure-box b {{ color: #166534; }}
+
+                .draw-actions {{ display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px; }}
+                .btn-action-sm {{
+                    flex: 1; padding: 5px 8px; font-size: 10.5px; font-weight: 600;
+                    border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff;
+                    cursor: pointer; display: flex; align-items: center; justify-content: center;
+                    gap: 5px; transition: all 0.15s ease; color: #334155;
+                }}
+                .btn-action-sm svg {{ width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }}
+                .btn-action-sm:hover {{ background: #f8fafc; border-color: #94A3B8; }}
+                .btn-action-sm.danger {{ color: #dc2626; border-color: #fecaca; }}
+                .btn-action-sm.danger:hover {{ background: #fef2f2; border-color: #dc2626; }}
+
+                .label-marker-corte {{
+                    width: 22px; height: 22px; border-radius: 50%;
+                    color: #ffffff; font-weight: 800; font-size: 11px;
+                    display: flex; align-items: center; justify-content: center;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.35); border: 2px solid #ffffff;
+                    pointer-events: none; font-family: 'Segoe UI', Arial, sans-serif;
+                }}
+                .label-marker-corte.label-a {{ background: #691C32; }}
+                .label-marker-corte.label-b {{ background: #166534; }}
+            </style>
+        </head>
+        <body>
+            <div id="map"></div>
+
+            <div class="hud-elevation" id="hud-cob">
+                <div><b>Diagnóstico:</b> <span id="hud-status" style="font-weight:600; color:{res['color_diagnostico']};">{res['diagnostico']}</span></div>
+                <div style="border-left:1px solid #cbd5e1; padding-left:10px;"><b>Coord:</b> <span id="hud-coord">--</span></div>
+            </div>
+
+            <div id="btn-open-dock" class="btn-open-dock-circle" onclick="toggleDock()" title="Capas y Mapas Base">☰</div>
+
+            <div class="workbench-dock" id="workbench-dock" style="display: none;">
+                <div class="dock-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <span>🛠️ Capas de Diagnóstico</span>
+                    </div>
+                    <button onclick="toggleDock()" style="background:transparent; border:none; color:white; font-size:16px; font-weight:bold; cursor:pointer; line-height:1; padding:2px 5px;" title="Cerrar panel">✕</button>
+                </div>
+                <div class="dock-body">
+                    <div class="dock-section">
+                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🌍 Mapa Base:</label>
+                        <select id="sel-basemap" class="slider-ctrl" style="padding: 4px; border-radius: 4px; border: 1px solid #ccc; width: 100%; background: #f8fafc;" onchange="cambiarMapaBase(this.value)">
+                            <option value="base-light-layer">Gris Claro (Esri)</option>
+                            <option value="base-sat-layer">Satélite (Esri)</option>
+                            <option value="base-topo-layer">Topográfico (Esri)</option>
+                            <option value="base-osm-layer">OpenStreetMap</option>
+                            <option value="base-street-layer">Estándar (Esri)</option>
+                            <option value="base-terrain-layer">Terreno (Esri)</option>
+                            <option value="base-ocean-layer">Océanos (Esri)</option>
+                            <option value="base-dark-layer">Gris Oscuro (Esri)</option>
+                            <option value="base-google-layer">Google Satelital gris 35%</option>
+                        </select>
+                    </div>
+
+                    <div class="dock-section">
+                        <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">🎨 OPACIDAD ZONAS CIEGAS</span>
+                        <input type="range" class="slider-ctrl" id="slider-opac-zonas" min="0.1" max="0.8" step="0.05" value="0.4" oninput="cambiarOpacidadZonas(this.value)">
+                        <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#64748b; margin-top:2px;">
+                            <span>Tenue</span><span id="val-opac-zonas">40%</span><span>Opaco</span>
+                        </div>
+                    </div>
+
+                    <div class="dock-section">
+                        <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">📊 CAPAS ANALÍTICAS</span>
+                        <label><input type="checkbox" id="chk-ciega" checked> 🔴 Zonas Ciegas (Vacíos)</label>
+                        <label><input type="checkbox" id="chk-cubierta" checked> 🟢 Cobertura de Pozos ({radio_km:.1f} km)</label>
+                        <label><input type="checkbox" id="chk-acuifero" checked> 🛡️ Delimitación Acuífero</label>
+                        <label><input type="checkbox" id="chk-pozos" checked> 📍 Pozos de Monitoreo</label>
+                        <label><input type="checkbox" id="chk-propuestas" checked> 🎯 Puntos Sugeridos</label>
+                        {chk_repda_html}
+                        <label id="lbl-repda-nac" style="display:flex;"><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
+                        {chk_manual_html}
+                        {chk_csv_html}
+                    </div>
+                </div>
+            </div>
+
+            <div id="btn-open-draw" class="leaflet-open-draw-btn" onclick="toggleDrawPanel()" title="Herramientas de Medición y Diagnóstico Turf.js">
+                <svg viewBox="0 0 24 24" style="width:16px; height:16px; stroke:#ffffff; fill:none; stroke-width:2;">
+                    <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+                    <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+                    <circle cx="12" cy="12" r="2"/>
+                </svg>
+            </div>
+
+            <div class="draw-docked-panel" id="draw-docked-panel" style="display: none;">
+                <div class="docked-draw-header">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        <svg viewBox="0 0 24 24" style="width:14px; height:14px; stroke:#691C32; fill:none; stroke-width:2;">
+                            <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                            <polyline points="2 17 12 22 22 17"/>
+                            <polyline points="2 12 12 17 22 12"/>
+                        </svg>
+                        <span>Gabinete de Cobertura y Vacíos</span>
+                    </div>
+                    <span class="docked-draw-close" onclick="toggleDrawPanel()" title="Ocultar">&times;</span>
+                </div>
+                <div class="docked-draw-body">
+                    <div class="draw-grid">
+                        <button id="btn-tool-point" class="btn-tool" onclick="activarModoDibujo('point')" title="Sondeo diagnóstico puntual de cobertura">
+                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+                            Punto
+                        </button>
+                        <button id="btn-tool-line" class="btn-tool" onclick="activarModoDibujo('line_string')" title="Trazar transecto A-A' y medir distancias a pozos">
+                            <svg viewBox="0 0 24 24"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="2.5"/><circle cx="20" cy="4" r="2.5"/></svg>
+                            Corte A-A'
+                        </button>
+                        <button id="btn-tool-poly" class="btn-tool" onclick="activarModoDibujo('polygon')" title="Calcular superficie de zonas de interés">
+                            <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 18 20 6 20 2 8.5"/></svg>
+                            Polígono
+                        </button>
+                    </div>
+
+                    <!-- Sección de Buffer de Inspección / Radio de Prueba -->
+                    <div style="margin: 8px 0; border-top: 1px solid #f1f5f9; padding-top: 8px;">
+                        <div style="font-weight: 700; color: #1e293b; font-size: 10.5px; margin-bottom: 5px;">
+                            <span>🎯 Radio de Inspección / Densificación</span>
+                        </div>
+                        <div style="display:flex; gap: 4px; align-items: center; margin-bottom: 5px;">
+                            <input type="number" id="input-buffer-radio" value="2500" min="100" max="50000" step="250" 
+                                   style="width: 70px; padding: 4px 6px; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 4px;" title="Radio en metros">
+                            <span style="font-size: 11px; color: #64748b;">m</span>
+                            <button id="btn-tool-buffer" class="btn-tool" style="flex:1; padding: 4px 6px; font-size: 10.5px; justify-content: center;" onclick="activarModoBuffer()" title="Clic en zona ciega para simular cobertura">
+                                Fijar Radio
+                            </button>
+                        </div>
+                        <div style="display: flex; gap: 4px;">
+                            <button class="btn-preset" onclick="setBufferRadio(1000)">1km</button>
+                            <button class="btn-preset" onclick="setBufferRadio(2500)">2.5km</button>
+                            <button class="btn-preset" onclick="setBufferRadio(5000)">5km</button>
+                            <button class="btn-preset" onclick="setBufferRadio(10000)">10km</button>
+                        </div>
+                    </div>
+
+                    <!-- Controles de Modo Captura Limpia y Bloqueo -->
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin: 6px 0; background:#f8fafc; padding: 4px 6px; border-radius:4px; border:1px solid #e2e8f0;">
+                        <label style="font-size:10px; color:#475569; display:flex; align-items:center; gap:5px; cursor:pointer;" title="Ocultar popups flotantes para capturas de pantalla 100% limpias">
+                            <input type="checkbox" id="chk-show-badge" checked onchange="toggleMostrarBadges(this.checked)">
+                            <span>Etiqueta en mapa</span>
+                        </label>
+                        <button class="btn-preset" onclick="deseleccionarTodo()" title="Ocultar nodos de edición para fotos de reporte" style="padding:2px 6px; font-size:9.5px;">
+                            👁️ Ocultar Nodos
+                        </button>
+                    </div>
+
+                    <div id="draw-measure-box" class="draw-measure-box"></div>
+
+                    <div class="draw-actions">
+                        <button class="btn-action-sm danger" onclick="eliminarDibujoSeleccionado()" title="Borrar selección o todos los trazos">
+                            <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            Limpiar
+                        </button>
+                        <button class="btn-action-sm" onclick="descargarDibujosGeoJSON()" title="Descargar trazos en GeoJSON para QGIS/ArcGIS">
+                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Exportar
+                        </button>
+                        <button class="btn-action-sm" onclick="document.getElementById('input-import-geojson-cob').click()" title="Cargar archivo GeoJSON al visor">
+                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            Importar
+                        </button>
+                        <input type="file" id="input-import-geojson-cob" accept=".geojson,.json" style="display:none;" onchange="importarDibujosGeoJSON(event)">
+                    </div>
+                </div>
+            </div>
+
+            <div class="legend-panel">
+                <b style="color:#691C32; font-size:12px;"><span {span_edit}>Simbología de Cobertura</span></b><br>
+                <div style="margin-top:4px;">
+                    <div id="leg-cubierta"><i style="background:#10B981; opacity:0.85;"></i> <span {span_edit}>Área Monitoreada (R: {radio_km:.1f} km)</span></div>
+                    <div id="leg-ciega" style="margin-top:2px;"><i style="background:#E11D48; opacity:0.85;"></i> <span {span_edit}>Zona Ciega (Sin Medición)</span></div>
+                    <div id="leg-pozos" style="margin-top:2px;"><i style="background:#1E293B;"></i> <span {span_edit}>Pozo de Monitoreo Activo</span></div>
+                    <div id="leg-propuestas" style="margin-top:2px;"><i style="background:#F59E0B; border: 1.5px solid #78350F;"></i> <span {span_edit}>Punto Sugerido (Nuevo Pozo)</span></div>
+                    <div id="leg-acuifero" style="margin-top:2px;"><i class="square" style="background:transparent; border:1.5px dashed #691C32;"></i> <span {span_edit}>Delimitación del Acuífero</span></div>
+                    {leyenda_repda_cob_html}
+                    <div id="leg-repda-nac" style="display: none; margin-top:5px; border-top: 1px solid #eee; padding-top:4px;">
+                        <b style="color:#166534; font-size:11px;"><span {span_edit}>🇲🇽 REPDA Nacional (461,914)</span></b><br>
+                        <div style="font-size:9.5px; color:#64748B; margin-bottom:3px;"><span {span_edit}>Uso Oficial Registrado</span></div>
+                        <i class="circle" style="background:#16a34a;"></i> <span {span_edit}>Agrícola</span><br>
+                        <i class="circle" style="background:#2563eb;"></i> <span {span_edit}>Público Urbano</span><br>
+                        <i class="circle" style="background:#ca8a04;"></i> <span {span_edit}>Pecuario</span><br>
+                        <i class="circle" style="background:#dc2626;"></i> <span {span_edit}>Industrial</span><br>
+                        <i class="circle" style="background:#9333ea;"></i> <span {span_edit}>Servicios</span><br>
+                        <i class="circle" style="background:#0284c7;"></i> <span {span_edit}>Doméstico</span><br>
+                        <i class="circle" style="background:#0d9488;"></i> <span {span_edit}>Diferentes Usos</span><br>
+                    </div>
+                    {leyenda_manual_cob_html}
+                    {leyenda_csv_cob_html}
+                </div>
+            </div>
+
+            <script>
+                // Registrar protocolo PMTiles para teselas vectoriales de alto rendimiento
+                let protocol = new pmtiles.Protocol();
+                maplibregl.addProtocol("pmtiles", protocol.tile);
+
+                const boundsAcuifero = {poly_bounds_str};
+                const geoAcuifero = {geojson_acuifero_str};
+                const geoCubierta = {geojson_cubierta_str};
+                const geoCiega = {geojson_ciega_str};
+                const geoPozos = {geojson_pozos_str};
+                const geoPropuestas = {geojson_propuestas_str};
+                const geoAdd = {geojson_add_str};
+                const geoRepda = {geojson_repda_tab3_str};
+
+                const map = new maplibregl.Map({{
+                    container: 'map',
+                    style: {{
+                        'version': 8,
+                        'sources': {{
+                            'base-light': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                            'base-sat': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, Maxar' }},
+                            'base-topo': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                            'base-osm': {{ 'type': 'raster', 'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'], 'tileSize': 256, 'attribution': '© OpenStreetMap' }},
+                            'base-street': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                            'base-terrain': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                            'base-ocean': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, GEBCO' }},
+                            'base-dark': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                            'base-google': {{ 'type': 'raster', 'tiles': ['https://mt1.google.com/vt/lyrs=s&x={{x}}&y={{y}}&z={{z}}'], 'tileSize': 256, 'attribution': 'Google Satellite' }}
+                        }},
+                        'layers': [
+                            {{ 'id': 'base-light-layer', 'type': 'raster', 'source': 'base-light', 'layout': {{'visibility': 'visible'}} }},
+                            {{ 'id': 'base-sat-layer', 'type': 'raster', 'source': 'base-sat', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-topo-layer', 'type': 'raster', 'source': 'base-topo', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-osm-layer', 'type': 'raster', 'source': 'base-osm', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-street-layer', 'type': 'raster', 'source': 'base-street', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-terrain-layer', 'type': 'raster', 'source': 'base-terrain', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-ocean-layer', 'type': 'raster', 'source': 'base-ocean', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-dark-layer', 'type': 'raster', 'source': 'base-dark', 'layout': {{'visibility': 'none'}} }},
+                            {{ 'id': 'base-google-layer', 'type': 'raster', 'source': 'base-google', 'layout': {{'visibility': 'none'}}, 'paint': {{'raster-opacity': 0.35, 'raster-saturation': -1.0}} }}
+                        ]
+                    }},
+                    center: [{centro_lon}, {centro_lat}],
+                    zoom: 9
+                }});
+
+                const iconExpandSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+                const iconCompressSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+
+                class FullscreenCustomControl {{
+                    onAdd(mapInstance) {{
+                        this._map = mapInstance;
+                        this._container = document.createElement('div');
+                        this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+                        
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.innerHTML = iconExpandSVG;
+                        btn.title = 'Pantalla Completa';
+                        btn.style.width = '30px';
+                        btn.style.height = '30px';
+                        btn.style.display = 'flex';
+                        btn.style.alignItems = 'center';
+                        btn.style.justifyContent = 'center';
+                        btn.style.background = '#ffffff';
+                        btn.style.cursor = 'pointer';
+                        btn.style.border = 'none';
+                        
+                        btn.onclick = () => {{
+                            const target = document.documentElement;
+                            if (!document.fullscreenElement && !document.webkitFullscreenElement) {{
+                                if (target.requestFullscreen) {{
+                                    target.requestFullscreen().catch(err => {{}});
+                                }} else if (target.webkitRequestFullscreen) {{
+                                    target.webkitRequestFullscreen();
+                                }}
+                            }} else {{
+                                if (document.exitFullscreen) {{
+                                    document.exitFullscreen();
+                                }} else if (document.webkitExitFullscreen) {{
+                                    document.webkitExitFullscreen();
+                                }}
+                            }}
+                        }};
+                        
+                        const updateBtn = () => {{
+                            const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
+                            btn.innerHTML = isFull ? iconCompressSVG : iconExpandSVG;
+                            btn.title = isFull ? 'Salir de Pantalla Completa (Esc)' : 'Pantalla Completa';
+                            setTimeout(() => {{ mapInstance.resize(); }}, 150);
+                        }};
+
+                        document.addEventListener('fullscreenchange', updateBtn);
+                        document.addEventListener('webkitfullscreenchange', updateBtn);
+                        
+                        this._container.appendChild(btn);
+                        return this._container;
+                    }}
+                    onRemove() {{
+                        this._container.parentNode.removeChild(this._container);
+                        this._map = undefined;
+                    }}
+                }}
+                map.addControl(new FullscreenCustomControl(), 'top-right');
+                map.addControl(new maplibregl.NavigationControl(), 'top-right');
+                map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
+
+                const draw = new MapboxDraw({{
+                    displayControlsDefault: false,
+                    controls: {{}},
+                    userProperties: true,
+                    styles: [
+                        {{
+                            'id': 'gl-draw-line', 'type': 'line',
+                            'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+                            'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                            'paint': {{ 'line-color': '#9f2241', 'line-width': 3, 'line-dasharray': [0.2, 2] }}
+                        }},
+                        {{
+                            'id': 'gl-draw-polygon-fill', 'type': 'fill',
+                            'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'fill-color': '#285c4d', 'fill-opacity': 0.25 }}
+                        }},
+                        {{
+                            'id': 'gl-draw-polygon-stroke', 'type': 'line',
+                            'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                            'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                            'paint': {{ 'line-color': '#285c4d', 'line-width': 2.5 }}
+                        }},
+                        {{
+                            'id': 'gl-draw-point', 'type': 'circle',
+                            'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'vertex'], ['!=', 'meta', 'midpoint'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                        }},
+                        {{
+                            'id': 'gl-draw-vertex-inactive', 'type': 'circle',
+                            'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                        }},
+                        {{
+                            'id': 'gl-draw-vertex-active', 'type': 'circle',
+                            'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 7, 'circle-color': '#691C32', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }}
+                        }},
+                        {{
+                            'id': 'gl-draw-midpoint', 'type': 'circle',
+                            'filter': ['all', ['==', 'meta', 'midpoint'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                            'paint': {{ 'circle-radius': 4.5, 'circle-color': '#DDC9A3', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#691C32' }}
+                        }}
+                    ]
+                }});
+                map.addControl(draw);
+
+                if (boundsAcuifero && boundsAcuifero.length === 4) {{
+                    map.fitBounds([
+                        [boundsAcuifero[0], boundsAcuifero[1]],
+                        [boundsAcuifero[2], boundsAcuifero[3]]
+                    ], {{ padding: 35, duration: 800 }});
+                }}
+
+                map.on('load', () => {{
+                    // 1. Acuífero
+                    map.addSource('source-acuifero', {{ type: 'geojson', data: geoAcuifero }});
+                    map.addLayer({{
+                        id: 'acuifero-fill', type: 'fill', source: 'source-acuifero',
+                        paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.04 }}
+                    }});
+                    map.addLayer({{
+                        id: 'acuifero-line', type: 'line', source: 'source-acuifero',
+                        paint: {{ 'line-color': '#691C32', 'line-width': 2.2, 'line-dasharray': [3, 2] }}
+                    }});
+
+                    // 2. Cobertura Activa
+                    map.addSource('source-cubierta', {{ type: 'geojson', data: geoCubierta }});
+                    map.addLayer({{
+                        id: 'cubierta-fill', type: 'fill', source: 'source-cubierta',
+                        paint: {{ 'fill-color': '#10B981', 'fill-opacity': 0.32 }}
+                    }});
+                    map.addLayer({{
+                        id: 'cubierta-line', type: 'line', source: 'source-cubierta',
+                        paint: {{ 'line-color': '#059669', 'line-width': 1.2 }}
+                    }});
+
+                    // 3. Zonas Ciegas
+                    map.addSource('source-ciega', {{ type: 'geojson', data: geoCiega }});
+                    map.addLayer({{
+                        id: 'ciega-fill', type: 'fill', source: 'source-ciega',
+                        paint: {{ 'fill-color': '#E11D48', 'fill-opacity': 0.40 }}
+                    }});
+                    map.addLayer({{
+                        id: 'ciega-line', type: 'line', source: 'source-ciega',
+                        paint: {{ 'line-color': '#BE123C', 'line-width': 1.6 }}
+                    }});
+
+                    // 4. Pozos Existentes
+                    map.addSource('source-pozos', {{ type: 'geojson', data: geoPozos }});
+                    map.addLayer({{
+                        id: 'pozos-circle', type: 'circle', source: 'source-pozos',
+                        paint: {{
+                            'circle-radius': 5.5,
+                            'circle-color': '#1E293B',
+                            'circle-stroke-width': 1.8,
+                            'circle-stroke-color': '#FFFFFF'
+                        }}
+                    }});
+
+                    // 5. Puntos Propuestos
+                    map.addSource('source-propuestas', {{ type: 'geojson', data: geoPropuestas }});
+                    map.addLayer({{
+                        id: 'propuestas-glow', type: 'circle', source: 'source-propuestas',
+                        paint: {{
+                            'circle-radius': 13,
+                            'circle-color': '#F59E0B',
+                            'circle-opacity': 0.35
+                        }}
+                    }});
+                    map.addLayer({{
+                        id: 'propuestas-circle', type: 'circle', source: 'source-propuestas',
+                        paint: {{
+                            'circle-radius': 7.5,
+                            'circle-color': '#D97706',
+                            'circle-stroke-width': 2.2,
+                            'circle-stroke-color': '#FFFFFF'
+                        }}
+                    }});
+
+                    // Click en Pozos
+                    map.on('click', 'pozos-circle', (e) => {{
+                        const p = e.features[0].properties;
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                            .setLngLat(e.lngLat)
+                            .setHTML(`
+                                <div style="font-weight:700; color:#691C32; font-size:12px; margin-bottom:4px; border-bottom:1px solid #e2e8f0; padding-bottom:2px;">
+                                    📍 Pozo: ${{p.Pozo}}
+                                </div>
+                                <div style="font-size:11px; color:#334155;">
+                                    <b>Coordenadas:</b> ${{p.Lat}}° N, ${{p.Lon}}° W<br>
+                                    <b>Radio Representatividad:</b> ${{p.Radio_km}} km<br>
+                                    <span style="color:#166534; font-weight:600; font-size:10.5px;">🟢 Monitoreo Piezométrico Activo</span>
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+
+                    // Click en Propuestas
+                    map.on('click', 'propuestas-circle', (e) => {{
+                        const p = e.features[0].properties;
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                            .setLngLat(e.lngLat)
+                            .setHTML(`
+                                <div style="font-weight:700; color:#B45309; font-size:12px; margin-bottom:4px; border-bottom:1px solid #fef3c7; padding-bottom:2px;">
+                                    🎯 Propuesta de Nuevo Pozo: ${{p.ID}}
+                                </div>
+                                <div style="font-size:11px; color:#334155;">
+                                    <b>Coordenadas Sugeridas:</b> ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W<br>
+                                    <b>Superficie de Vacío Contiguo:</b> ${{p.Area_Vacio_km2}} km²<br>
+                                    <b>Distancia a Pozo Existente:</b> ${{p.Dist_Pozo_km}} km<br>
+                                    <div style="margin-top:4px;"><b>Prioridad:</b> <span style="font-weight:700; color:#B45309;">${{p.Prioridad}}</span></div>
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+
+                    // Click en Zona Ciega
+                    map.on('click', 'ciega-fill', (e) => {{
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                            .setLngLat(e.lngLat)
+                            .setHTML(`
+                                <div style="font-weight:700; color:#BE123C; font-size:12px; margin-bottom:3px;">
+                                    🔴 Zona Ciega de Monitoreo
+                                </div>
+                                <div style="font-size:11px; color:#475569;">
+                                    Área desprovista de medición piezométrica directa para el radio de ${{radio_km}} km.<br>
+                                    <span style="color:#991B1B; font-weight:600; font-size:10.5px;">⚠️ Alta incertidumbre en interpolación geohidrológica.</span>
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+
+                    // 6. Puntos de Referencia Adicionales (Manuales y CSV)
+                    map.addSource('add-src', {{ type: 'geojson', data: geoAdd }});
+                    map.addLayer({{
+                        id: 'add-layer-manual', type: 'circle', source: 'add-src',
+                        filter: ['!=', ['get', 'tipo'], 'csv'],
+                        paint: {{
+                            'circle-radius': 6.5,
+                            'circle-color': '#d35400',
+                            'circle-stroke-width': 1.8,
+                            'circle-stroke-color': '#FFFFFF'
+                        }}
+                    }});
+                    map.addLayer({{
+                        id: 'add-layer-csv', type: 'circle', source: 'add-src',
+                        filter: ['==', ['get', 'tipo'], 'csv'],
+                        paint: {{
+                            'circle-radius': 6,
+                            'circle-color': '#2980b9',
+                            'circle-stroke-width': 1.8,
+                            'circle-stroke-color': '#FFFFFF'
+                        }}
+                    }});
+
+                    // Click en Puntos Adicionales
+                    ['add-layer-manual', 'add-layer-csv'].forEach(lyr => {{
+                        map.on('click', lyr, (e) => {{
+                            const p = e.features[0].properties;
+                            new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                                .setLngLat(e.lngLat)
+                                .setHTML(`
+                                    <div style="font-weight:700; color:#691C32; font-size:12px; margin-bottom:4px; border-bottom:1px solid #e2e8f0; padding-bottom:2px;">
+                                        📌 ${{p.nombre || 'Punto Adicional'}}
+                                    </div>
+                                    <div style="font-size:11px; color:#334155;">
+                                        <b>Tipo / Fuente:</b> ${{p.tipo || '--'}}<br>
+                                        <b>Coordenadas:</b> ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W
+                                    </div>
+                                `)
+                                .addTo(map);
+                        }});
+                    }});
+
+                    // 7. Concesiones REPDA
+                    map.addSource('repda-src', {{ type: 'geojson', data: geoRepda }});
+                    map.addLayer({{
+                        id: 'repda-halo-layer', type: 'circle', source: 'repda-src',
+                        paint: {{
+                            'circle-radius': ['+', ['get', 'radio_px'], 2.5],
+                            'circle-color': ['get', 'color'],
+                            'circle-opacity': 0.28
+                        }},
+                        layout: {{ 'visibility': 'none' }}
+                    }});
+                    map.addLayer({{
+                        id: 'repda-layer', type: 'circle', source: 'repda-src',
+                        paint: {{
+                            'circle-radius': ['get', 'radio_px'],
+                            'circle-color': ['get', 'color'],
+                            'circle-opacity': 0.88,
+                            'circle-stroke-width': 1.2,
+                            'circle-stroke-color': '#0f172a'
+                        }},
+                        layout: {{ 'visibility': 'none' }}
+                    }});
+
+                    // Click en REPDA con Diagnóstico Territorial Turf.js
+                    map.on('click', 'repda-layer', (e) => {{
+                        const p = e.features[0].properties;
+                        const c = e.lngLat;
+                        const ptGeo = [c.lng, c.lat];
+
+                        let condCob = "<span style='color:#64748B;'>Fuera del Acuífero</span>";
+                        let esCiega = false;
+                        let esCubierta = false;
+
+                        if (geoCiega && geoCiega.features && geoCiega.features.length > 0) {{
+                            for (let f of geoCiega.features) {{
+                                if (turf.booleanPointInPolygon(ptGeo, f)) {{
+                                    esCiega = true;
+                                    break;
+                                }}
+                            }}
+                        }}
+                        if (geoCubierta && geoCubierta.features && geoCubierta.features.length > 0) {{
+                            for (let f of geoCubierta.features) {{
+                                if (turf.booleanPointInPolygon(ptGeo, f)) {{
+                                    esCubierta = true;
+                                    break;
+                                }}
+                            }}
+                        }}
+
+                        if (esCiega) {{
+                            condCob = "<span style='color:#BE123C; font-weight:700;'>🔴 Ubicado en Zona Ciega (Sin Monitoreo)</span>";
+                        }} else if (esCubierta) {{
+                            condCob = `<span style='color:#059669; font-weight:700;'>🟢 Ubicado en Cobertura Activa ({radio_km:.1f} km)</span>`;
+                        }}
+
+                        const volFmt = p.volumen_m3 !== undefined ? Number(p.volumen_m3).toLocaleString('es-MX') : '--';
+                        const volHm3 = p.volumen_hm3 !== undefined ? Number(p.volumen_hm3).toFixed(3) : '--';
+
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                            .setLngLat(c)
+                            .setHTML(`
+                                <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; min-width:220px; line-height:1.45;">
+                                    <div style="font-weight:700; color:#691C32; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #691C32; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                        <span>🏢 Concesión REPDA</span>
+                                        <span style="font-size:10px; background:#f1f5f9; color:#475569; padding:1px 5px; border-radius:4px;">${{p.folio || '--'}}</span>
+                                    </div>
+                                    <div style="margin-bottom:3px;"><b>Titular:</b> <span style="color:#0f172a; font-weight:600;">${{p.titular || '--'}}</span></div>
+                                    ${{p.expediente ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.expediente}}</div>` : ''}}
+                                    ${{p.fecha ? `<div style="margin-bottom:2px;"><b>Fecha Registro:</b> ${{p.fecha}}</div>` : ''}}
+                                    <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:${{p.color || '#3b82f6'}}22; color:${{p.color || '#1d4ed8'}}; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid ${{p.color || '#3b82f6'}}55;">${{p.uso || '--'}}</span></div>
+                                    <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volFmt}}</b> m³/año (${{volHm3}} hm³/año)</div>
+                                    ${{p.profundidad_m > 0 ? `<div style="margin-bottom:2px;"><b>Profundidad:</b> ${{p.profundidad_m}} m</div>` : ''}}
+                                    <div style="margin-top:5px; padding-top:4px; border-top:1px dashed #cbd5e1; font-size:11px;">
+                                        <b>Diagnóstico Territorial:</b><br>${{condCob}}
+                                    </div>
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+
+                    // 8. REPDA Nacional Completo (Vector Tiles PMTiles)
+                    let pmtilesUrlTab3 = '{url_pmtiles_srv}';
+                    if (!pmtilesUrlTab3.startsWith('http://') && !pmtilesUrlTab3.startsWith('https://')) {{
+                        pmtilesUrlTab3 = window.location.origin + pmtilesUrlTab3;
+                    }}
+                    map.addSource('repda-nacional-src', {{
+                        type: 'vector',
+                        url: 'pmtiles://' + pmtilesUrlTab3,
+                        minzoom: 4,
+                        maxzoom: 8
+                    }});
+                    map.addLayer({{
+                        id: 'repda-nacional-layer',
+                        type: 'circle',
+                        source: 'repda-nacional-src',
+                        'source-layer': 'repda',
+                        layout: {{ 'visibility': 'none' }},
+                        paint: {{
+                            'circle-radius': [
+                                'interpolate', ['linear'], ['zoom'],
+                                4, 1.2,
+                                7, 2.5,
+                                10, 4.5,
+                                14, 7.5
+                            ],
+                            'circle-color': [
+                                'match', ['get', 'u'],
+                                'AGRICOLA', '#16a34a',
+                                'PUBLICO URBANO', '#2563eb',
+                                'DOMESTICO', '#0284c7',
+                                'INDUSTRIAL', '#dc2626',
+                                'SERVICIOS', '#9333ea',
+                                'PECUARIO', '#ca8a04',
+                                'DIFERENTES USOS', '#0d9488',
+                                'ACUACULTURA', '#06b6d4',
+                                'AGROINDUSTRIAL', '#65a30d',
+                                'COMERCIO', '#ea580c',
+                                'ENERGIA ELECTRICA', '#eab308',
+                                /* default */ '#475569'
+                            ],
+                            'circle-opacity': 0.85,
+                            'circle-stroke-width': [
+                                'interpolate', ['linear'], ['zoom'],
+                                4, 0,
+                                8, 0.4,
+                                11, 1.0
+                            ],
+                            'circle-stroke-color': '#ffffff'
+                        }}
+                    }});
+
+                    // Click en pozo REPDA Nacional
+                    map.on('click', 'repda-nacional-layer', (e) => {{
+                        const p = e.features[0].properties;
+                        const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
+                        const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                            .setLngLat(e.lngLat)
+                            .setHTML(`
+                                <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; min-width:220px; line-height:1.45;">
+                                    <div style="font-weight:700; color:#166534; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #166534; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                        <span>🇲🇽 Concesión REPDA Nacional</span>
+                                        <span style="font-size:10px; background:#f1f5f9; color:#475569; padding:1px 5px; border-radius:4px;">${{p.f || '--'}}</span>
+                                    </div>
+                                    <div style="margin-bottom:3px;"><b>Titular:</b> <span style="color:#0f172a; font-weight:600;">${{p.t || '--'}}</span></div>
+                                    ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
+                                    <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
+                                    <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
+                                    <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{e.lngLat.lat.toFixed(5)}}° N, ${{e.lngLat.lng.toFixed(5)}}° W</div>
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+
+                    // Eventos de Cursor para capas interactivas
+                    ['pozos-circle', 'propuestas-circle', 'repda-layer', 'repda-nacional-layer', 'add-layer-manual', 'add-layer-csv'].forEach(lyr => {{
+                        map.on('mouseenter', lyr, () => {{ map.getCanvas().style.cursor = 'pointer'; }});
+                        map.on('mouseleave', lyr, () => {{ map.getCanvas().style.cursor = ''; }});
+                    }});
+                }});
+
+                // HUD Reactivo de Coordenadas y Diagnóstico
+                map.on('mousemove', (e) => {{
+                    document.getElementById('hud-coord').innerText = `${{e.lngLat.lat.toFixed(4)}}° N, ${{e.lngLat.lng.toFixed(4)}}° W`;
+                }});
+
+                // Gestión de Mapas Base (idéntica a Dinámica de Flujo y Evolución)
+                const basemapsCob = [
+                    'base-light-layer', 'base-sat-layer', 'base-topo-layer',
+                    'base-osm-layer', 'base-street-layer', 'base-terrain-layer',
+                    'base-ocean-layer', 'base-dark-layer', 'base-google-layer'
+                ];
+                function cambiarMapaBase(selected) {{
+                    basemapsCob.forEach(id => {{
+                        if (map.getLayer(id)) {{
+                            map.setLayoutProperty(id, 'visibility', (id === selected) ? 'visible' : 'none');
+                        }}
+                    }});
+                }}
+
+                const selBasemapEl = document.getElementById('sel-basemap');
+                if (selBasemapEl) {{
+                    selBasemapEl.addEventListener('change', (e) => {{
+                        cambiarMapaBase(e.target.value);
+                    }});
+                }}
+
+                // Control de Opacidad de Zonas Ciegas
+                function cambiarOpacidadZonas(val) {{
+                    const numVal = parseFloat(val);
+                    const pctEl = document.getElementById('val-opac-zonas');
+                    if (pctEl) pctEl.innerText = Math.round(numVal * 100) + '%';
+                    if (map.getLayer('ciega-fill')) {{
+                        map.setPaintProperty('ciega-fill', 'fill-opacity', numVal);
+                    }}
+                }}
+
+                // Conmutación Reactiva de Capas y Sincronización con Leyenda
+                const toggleLayerCob = (chkId, layerIds, legId = null) => {{
+                    const chk = document.getElementById(chkId);
+                    if (chk) {{
+                        chk.addEventListener('change', (e) => {{
+                            const vis = e.target.checked ? 'visible' : 'none';
+                            layerIds.forEach(id => {{
+                                if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+                            }});
+                            if (legId) {{
+                                const leg = document.getElementById(legId);
+                                if (leg) leg.style.display = e.target.checked ? 'block' : 'none';
+                            }}
+                        }});
+                    }}
+                }};
+
+                toggleLayerCob('chk-ciega', ['ciega-fill', 'ciega-line'], 'leg-ciega');
+                toggleLayerCob('chk-cubierta', ['cubierta-fill', 'cubierta-line'], 'leg-cubierta');
+                toggleLayerCob('chk-acuifero', ['acuifero-fill', 'acuifero-line'], 'leg-acuifero');
+                toggleLayerCob('chk-pozos', ['pozos-circle'], 'leg-pozos');
+                toggleLayerCob('chk-propuestas', ['propuestas-glow', 'propuestas-circle'], 'leg-propuestas');
+                toggleLayerCob('chk-repda', ['repda-halo-layer', 'repda-layer'], 'leg-repda');
+                toggleLayerCob('chk-repda-nac', ['repda-nacional-layer'], 'leg-repda-nac');
+                toggleLayerCob('chk-manual', ['add-layer-manual'], 'leg-manual');
+                toggleLayerCob('chk-csv', ['add-layer-csv'], 'leg-csv');
+
+                // Control de Dock Homologado
+                let dockAbierto = false;
+                function aplicarEstadoVisualDock() {{
+                    const dock = document.getElementById('workbench-dock');
+                    const btnOpen = document.getElementById('btn-open-dock');
+                    if (dock && btnOpen) {{
+                        dock.style.display = dockAbierto ? 'block' : 'none';
+                        btnOpen.style.display = dockAbierto ? 'none' : 'flex';
+                    }}
+                }}
+
+                function toggleDock() {{
+                    dockAbierto = !dockAbierto;
+                    aplicarEstadoVisualDock();
+                    if (dockAbierto && drawAbierto) {{
+                        toggleDrawPanel();
+                    }}
+                }}
+                aplicarEstadoVisualDock();
+
+                let drawAbierto = false;
+                function toggleDrawPanel() {{
+                    drawAbierto = !drawAbierto;
+                    const p = document.getElementById('draw-docked-panel');
+                    const btn = document.getElementById('btn-open-draw');
+                    if (drawAbierto) {{
+                        p.style.display = 'block';
+                        btn.style.display = 'none';
+                        if (dockAbierto) toggleDock();
+                    }} else {{
+                        p.style.display = 'none';
+                        btn.style.display = 'flex';
+                        detenerModoBuffer();
+                        limpiarHerramientasActivas();
+                    }}
+                }}
+
+                function activarModoDibujo(mode) {{
+                    detenerModoBuffer();
+                    limpiarHerramientasActivas();
+                    map.getCanvas().style.cursor = 'crosshair'; 
+                    if (mode === 'point') {{
+                        document.getElementById('btn-tool-point').classList.add('active');
+                        draw.changeMode('draw_point');
+                    }} else if (mode === 'line_string') {{
+                        document.getElementById('btn-tool-line').classList.add('active');
+                        draw.changeMode('draw_line_string');
+                    }} else if (mode === 'polygon') {{
+                        document.getElementById('btn-tool-poly').classList.add('active');
+                        draw.changeMode('draw_polygon');
+                    }}
+                }}
+
+                function limpiarHerramientasActivas() {{
+                    ['btn-tool-point', 'btn-tool-line', 'btn-tool-poly', 'btn-tool-buffer'].forEach(id => {{
+                        const el = document.getElementById(id);
+                        if (el) el.classList.remove('active');
+                    }});
+                    map.getCanvas().style.cursor = ''; 
+                }}
+
+                let modoBufferActivo = false;
+                let radioBufferMetros = 2500;
+
+                function setBufferRadio(m) {{
+                    document.getElementById('input-buffer-radio').value = m;
+                    radioBufferMetros = m;
+                    activarModoBuffer();
+                }}
+
+                function activarModoBuffer() {{
+                    limpiarHerramientasActivas();
+                    draw.changeMode('simple_select');
+                    modoBufferActivo = true;
+                    const inputRadio = document.getElementById('input-buffer-radio');
+                    radioBufferMetros = parseFloat(inputRadio.value) || 2500;
+                    document.getElementById('btn-tool-buffer').classList.add('active');
+                    map.getCanvas().style.cursor = 'crosshair';
+                    const box = document.getElementById('draw-measure-box');
+                    box.style.display = 'block';
+                    box.innerHTML = `<b>🎯 Buffer de Densificación (${{(radioBufferMetros/1000).toFixed(1)}} km):</b> Clic en el mapa sobre una zona ciega para simular área de cobertura.`;
+                }}
+
+                function detenerModoBuffer() {{
+                    modoBufferActivo = false;
+                    map.getCanvas().style.cursor = '';
+                    const btn = document.getElementById('btn-tool-buffer');
+                    if (btn) btn.classList.remove('active');
+                }}
+
+                function eliminarDibujoSeleccionado() {{
+                    const sel = draw.getSelectedIds();
+                    if (sel && sel.length > 0) {{
+                        draw.delete(sel);
+                    }} else {{
+                        draw.deleteAll();
+                    }}
+                    document.getElementById('draw-measure-box').style.display = 'none';
+                    limpiarRotulosLinea();
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                }}
+
+                function descargarDibujosGeoJSON() {{
+                    const data = draw.getAll();
+                    if (!data || !data.features || data.features.length === 0) {{
+                        alert("No hay geometrías trazadas en el mapa para exportar.");
+                        return;
+                    }}
+                    const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: 'application/geo+json' }});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'analisis_cobertura_zonas_ciegas.geojson';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                }}
+
+                function importarDibujosGeoJSON(e) {{
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {{
+                        try {{
+                            const data = JSON.parse(evt.target.result);
+                            if (data.type === "FeatureCollection" && data.features) {{
+                                data.features.forEach(f => draw.add(f));
+                                const bbox = turf.bbox(data);
+                                map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                                alert(`Se importaron ${{data.features.length}} geometrías exitosamente.`);
+                            }} else if (data.type === "Feature") {{
+                                draw.add(data);
+                                const bbox = turf.bbox(data);
+                                map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                                alert("Se importó 1 geometría exitosamente.");
+                            }} else {{
+                                alert("Formato GeoJSON no válido.");
+                            }}
+                        }} catch(err) {{
+                            alert("Error al leer archivo: " + err.message);
+                        }}
+                    }};
+                    reader.readAsText(file);
+                    e.target.value = "";
+                }}
+
+                let markerA = null;
+                let markerB = null;
+                let popupDibujoActivo = null;
+
+                function actualizarRotulosLinea(feat) {{
+                    limpiarRotulosLinea();
+                    if (!feat || !feat.geometry || feat.geometry.type !== 'LineString') return;
+                    const coords = feat.geometry.coordinates;
+                    if (!coords || coords.length < 2) return;
+                    
+                    const elA = document.createElement('div');
+                    elA.className = 'label-marker-corte label-a';
+                    elA.innerText = 'A';
+                    elA.title = 'Extremo Inicial A';
+                    
+                    const elB = document.createElement('div');
+                    elB.className = 'label-marker-corte label-b';
+                    elB.innerText = "A'";
+                    elB.title = "Extremo Final A'";
+                    
+                    markerA = new maplibregl.Marker({{ element: elA }}).setLngLat(coords[0]).addTo(map);
+                    markerB = new maplibregl.Marker({{ element: elB }}).setLngLat(coords[coords.length - 1]).addTo(map);
+                }}
+
+                function limpiarRotulosLinea() {{
+                    if (markerA) {{ markerA.remove(); markerA = null; }}
+                    if (markerB) {{ markerB.remove(); markerB = null; }}
+                }}
+
+                function toggleMostrarBadges(mostrar) {{
+                    if (!mostrar && popupDibujoActivo) {{
+                        popupDibujoActivo.remove();
+                    }} else if (mostrar) {{
+                        const feats = draw.getAll().features;
+                        if (feats && feats.length > 0) {{
+                            actualizarMedicionCompleta(feats[feats.length - 1], true);
+                        }}
+                    }}
+                }}
+
+                function deseleccionarTodo() {{
+                    draw.changeMode('simple_select', {{ featureIds: [] }});
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                }}
+
+                window.addEventListener('keydown', (e) => {{
+                    if (e.key === 'Escape') {{
+                        const m = draw.getMode();
+                        if (m.startsWith('draw_') || modoBufferActivo) {{
+                            draw.trash();
+                            draw.changeMode('simple_select');
+                            detenerModoBuffer();
+                            limpiarHerramientasActivas();
+                            const b = document.getElementById('draw-measure-box');
+                            if (b) b.style.display = 'none';
+                            limpiarRotulosLinea();
+                        }}
+                    }}
+                }});
+
+                function obtenerInfoMedicion(feat) {{
+                    if (!feat || !feat.geometry) return null;
+                    const tipo = feat.geometry.type;
+                    const props = feat.properties || {{}};
+
+                    if (tipo === 'Point') {{
+                        const c = feat.geometry.coordinates;
+                        
+                        let estadoTxt = "<span style='color:#64748B;'>Fuera del Acuífero</span>";
+                        if (geoAcuifero && geoAcuifero.features && geoAcuifero.features.length > 0) {{
+                            for (let f of geoAcuifero.features) {{
+                                if (turf.booleanPointInPolygon(c, f)) {{
+                                    estadoTxt = "<span style='color:#1E293B;'>Dentro del Polígono del Acuífero</span>";
+                                    break;
+                                }}
+                            }}
+                        }}
+
+                        let esCiega = false;
+                        if (geoCiega && geoCiega.features && geoCiega.features.length > 0) {{
+                            for (let f of geoCiega.features) {{
+                                if (turf.booleanPointInPolygon(c, f)) {{
+                                    esCiega = true;
+                                    break;
+                                }}
+                            }}
+                        }}
+
+                        let esCubierta = false;
+                        if (geoCubierta && geoCubierta.features && geoCubierta.features.length > 0) {{
+                            for (let f of geoCubierta.features) {{
+                                if (turf.booleanPointInPolygon(c, f)) {{
+                                    esCubierta = true;
+                                    break;
+                                }}
+                            }}
+                        }}
+
+                        let diagnosticoHtml = "";
+                        if (esCiega) {{
+                            diagnosticoHtml = "<span style='color:#BE123C; font-weight:700;'>🔴 Ubicación en Zona Ciega (Sin Monitoreo)</span>";
+                        }} else if (esCubierta) {{
+                            diagnosticoHtml = `<span style='color:#059669; font-weight:700;'>🟢 Ubicación con Cobertura Activa ({radio_km} km)</span>`;
+                        }} else {{
+                            diagnosticoHtml = estadoTxt;
+                        }}
+
+                        let distPozoTxt = "--";
+                        if (geoPozos && geoPozos.features && geoPozos.features.length > 0) {{
+                            let minD = Infinity;
+                            geoPozos.features.forEach(pz => {{
+                                const d = turf.distance(c, pz.geometry.coordinates, {{ units: 'kilometers' }});
+                                if (d < minD) minD = d;
+                            }});
+                            distPozoTxt = minD < 1.0 ? `${{(minD * 1000).toFixed(0)}} m` : `${{minD.toFixed(2)}} km`;
+                        }}
+
+                        return {{
+                            coords: c,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📍 Diagnóstico de Ubicación</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Estado:</b> ${{diagnosticoHtml}}<br>` +
+                                   `<b>Dist. Pozo más cercano:</b> <span style="font-weight:700;">${{distPozoTxt}}</span><br>` +
+                                   `<span style="color:#64748B; font-size:9.5px;">${{c[1].toFixed(4)}}° N, ${{c[0].toFixed(4)}}° W</span>` +
+                                   `</div>`,
+                            panel: `<b>📍 Diagnóstico Puntual de Cobertura</b><br>` +
+                                   `<b>Condición:</b> ${{diagnosticoHtml}}<br>` +
+                                   `<b>Distancia a Pozo Cercano:</b> ${{distPozoTxt}}<br>` +
+                                   `<b>Coordenadas:</b> ${{c[1].toFixed(5)}}° N, ${{c[0].toFixed(5)}}° W`
+                        }};
+                    }}
+
+                    if (tipo === 'LineString') {{
+                        const coordsPts = feat.geometry.coordinates;
+                        const km = turf.length(feat, {{ units: 'kilometers' }});
+                        const distFormato = km < 1.0 ? `${{(km * 1000).toFixed(0)}} m` : `${{km.toFixed(2)}} km`;
+                        
+                        const cA = coordsPts[0];
+                        const cB = coordsPts[coordsPts.length - 1];
+                        const rumbo = turf.bearing(cA, cB);
+                        const azimut = (rumbo + 360) % 360;
+                        const midCoord = coordsPts[Math.floor(coordsPts.length / 2)];
+
+                        return {{
+                            coords: midCoord,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📏 Transecto A - A'</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Distancia:</b> ${{distFormato}}<br>` +
+                                   `<b>Azimut:</b> ${{azimut.toFixed(1)}}°` +
+                                   `</div>`,
+                            panel: `<b>📏 Transecto Geodésico A - A'</b><br>` +
+                                   `<b>Longitud Total:</b> ${{distFormato}}<br>` +
+                                   `<b>Azimut Geográfico:</b> ${{azimut.toFixed(1)}}°<br>` +
+                                   `<b>Extremo A:</b> ${{cA[1].toFixed(4)}}° N, ${{cA[0].toFixed(4)}}° W<br>` +
+                                   `<b>Extremo A':</b> ${{cB[1].toFixed(4)}}° N, ${{cB[0].toFixed(4)}}° W`
+                        }};
+                    }}
+
+                    if (props.esCirculo || props.radioM) {{
+                        const radioM = props.radioM || 2500;
+                        const areaHa = props.areaHa || (turf.area(feat) / 10000).toFixed(2);
+                        const radioTxt = radioM >= 1000 ? `${{(radioM / 1000).toFixed(2)}} km` : `${{radioM}} m`;
+                        const areaKm2 = (turf.area(feat) / 1e6).toFixed(2);
+                        return {{
+                            coords: turf.centroid(feat).geometry.coordinates,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">🎯 Simulación de Densificación</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Radio de Prueba:</b> ${{radioTxt}}<br>` +
+                                   `<b>Cobertura Aportada:</b> ${{areaKm2}} km² (${{areaHa}} ha)` +
+                                   `</div>`,
+                            panel: `<b>🎯 Simulación de Pozo Propuesto</b><br>` +
+                                   `<b>Radio de Influencia:</b> ${{radioTxt}}<br>` +
+                                   `<b>Superficie que Cubriría:</b> ${{areaKm2}} km² (${{areaHa}} ha)<br>` +
+                                   `<b>Perímetro:</b> ${{(2 * Math.PI * radioM / 1000).toFixed(2)}} km`
+                        }};
+                    }}
+
+                    if (tipo === 'Polygon') {{
+                        const m2 = turf.area(feat);
+                        const ha = (m2 / 10000).toFixed(2);
+                        const km2 = (m2 / 1e6).toFixed(2);
+                        const kmPerim = turf.length(turf.polygonToLine(feat), {{ units: 'kilometers' }}).toFixed(2);
+                        return {{
+                            coords: turf.centroid(feat).geometry.coordinates,
+                            badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📐 Área Delimitada</div>` +
+                                   `<div style="font-size:10.5px; color:#334155;">` +
+                                   `<b>Superficie:</b> ${{km2}} km² (${{ha}} ha)<br>` +
+                                   `<b>Perímetro:</b> ${{kmPerim}} km` +
+                                   `</div>`,
+                            panel: `<b>📐 Polígono de Medición</b><br>` +
+                                   `<b>Superficie:</b> ${{km2}} km² (${{ha}} ha)<br>` +
+                                   `<b>Perímetro:</b> ${{kmPerim}} km`
+                        }};
+                    }}
+                    return null;
+                }}
+
+                function actualizarMedicionCompleta(feat, mostrarBadge) {{
+                    if (!feat) return;
+                    const info = obtenerInfoMedicion(feat);
+                    if (!info) return;
+
+                    const box = document.getElementById('draw-measure-box');
+                    if (box) {{
+                        box.style.display = 'block';
+                        box.innerHTML = info.panel;
+                    }}
+
+                    if (feat.geometry.type === 'LineString') {{
+                        actualizarRotulosLinea(feat);
+                    }} else {{
+                        limpiarRotulosLinea();
+                    }}
+
+                    const chkBadge = document.getElementById('chk-show-badge');
+                    const permitirBadge = chkBadge ? chkBadge.checked : true;
+
+                    if (mostrarBadge && permitirBadge) {{
+                        if (popupDibujoActivo) popupDibujoActivo.remove();
+                        popupDibujoActivo = new maplibregl.Popup({{ closeOnClick: true, offset: 12, className: 'gis-badge-popup' }})
+                            .setLngLat(info.coords)
+                            .setHTML(info.badge)
+                            .addTo(map);
+                    }}
+                }}
+
+                map.on('draw.create', (e) => {{
+                    if (e.features && e.features[0]) actualizarMedicionCompleta(e.features[0], true);
+                    limpiarHerramientasActivas();
+                }});
+                map.on('draw.update', (e) => {{
+                    if (e.features && e.features[0]) actualizarMedicionCompleta(e.features[0], false);
+                }});
+                map.on('draw.selectionchange', (e) => {{
+                    if (e.features && e.features.length > 0) {{
+                        actualizarMedicionCompleta(e.features[0], true);
+                    }}
+                }});
+                map.on('draw.delete', () => {{
+                    document.getElementById('draw-measure-box').style.display = 'none';
+                    limpiarRotulosLinea();
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                }});
+
+                map.on('click', (e) => {{
+                    if (modoBufferActivo) {{
+                        const coords = [e.lngLat.lng, e.lngLat.lat];
+                        const radioKm = radioBufferMetros / 1000.0;
+                        const circlePoly = turf.circle(coords, radioKm, {{ steps: 64, units: 'kilometers' }});
+                        const areaHa = (turf.area(circlePoly) / 10000).toFixed(2);
+                        circlePoly.properties = {{
+                            esCirculo: true,
+                            radioM: radioBufferMetros,
+                            areaHa: areaHa
+                        }};
+                        draw.add(circlePoly);
+                        detenerModoBuffer();
+                        actualizarMedicionCompleta(circlePoly, true);
+                    }}
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        components.html(html_maplibre_cob, height=680)
+
+        st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+        col_diag1, col_diag2 = st.columns([1.35, 1.65], gap="large")
+
+        with col_diag1:
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:6px; font-size:13px;'>🎯 INVENTARIO DE VACÍOS CRÍTICOS Y PUNTOS PROPUESTOS</p>", unsafe_allow_html=True)
+            if not res['df_propuestas'].empty:
+                df_mostrar_prop = res['df_propuestas'].copy()
+                df_mostrar_prop.columns = ['ID', 'Longitud (°W)', 'Latitud (°N)', 'Vacío (km²)', 'Dist. Pozo (km)', 'Prioridad']
+                st.dataframe(df_mostrar_prop, use_container_width=True, hide_index=True, height=270)
+            else:
+                st.success("🎉 No se identificaron vacíos que superen el umbral crítico seleccionado. La red cuenta con una cobertura homogénea para este radio.")
+
+        with col_diag2:
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:6px; font-size:13px;'>📋 EVALUACIÓN NORMATIVA DE DENSIDAD DE RED (CONAGUA / OMM)</p>", unsafe_allow_html=True)
+
+            df_omm = pd.DataFrame([
+                {
+                    "Régimen Hidrogeológico": "Acuífero en Sobreexplotación / Urbano-Industrial",
+                    "Densidad OMM Sugerida": "1 pozo cada 25 – 50 km²",
+                    "Radio Típico": "3.0 – 4.0 km",
+                    "Cumplimiento Actual": "✅ Conforme" if res['km2_por_pozo'] <= 50 else "⚠️ Densidad Baja"
+                },
+                {
+                    "Régimen Hidrogeológico": "Acuífero Agrícola Intensivo",
+                    "Densidad OMM Sugerida": "1 pozo cada 50 – 100 km²",
+                    "Radio Típico": "4.0 – 5.5 km",
+                    "Cumplimiento Actual": "✅ Conforme" if res['km2_por_pozo'] <= 100 else "⚠️ Densidad Baja"
+                },
+                {
+                    "Régimen Hidrogeológico": "Acuífero Regional / Explotación Baja",
+                    "Densidad OMM Sugerida": "1 pozo cada 100 – 250 km²",
+                    "Radio Típico": "5.5 – 9.0 km",
+                    "Cumplimiento Actual": "✅ Conforme" if res['km2_por_pozo'] <= 250 else "❌ Deficiente"
+                }
+            ])
+            st.dataframe(df_omm, use_container_width=True, hide_index=True, height=140)
+
+            st.markdown(f"""
+                <div style="background-color:#F8FAFC; border:1px solid #E2E8F0; border-radius:6px; padding:10px 14px; font-size:11.5px; color:#334155; line-height:1.5;">
+                    <b>Diagnóstico de Representatividad:</b> La red evaluada cuenta con <b>{res['n_pozos']} pozos de observación</b> para una superficie acuífera de <b>{res['area_total_km2']:,.1f} km²</b>, 
+                    lo que arroja un promedio de <b>1 pozo cada {res['km2_por_pozo']:.1f} km²</b> ({res['densidad_1000km2']:.2f} pozos por cada 1,000 km²).<br>
+                    Con un radio de representatividad piezométrica de <b>{radio_km:.1f} km</b>, se cubre el <b style="color:{res['color_diagnostico']};">{res['pct_cubierta']:.1f}%</b> del acuífero, 
+                    mientras que <b>{res['area_ciega_km2']:,.1f} km² ({res['pct_ciega']:.1f}%)</b> corresponden a zonas ciegas donde cualquier interpolación geostadística extrapola con elevada incertidumbre.
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:8px; font-size:13px;'>💾 EXPORTACIÓN DE RESULTADOS SIG Y DIAGNÓSTICO (CERO-RERUN)</p>", unsafe_allow_html=True)
+            c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+
+            if shp_ciegas_zip:
+                btn_shp_ciegas = generar_enlace_descarga(
+                    shp_ciegas_zip, f"zonas_ciegas_{clave_actual}_{radio_km:.1f}km.zip",
+                    "application/zip", "📦 Shapefile Zonas Ciegas (.zip)"
+                )
+                c_d1.markdown(btn_shp_ciegas, unsafe_allow_html=True)
+            else:
+                btn_json_ciegas = generar_enlace_descarga(
+                    geojson_ciega_str.encode('utf-8'), f"zonas_ciegas_{clave_actual}_{radio_km:.1f}km.geojson",
+                    "application/geo+json", "📄 GeoJSON Zonas Ciegas"
+                )
+                c_d1.markdown(btn_json_ciegas, unsafe_allow_html=True)
+
+            if shp_cubierta_zip:
+                btn_shp_cubierta = generar_enlace_descarga(
+                    shp_cubierta_zip, f"cobertura_buffers_{clave_actual}_{radio_km:.1f}km.zip",
+                    "application/zip", "📦 Shapefile Cobertura (.zip)"
+                )
+                c_d2.markdown(btn_shp_cubierta, unsafe_allow_html=True)
+            else:
+                btn_json_cubierta = generar_enlace_descarga(
+                    geojson_cubierta_str.encode('utf-8'), f"cobertura_buffers_{clave_actual}_{radio_km:.1f}km.geojson",
+                    "application/geo+json", "📄 GeoJSON Cobertura"
+                )
+                c_d2.markdown(btn_json_cubierta, unsafe_allow_html=True)
+
+            if shp_propuestas_zip:
+                btn_shp_prop = generar_enlace_descarga(
+                    shp_propuestas_zip, f"propuesta_pozos_{clave_actual}.zip",
+                    "application/zip", "🎯 Shapefile Nuevos Pozos (.zip)"
+                )
+                c_d3.markdown(btn_shp_prop, unsafe_allow_html=True)
+            else:
+                btn_json_prop = generar_enlace_descarga(
+                    geojson_propuestas_str.encode('utf-8'), f"propuesta_pozos_{clave_actual}.geojson",
+                    "application/geo+json", "🎯 GeoJSON Nuevos Pozos"
+                )
+                c_d3.markdown(btn_json_prop, unsafe_allow_html=True)
+
+            if not res['df_propuestas'].empty:
+                csv_prop = res['df_propuestas'].to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+                btn_csv = generar_enlace_descarga(
+                    csv_prop, f"propuesta_pozos_{clave_actual}.csv",
+                    "text/csv", "📊 CSV Inventario de Vacíos"
+                )
+                c_d4.markdown(btn_csv, unsafe_allow_html=True)
+            else:
+                c_d4.info("Sin vacíos para exportar")
+
+    renderizar_pestaña_cobertura()
 
 # --- EJE 2: HIDROGRAMAS INTELIGENTES ---
 with tab_hidrograma:
     @st.fragment
     def renderizar_pestaña_hidrograma():
         st.write("Selecciona un pozo de la red de monitoreo para analizar su comportamiento temporal y su tasa de abatimiento matemática.")
-        pozo_sel = st.selectbox("🎯 Filtrar por Pozo de Monitoreo:", pozos_disponibles)
-        df_pozo = df_ac[df_ac['Pozo'].astype(str) == str(pozo_sel)].sort_values(by='Año')
+        
+        c_h1, c_h2 = st.columns([1.5, 1])
+        pozo_sel = c_h1.selectbox("🎯 Filtrar por Pozo de Monitoreo:", pozos_disponibles)
+        var_hidro = c_h2.radio("Variable a Graficar:", ["Profundidad del Nivel (m)", "Carga Hidráulica (msnm)"], horizontal=True)
+        col_y_hidro = 'Profundidad_NE' if "Profundidad" in var_hidro else 'Carga_Hidraulica'
+        
+        df_pozo_raw = df_ac[df_ac['Pozo'].astype(str) == str(pozo_sel)].dropna(subset=['Año', col_y_hidro])
+        # Promediar si existen mediciones estacionales en el mismo año
+        df_pozo = df_pozo_raw.groupby('Año')[col_y_hidro].mean().reset_index().sort_values(by='Año')
         
         if len(df_pozo) >= 2:
             x = df_pozo['Año'].values
-            y = df_pozo['Profundidad_NE'].values
+            y = df_pozo[col_y_hidro].values
             coeficientes = np.polyfit(x, y, 1)
             pendiente = coeficientes[0] 
             tendencia_y = np.polyval(coeficientes, x)
             
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Última Profundidad Registrada", f"{y[-1]:.2f} m")
+            unidad_txt = "m" if col_y_hidro == 'Profundidad_NE' else "msnm"
+            col_m1.metric("Último Valor Registrado", f"{y[-1]:.2f} {unidad_txt}")
             
-            if pendiente > 0.1:
+            # En Profundidad_NE: pendiente > 0 significa nivel bajando (abatimiento)
+            # En Carga_Hidraulica: pendiente < 0 significa carga bajando (abatimiento)
+            es_abatimiento = (pendiente > 0.1) if col_y_hidro == 'Profundidad_NE' else (pendiente < -0.1)
+            es_recuperacion = (pendiente < -0.1) if col_y_hidro == 'Profundidad_NE' else (pendiente > 0.1)
+            
+            if es_abatimiento:
                 estado, color_linea = "🔴 Abatiéndose", "#9f2241"
-                col_m2.metric("Ritmo de Abatimiento", f"-{pendiente:.2f} m/año", "Caída del Nivel", delta_color="inverse")
-            elif pendiente < -0.1:
+                delta_txt = f"-{abs(pendiente):.2f} m/año"
+                col_m2.metric("Ritmo de Abatimiento", delta_txt, "Pérdida de Nivel", delta_color="inverse")
+            elif es_recuperacion:
                 estado, color_linea = "🟢 Recuperándose", "#285c4d"
-                col_m2.metric("Ritmo de Recuperación", f"+{abs(pendiente):.2f} m/año", "Aumento del Nivel", delta_color="normal")
+                delta_txt = f"+{abs(pendiente):.2f} m/año"
+                col_m2.metric("Ritmo de Recuperación", delta_txt, "Aumento de Nivel", delta_color="normal")
             else:
                 estado, color_linea = "🟡 Estable", "#b38e5d"
-                col_m2.metric("Tasa de Cambio Promedio", f"{pendiente:.2f} m/año", "Estable", delta_color="off")
+                delta_txt = f"{pendiente:.2f} m/año"
+                col_m2.metric("Tasa de Cambio Promedio", delta_txt, "Estable", delta_color="off")
                 
             col_m3.metric("Diagnóstico Físico", estado)
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=df_pozo['Año'], y=df_pozo['Profundidad_NE'], mode='lines+markers', name='Medición de Campo', line=dict(color='#244062', width=2.5), marker=dict(size=8, color='#b38e5d')))
+            fig.add_trace(go.Scatter(x=df_pozo['Año'], y=df_pozo[col_y_hidro], mode='lines+markers', name='Medición de Campo', line=dict(color='#244062', width=2.5), marker=dict(size=8, color='#b38e5d')))
             ecuacion_txt = f"y = {pendiente:.2f}x {'+' if coeficientes[1]>0 else '-'} {abs(coeficientes[1]):.2f}"
             fig.add_trace(go.Scatter(x=df_pozo['Año'], y=tendencia_y, mode='lines', name=f'Tendencia Histórica ({ecuacion_txt})', line=dict(color=color_linea, width=2, dash='dash')))
 
             mitad_idx = len(x) // 2
             fig.add_annotation(x=x[mitad_idx], y=tendencia_y[mitad_idx], text=f"<b>Pendiente:<br>{pendiente:.2f} m/año</b>", showarrow=True, arrowhead=2, arrowsize=1, ax=40, ay=-40, font=dict(color=color_linea, size=11), arrowcolor=color_linea, bgcolor="rgba(255,255,255,0.9)", bordercolor=color_linea)
 
-            fig.update_layout(title=f"Hidrograma Invertido - Evolución del Nivel Estático (Pozo: {pozo_sel})", yaxis=dict(autorange="reversed"), height=500, margin=dict(t=60, b=40), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            layout_yaxis = dict(autorange="reversed") if col_y_hidro == 'Profundidad_NE' else dict(title="Carga Hidráulica (msnm)")
+            titulo_hidro = f"Evolución Piezométrica ({var_hidro}) - Pozo: {pozo_sel}"
+            fig.update_layout(title=titulo_hidro, yaxis=layout_yaxis, xaxis=dict(title="Año"), height=500, margin=dict(t=60, b=40), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
             st.plotly_chart(fig, use_container_width=True)
-        else: st.warning("No hay suficientes datos históricos.")
+        else:
+            st.warning("No hay suficientes datos históricos para este pozo.")
     renderizar_pestaña_hidrograma()
 
 # --- EJE 4: FORECASTING Y ALERTAS ---
@@ -946,14 +7702,28 @@ with tab_alertas:
         resultados_alertas = []
         
         for pozo in pozos_disponibles:
-            df_hist = df_ac[df_ac['Pozo'].astype(str) == str(pozo)].sort_values(by='Año')
+            df_hist_raw = df_ac[df_ac['Pozo'].astype(str) == str(pozo)].dropna(subset=['Año', 'Profundidad_NE'])
+            df_hist = df_hist_raw.groupby('Año')['Profundidad_NE'].mean().reset_index().sort_values(by='Año')
             if len(df_hist) >= 3: 
                 x, y = df_hist['Año'].values, df_hist['Profundidad_NE'].values
                 z = np.polyfit(x, y, 1)
-                tasa, prof_actual, anio_actual = z[0], y[-1], x[-1]
-                prof_2035 = np.polyval(z, 2035)
+                tasa = float(z[0])
+                prof_actual = float(y[-1])
+                anio_actual = int(x[-1])
+                prof_2035 = max(0.0, float(np.polyval(z, 2035)))
+                anios_dif = max(1, 2035 - anio_actual)
+                caida_estimada = round(tasa * anios_dif, 2) if tasa > 0 else 0.0
+                
                 alerta = "🚨 Crítico" if tasa > 0.5 else ("⚠️ Precaución" if tasa > 0 else "✅ Estable / Sano")
-                resultados_alertas.append({"ID Pozo": str(pozo), "Tasa (m/año)": tasa, "Último Año Medido": int(anio_actual), "Prof. Actual (m)": prof_actual, "Prof. Proyectada 2035 (m)": prof_2035, "Caída Estimada (m)": (prof_2035 - prof_actual) if tasa > 0 else 0.0, "Estatus de Estrés": alerta})
+                resultados_alertas.append({
+                    "ID Pozo": str(pozo), 
+                    "Tasa (m/año)": round(tasa, 2), 
+                    "Último Año Medido": anio_actual, 
+                    "Prof. Actual (m)": round(prof_actual, 2), 
+                    "Prof. Proyectada 2035 (m)": round(prof_2035, 2), 
+                    "Caída Estimada (m)": caida_estimada, 
+                    "Estatus de Estrés": alerta
+                })
                 
         if resultados_alertas:
             df_alertas = pd.DataFrame(resultados_alertas).sort_values(by="Tasa (m/año)", ascending=False)
@@ -965,33 +7735,42 @@ with tab_alertas:
             st.dataframe(df_alertas.style.map(color_estatus, subset=['Estatus de Estrés']).format({"Tasa (m/año)": "{:.2f}", "Prof. Actual (m)": "{:.2f}", "Prof. Proyectada 2035 (m)": "{:.2f}", "Caída Estimada (m)": "{:.2f}"}), use_container_width=True, hide_index=True)
             
             pozos_criticos = len(df_alertas[df_alertas["Estatus de Estrés"] == "🚨 Crítico"])
-            if pozos_criticos > 0: st.error(f"**Justificación Técnica:** Se detectaron {pozos_criticos} pozos con abatimiento crítico.")
-            else: st.success("La red refleja estabilidad física.")
+            if pozos_criticos > 0:
+                st.error(f"**Justificación Técnica:** Se detectaron {pozos_criticos} pozos con abatimiento crítico (tasa > 0.50 m/año).")
+            else:
+                st.success("La red refleja estabilidad física general.")
             
             col_g1, col_g2 = st.columns([1, 1.3])
             with col_g1:
                 st.write("**1. Panorama Global**")
                 fig_bar = px.bar(df_alertas, x="ID Pozo", y="Tasa (m/año)", color="Estatus de Estrés", color_discrete_map={"🚨 Crítico": "#9f2241", "⚠️ Precaución": "#b38e5d", "✅ Estable / Sano": "#285c4d"})
-                fig_bar.add_hline(y=0.5, line_dash="dot", annotation_text="Límite Crítico", line_color="#9f2241")
+                fig_bar.add_hline(y=0.5, line_dash="dot", annotation_text="Límite Crítico (0.5 m/año)", line_color="#9f2241")
                 fig_bar.update_layout(height=450, showlegend=False)
                 st.plotly_chart(fig_bar, use_container_width=True)
             with col_g2:
                 st.write("**2. Proyección y Cálculo**")
                 pozo_demo = st.selectbox("Selecciona un pozo:", df_alertas["ID Pozo"].tolist())
-                df_pozo_demo = df_ac[df_ac['Pozo'].astype(str) == pozo_demo].sort_values(by='Año')
+                df_pozo_demo_raw = df_ac[df_ac['Pozo'].astype(str) == pozo_demo].dropna(subset=['Año', 'Profundidad_NE'])
+                df_pozo_demo = df_pozo_demo_raw.groupby('Año')['Profundidad_NE'].mean().reset_index().sort_values(by='Año')
                 x, y = df_pozo_demo['Año'].values, df_pozo_demo['Profundidad_NE'].values
                 z = np.polyfit(x, y, 1)
                 x_proy = np.arange(x[0], 2036)
                 y_proy = np.polyval(z, x_proy)
+                prof_proy_2035 = max(0.0, float(np.polyval(z, 2035)))
                 
                 fig_demo = go.Figure()
-                fig_demo.add_trace(go.Scatter(x=x_proy, y=y_proy, mode='lines', name=f'Regresión Lineal', line=dict(color='#888', width=1.5, dash='dot')))
+                fig_demo.add_trace(go.Scatter(x=x_proy, y=y_proy, mode='lines', name='Regresión Lineal', line=dict(color='#888', width=1.5, dash='dot')))
                 fig_demo.add_trace(go.Scatter(x=x, y=y, mode='markers', name='Datos Reales', marker=dict(color='#244062', size=8)))
-                fig_demo.add_trace(go.Scatter(x=[x[-1]], y=[y[-1]], mode='markers', name=f'Última Medida', marker=dict(color='#b38e5d', size=12, symbol='square')))
-                fig_demo.add_trace(go.Scatter(x=[2035], y=[np.polyval(z, 2035)], mode='markers', name='Proyección 2035', marker=dict(color='#9f2241', size=14, symbol='star')))
+                fig_demo.add_trace(go.Scatter(x=[x[-1]], y=[y[-1]], mode='markers', name='Última Medida', marker=dict(color='#b38e5d', size=12, symbol='square')))
+                fig_demo.add_trace(go.Scatter(x=[2035], y=[prof_proy_2035], mode='markers', name='Proyección 2035', marker=dict(color='#9f2241', size=14, symbol='star')))
+                
                 if z[0] > 0:
                     fig_demo.add_shape(type="line", x0=x[-1], y0=y[-1], x1=2035, y1=y[-1], line=dict(color="gray", width=1, dash="dash"))
-                    fig_demo.add_annotation(x=2035, y=(y[-1] + np.polyval(z, 2035))/2, ax=2035, ay=y[-1], text=f"<b>Caída:<br>{np.polyval(z, 2035) - y[-1]:.1f} m</b>", showarrow=True, arrowhead=2)
+                    fig_demo.add_annotation(x=2035, y=(y[-1] + prof_proy_2035)/2, ax=2035, ay=y[-1], text=f"<b>Caída:<br>{prof_proy_2035 - y[-1]:.1f} m</b>", showarrow=True, arrowhead=2)
+                else:
+                    fig_demo.add_shape(type="line", x0=x[-1], y0=y[-1], x1=2035, y1=y[-1], line=dict(color="gray", width=1, dash="dash"))
+                    fig_demo.add_annotation(x=2035, y=(y[-1] + prof_proy_2035)/2, ax=2035, ay=y[-1], text=f"<b>Recuperación:<br>{y[-1] - prof_proy_2035:.1f} m</b>", showarrow=True, arrowhead=2)
+                    
                 fig_demo.update_layout(yaxis=dict(autorange="reversed"), height=450)
                 st.plotly_chart(fig_demo, use_container_width=True)
     renderizar_pestaña_alertas()
