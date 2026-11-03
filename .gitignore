@@ -1,0 +1,13 @@
+# Carpeta de respaldos para uso personal (no subir a GitHub)
+respaldos de la pagina/
+respaldos de la pagina/*
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+*/__pycache__/
+*/*/__pycache__/
+
+# Archivos temporales del sistema
+.DS_Store
+Thumbs.db
