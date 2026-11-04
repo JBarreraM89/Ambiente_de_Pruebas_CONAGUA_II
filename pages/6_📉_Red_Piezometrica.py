@@ -1544,10 +1544,98 @@ def _parse_geojson_features(geojson_input):
         return [data]
     return []
 
+def _construir_kml_geologia(geojson_geo):
+    """Genera las etiquetas KML para la capa de Geología Oficial SGM con colores litológicos oficiales."""
+    feat_geo = _parse_geojson_features(geojson_geo)
+    if not feat_geo:
+        return []
+    lines = [f'  <Folder><name>Geología SGM ({len(feat_geo)} unidades litológicas)</name>']
+    for idx, feat in enumerate(feat_geo):
+        props = feat.get("properties", {})
+        geom = feat.get("geometry", {})
+        col_hex = props.get("COLOR_HEX", "#B0BEC5")
+        kml_color = _hex_a_kml_color(col_hex, alpha="99")  # ~60% opacidad
+        kml_borde = _hex_a_kml_color("#444444", alpha="cc")
+
+        clave_sgm = html.escape(str(props.get("CLAVE_SGM", props.get("CLAVE", props.get("LITOLOGIA", f"Geo-{idx+1}")))))
+        roca = html.escape(str(props.get("ROCA", props.get("LITOLOGIA", "N/D"))))
+        formacion = html.escape(str(props.get("FORMACION", "N/D")))
+        era = html.escape(str(props.get("ERA", "N/D")))
+
+        geom_kml = _geom_a_kml(geom)
+        if geom_kml:
+            lines.append('    <Placemark>')
+            lines.append(f'      <name>{clave_sgm} ({roca})</name>')
+            lines.append('      <Style>')
+            lines.append(f'        <LineStyle><color>{kml_borde}</color><width>1.0</width></LineStyle>')
+            lines.append(f'        <PolyStyle><color>{kml_color}</color><fill>1</fill><outline>1</outline></PolyStyle>')
+            lines.append('      </Style>')
+            lines.append('      <description><![CDATA[')
+            lines.append('        <div style="font-family:Arial,sans-serif;font-size:11.5px;min-width:200px;">')
+            lines.append(f'          <div style="font-weight:700;color:#691C32;font-size:12px;margin-bottom:4px;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">🏛️ Geología SGM: {clave_sgm}</div>')
+            lines.append('          <table style="width:100%;border-collapse:collapse;font-size:10.5px;">')
+            lines.append(f'            <tr><td style="color:#64748b;">Roca / Litología:</td><td><b>{roca}</b></td></tr>')
+            if formacion != "N/D":
+                lines.append(f'            <tr><td style="color:#64748b;">Formación:</td><td>{formacion}</td></tr>')
+            if era != "N/D":
+                lines.append(f'            <tr><td style="color:#64748b;">Era / Periodo:</td><td>{era}</td></tr>')
+            lines.append(f'            <tr><td style="color:#64748b;">Color Oficial:</td><td><span style="display:inline-block;width:12px;height:12px;background-color:{col_hex};border:1px solid #999;border-radius:2px;vertical-align:middle;"></span> {col_hex}</td></tr>')
+            lines.append('          </table>')
+            lines.append('        </div>')
+            lines.append('      ]]></description>')
+            lines.append(f'      {geom_kml}')
+            lines.append('    </Placemark>')
+    lines.append('  </Folder>')
+    return lines
+
+def _construir_kml_repda(geojson_repda):
+    """Genera las etiquetas KML para las Concesiones y Captaciones REPDA del acuífero."""
+    feat_repda = _parse_geojson_features(geojson_repda)
+    if not feat_repda:
+        return []
+    lines = [f'  <Folder><name>Concesiones REPDA ({len(feat_repda)} captaciones)</name>']
+    for idx, feat in enumerate(feat_repda):
+        props = feat.get("properties", {})
+        coords = feat.get("geometry", {}).get("coordinates", [])
+        if len(coords) < 2:
+            continue
+        folio = html.escape(str(props.get("folio", props.get("TITULO", props.get("titulo", f"REPDA-{idx+1}")))))
+        titular = html.escape(str(props.get("titular", props.get("TITULAR", "Sin Titular"))))
+        uso = html.escape(str(props.get("uso", props.get("USO", "No Especificado"))))
+        vol_m3 = float(props.get("volumen_m3", props.get("VOL_TOTAL", props.get("volumen", 0.0))))
+        vol_hm3 = float(props.get("volumen_hm3", vol_m3 / 1e6))
+        prof = float(props.get("profundidad_m", 0.0))
+        color_uso = props.get("color", "#9333ea")
+        kml_color = _hex_a_kml_color(color_uso, alpha="ff")
+
+        lines.append('    <Placemark>')
+        lines.append(f'      <name>{folio} ({uso})</name>')
+        lines.append('      <Style>')
+        lines.append(f'        <IconStyle><scale>0.85</scale><color>{kml_color}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+        lines.append('      </Style>')
+        lines.append('      <description><![CDATA[')
+        lines.append('        <div style="font-family:Arial,sans-serif;font-size:11.5px;min-width:220px;">')
+        lines.append(f'          <div style="font-weight:700;color:#166534;font-size:12px;margin-bottom:4px;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">💧 Concesión REPDA: {folio}</div>')
+        lines.append('          <table style="width:100%;border-collapse:collapse;font-size:10.5px;">')
+        lines.append(f'            <tr><td style="color:#64748b;">Titular:</td><td><b>{titular}</b></td></tr>')
+        lines.append(f'            <tr><td style="color:#64748b;">Uso Concesionado:</td><td><b>{uso}</b></td></tr>')
+        lines.append(f'            <tr><td style="color:#64748b;">Volumen Anual:</td><td><b>{vol_m3:,.1f} m³/año</b> ({vol_hm3:.4f} hm³)</td></tr>')
+        if prof > 0:
+            lines.append(f'            <tr><td style="color:#64748b;">Profundidad de Perforación:</td><td>{prof:.1f} m</td></tr>')
+        lines.append(f'            <tr><td style="color:#64748b;">Coordenadas:</td><td>{coords[1]:.5f}, {coords[0]:.5f}</td></tr>')
+        lines.append('          </table>')
+        lines.append('        </div>')
+        lines.append('      ]]></description>')
+        lines.append(f'      <Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
+        lines.append('    </Placemark>')
+    lines.append('  </Folder>')
+    return lines
+
 def generar_kmz_dinamica_flujo(
     clave_actual, nombre_acuifero, anio_sel, var_real,
     bounds, img_kriging_png, geojson_iso, geojson_flujo,
-    df_pozos, delim_geom=None, props_kriging=None, marcadores_adicionales=None
+    df_pozos, delim_geom=None, props_kriging=None, marcadores_adicionales=None,
+    geojson_geo=None, geojson_repda=None
 ):
     nombre_acuifero_safe = html.escape(str(nombre_acuifero))
     var_label = "Elevación Piezométrica" if "elev" in str(var_real).lower() or "carga" in str(var_real).lower() else "Profundidad al Nivel Estático"
@@ -1736,6 +1824,14 @@ def generar_kmz_dinamica_flujo(
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
+    # 7. Geología SGM (Litología)
+    if geojson_geo:
+        kml.extend(_construir_kml_geologia(geojson_geo))
+
+    # 8. Concesiones REPDA del Acuífero
+    if geojson_repda:
+        kml.extend(_construir_kml_repda(geojson_repda))
+
     kml.append('</Document>')
     kml.append('</kml>')
     kml_str = '\n'.join(kml)
@@ -1751,7 +1847,8 @@ def generar_kmz_dinamica_flujo(
 def generar_kmz_evolucion(
     clave_actual, nombre_acuifero, anio_t1, anio_t2,
     bounds, img_evo_png, geojson_iso_bytes,
-    df_pz_evo, delim_geom=None, resumen_repda=None, geojson_repda_str=None
+    df_pz_evo, delim_geom=None, resumen_repda=None, geojson_repda_str=None,
+    geojson_geo=None
 ):
     nombre_acuifero_safe = html.escape(str(nombre_acuifero))
     min_y, min_x = float(bounds[0][0]), float(bounds[0][1])
@@ -1903,31 +2000,13 @@ def generar_kmz_evolucion(
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
-    feat_repda = _parse_geojson_features(geojson_repda_str)
-    if feat_repda:
-        kml.append(f'  <Folder><name>5. Aprovechamientos REPDA ({len(feat_repda)} concesiones)</name>')
-        for idx, feat in enumerate(feat_repda):
-            props = feat.get("properties", {})
-            coords = feat.get("geometry", {}).get("coordinates", [])
-            if len(coords) < 2:
-                continue
-            tit = html.escape(str(props.get("TITULO", props.get("titulo", f"Concesión #{idx+1}"))))
-            vol = float(props.get("VOL_TOTAL", props.get("volumen", 0.0)))
-            uso = html.escape(str(props.get("USO", props.get("uso", "N/D"))))
-            desc_repda = f"""
-            <div style="font-family:Arial,sans-serif;font-size:11px;">
-              <b>Concesión REPDA:</b> {tit}<br>
-              Volumen: <b>{vol:,.1f} m³/año</b><br>
-              Uso: {uso}
-            </div>
-            """
-            kml.append('    <Placemark>')
-            kml.append(f'      <name>{tit}</name>')
-            kml.append('      <styleUrl>#style-repda</styleUrl>')
-            kml.append(f'      <description><![CDATA[{desc_repda}]]></description>')
-            kml.append(f'      <Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
-            kml.append('    </Placemark>')
-        kml.append('  </Folder>')
+    # 5. Concesiones REPDA del Acuífero
+    if geojson_repda_str:
+        kml.extend(_construir_kml_repda(geojson_repda_str))
+
+    # 6. Geología SGM (Litología)
+    if geojson_geo:
+        kml.extend(_construir_kml_geologia(geojson_geo))
 
     kml.append('</Document>')
     kml.append('</kml>')
@@ -1944,7 +2023,8 @@ def generar_kmz_evolucion(
 def generar_kmz_cobertura(
     clave_actual, nombre_acuifero, radio_km,
     geojson_ciega, geojson_cubierta,
-    df_pozos, df_propuestas, delim_geom=None, res_metricas=None
+    df_pozos, df_propuestas, delim_geom=None, res_metricas=None,
+    geojson_geo=None, geojson_repda=None
 ):
     nombre_acuifero_safe = html.escape(str(nombre_acuifero))
     metricas = res_metricas or {}
@@ -2088,6 +2168,14 @@ def generar_kmz_cobertura(
             kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
+
+    # 6. Geología SGM (Litología)
+    if geojson_geo:
+        kml.extend(_construir_kml_geologia(geojson_geo))
+
+    # 7. Concesiones REPDA del Acuífero
+    if geojson_repda:
+        kml.extend(_construir_kml_repda(geojson_repda))
 
     kml.append('</Document>')
     kml.append('</kml>')
@@ -5155,7 +5243,9 @@ with tab_mapa:
                                 clave_actual, nombre_actual, anio_sel, var_real,
                                 bounds, img_kriging, geojson_iso, geojson_flujo,
                                 df_ultimo, delim_geom=geom_activa, props_kriging=props_kriging,
-                                marcadores_adicionales=st.session_state.get("marcadores_piezo", [])
+                                marcadores_adicionales=st.session_state.get("marcadores_piezo", []),
+                                geojson_geo=geojson_geo_str,
+                                geojson_repda=geojson_repda_tab1_str if tiene_repda_tab1 else None
                             )
                             btn_kmz_flujo = generar_enlace_descarga(
                                 kmz_flujo_bytes, f"dinamica_flujo_{clave_actual}_{anio_sel}.kmz",
@@ -6978,7 +7068,8 @@ with tab_evolucion:
                 clave_actual, nombre_actual, anio_t1, anio_t2,
                 bounds, img_evo_png, geojson_iso_bytes,
                 df_pz_evo, delim_geom=delim_geom, resumen_repda=resumen_repda,
-                geojson_repda_str=geojson_repda_str if tiene_repda_pts else None
+                geojson_repda_str=geojson_repda_str if tiene_repda_pts else None,
+                geojson_geo=geojson_geo_evo_str
             )
             btn_kmz_evo = generar_enlace_descarga(
                 kmz_evo_bytes, f"evolucion_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.kmz",
@@ -8984,7 +9075,9 @@ with tab_cobertura:
                 clave_actual, nombre_actual, radio_km,
                 geojson_ciega_str, geojson_cubierta_str,
                 df_unicos, res.get('df_propuestas'), delim_geom=geom_activa,
-                res_metricas=res
+                res_metricas=res,
+                geojson_geo=geojson_geo_cob_str,
+                geojson_repda=geojson_repda_tab3_str if tiene_repda_tab3 else None
             )
             btn_kmz_cob = generar_enlace_descarga(
                 kmz_cob_bytes, f"cobertura_zonas_ciegas_{clave_actual}_{radio_km:.1f}km.kmz",
