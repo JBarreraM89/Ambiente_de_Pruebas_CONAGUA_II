@@ -4868,6 +4868,16 @@ with tab_evolucion:
 
         span_edit = 'contenteditable="true" spellcheck="false" title="Haz clic para editar este texto" class="txt-leyenda-editable"'
 
+        # Preparar GeoJSON de Geología para Tab 2
+        geojson_geo_evo_str = "{}"
+        col_sel_geo_evo = "LITOLOGIA"
+        dic_leyenda_rocas_evo = {}
+        geom_geo_evo = delim_geom if delim_geom is not None else poligono_oficial_geom
+        if geom_geo_evo is not None:
+            gdf_geo_evo, col_sel_geo_evo, dic_leyenda_rocas_evo = preparar_geologia_vectorial(clave_actual, geom_geo_evo)
+            if gdf_geo_evo is not None and not gdf_geo_evo.empty:
+                geojson_geo_evo_str = gdf_geo_evo.to_json()
+
         leyenda_repda_html = ""
         if tiene_repda_pts:
             leyenda_repda_html = f"""
@@ -4907,6 +4917,13 @@ with tab_evolucion:
             <i class="circle" style="background:#0d9488;"></i> <span {span_edit}>Diferentes Usos</span><br>
         </div>
         """
+
+        if dic_leyenda_rocas_evo:
+            leyenda_html_evo += f'<div id="leg-geo" style="display: none; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">'
+            leyenda_html_evo += f'<b style="color:#691C32; font-size:11px;"><span {span_edit}>Geología SGM ({col_sel_geo_evo})</span></b><div style="max-height: 140px; overflow-y: auto; margin-top:4px;">'
+            for roca, color in dic_leyenda_rocas_evo.items():
+                leyenda_html_evo += f'<i class="square" style="background:{color};"></i> <span {span_edit} style="font-size:9.5px;">{roca}</span><br>'
+            leyenda_html_evo += '</div></div>'
 
         url_pmtiles_srv_tab2 = obtener_url_pmtiles()
 
@@ -5157,6 +5174,10 @@ with tab_evolucion:
                         <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Malla Δh: <span id="val-opac">70%</span></label>
                         <input type="range" class="slider-ctrl" id="slider-opac" min="0" max="1" step="0.05" value="0.70" oninput="cambiarOpacidadEvo(this.value)">
                     </div>
+                    <div class="dock-section" id="sec-opac-geo" style="display: none;">
+                        <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Transparencia Geología: <span id="val-opac-geo">50%</span></label>
+                        <input type="range" class="slider-ctrl" id="slider-opac-geo" min="0" max="1" step="0.05" value="0.50" oninput="cambiarOpacidadGeologia(this.value)">
+                    </div>
                     <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
                     <div class="dock-section">
                         <label><input type="checkbox" id="chk-kriging" checked> 🌊 Malla Divergente Δh</label>
@@ -5165,6 +5186,7 @@ with tab_evolucion:
                         <label><input type="checkbox" id="chk-poly" checked> 🗺️ {label_delimitacion}</label>
                         <label style="display: {'flex' if tiene_repda_pts else 'none'};"><input type="checkbox" id="chk-repda" checked> 🏢 Concesiones REPDA ({n_repda_total})</label>
                         <label style="display: flex;"><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
+                        <label style="display: {'flex' if dic_leyenda_rocas_evo else 'none'};"><input type="checkbox" id="chk-geo"> ⛰️ Geología SGM</label>
                     </div>
                 </div>
             </div>
@@ -5828,6 +5850,21 @@ with tab_evolucion:
                         }});
                     }}
 
+                    const geoData = {geojson_geo_evo_str};
+                    if (geoData.features) {{
+                        map.addSource('geo-src', {{ type: 'geojson', data: geoData }});
+                        map.addLayer({{
+                            id: 'geo-fill', type: 'fill', source: 'geo-src',
+                            paint: {{ 'fill-color': ['get', 'COLOR_HEX'], 'fill-opacity': 0.5 }},
+                            layout: {{ 'visibility': 'none' }}
+                        }});
+                        map.addLayer({{
+                            id: 'geo-line', type: 'line', source: 'geo-src',
+                            paint: {{ 'line-color': '#555', 'line-width': 0.5, 'line-opacity': 0.6 }},
+                            layout: {{ 'visibility': 'none' }}
+                        }});
+                    }}
+
                     map.addSource('kriging-src', {{
                         type: 'image', url: 'data:image/png;base64,{img_evo_b64}', coordinates: {img_coords_json}
                     }});
@@ -6021,6 +6058,14 @@ with tab_evolucion:
                     }}
                 }}
 
+                function cambiarOpacidadGeologia(val) {{
+                    const elVal = document.getElementById('val-opac-geo');
+                    if (elVal) elVal.innerText = Math.round(val * 100) + '%';
+                    if (map.getLayer('geo-fill')) {{
+                        map.setPaintProperty('geo-fill', 'fill-opacity', parseFloat(val));
+                    }}
+                }}
+
                 document.getElementById('chk-kriging').addEventListener('change', (e) => {{
                     if (map.getLayer('kriging-layer')) {{
                         map.setLayoutProperty('kriging-layer', 'visibility', e.target.checked ? 'visible' : 'none');
@@ -6065,6 +6110,60 @@ with tab_evolucion:
                         map.setLayoutProperty('poly-layer-fill', 'visibility', vis);
                     }}
                 }});
+
+                const chkGeo = document.getElementById('chk-geo');
+                if (chkGeo) {{
+                    chkGeo.addEventListener('change', (e) => {{
+                        const vis = e.target.checked ? 'visible' : 'none';
+                        if (map.getLayer('geo-fill')) map.setLayoutProperty('geo-fill', 'visibility', vis);
+                        if (map.getLayer('geo-line')) map.setLayoutProperty('geo-line', 'visibility', vis);
+                        const legGeo = document.getElementById('leg-geo');
+                        if (legGeo) legGeo.style.display = e.target.checked ? 'block' : 'none';
+                        const secOpacGeo = document.getElementById('sec-opac-geo');
+                        if (secOpacGeo) secOpacGeo.style.display = e.target.checked ? 'block' : 'none';
+                    }});
+                }}
+
+                map.on('click', 'geo-fill', (e) => {{
+                    const puntosClickeados = map.queryRenderedFeatures(e.point, {{
+                        layers: ['pozos-layer', 'repda-layer', 'repda-nacional-layer'].filter(id => map.getLayer(id))
+                    }});
+                    if (puntosClickeados.length > 0) return;
+
+                    const p = e.features[0].properties;
+                    const formacion = (p.FORMACION && p.FORMACION !== 'null' && p.FORMACION !== 'NINGUNO') ? p.FORMACION : 'Formación No Asignada';
+                    const claveSgm = p["{col_sel_geo_evo}"] || p.ETIQUETA_LITO || 'S/C';
+                    const litologia = p.LITOLOGIA || 'Indiferenciada';
+                    const roca = p.ROCA || 'Sedimentaria';
+                    const colorHex = p.COLOR_HEX || '#B0BEC5';
+                    
+                    let edadGeo = p.PERIODO || '';
+                    if (p.EDINICIO || p.EDFINAL) {{
+                        const ini = p.EDINICIO || '';
+                        const fin = p.EDFINAL || '';
+                        edadGeo += (ini === fin || !fin) ? ` (${{ini}})` : ` (${{ini}} - ${{fin}})`;
+                    }}
+                    if (!edadGeo.trim()) edadGeo = p.ERA || 'S/D';
+
+                    let html = `
+                        <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5; min-width:200px;">
+                            <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block;"></span>
+                                    <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{formacion}}</h4>
+                                </div>
+                                <span style="background:#F1F5F9; border:1px solid #CBD5E1; color:#334155; font-size:9.5px; font-weight:700; padding:1px 4px; border-radius:3px;">${{claveSgm}}</span>
+                            </div>
+                            <b>Litología:</b> <span style="color:#0f172a; font-weight:600;">${{litologia}}</span><br>
+                            <b>Tipo de Roca:</b> ${{roca}}<br>
+                            <b>Edad Geológica:</b> ${{edadGeo}}<br>
+                            <span style="color:#64748B; font-size:10px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
+                        </div>
+                    `;
+                    new maplibregl.Popup({{ className: 'gis-badge-popup' }}).setLngLat(e.lngLat).setHTML(html).addTo(map);
+                }});
+                map.on('mouseenter', 'geo-fill', () => {{ map.getCanvas().style.cursor = 'pointer'; }});
+                map.on('mouseleave', 'geo-fill', () => {{ map.getCanvas().style.cursor = ''; }});
 
                 map.on('mousemove', (e) => {{
                     document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(5) + '°';
@@ -6667,6 +6766,15 @@ with tab_cobertura:
         )
         n_repda_tab3 = len(df_repda_pts_tab3) if tiene_repda_tab3 else 0
 
+        # Preparación Geología Vectorial para Tab 3
+        geojson_geo_cob_str = "{}"
+        col_sel_geo_cob = "LITOLOGIA"
+        dic_leyenda_rocas_cob = {}
+        if geom_activa is not None:
+            gdf_geo_cob, col_sel_geo_cob, dic_leyenda_rocas_cob = preparar_geologia_vectorial(clave_actual, geom_activa)
+            if gdf_geo_cob is not None and not gdf_geo_cob.empty:
+                geojson_geo_cob_str = gdf_geo_cob.to_json()
+
         hay_manual_cob = any(pt.get("fuente") != "csv" for pt in st.session_state.get("marcadores_piezo", []))
         hay_csv_cob = any(pt.get("fuente") == "csv" for pt in st.session_state.get("marcadores_piezo", []))
 
@@ -6675,9 +6783,18 @@ with tab_cobertura:
         leyenda_manual_cob_html = f'''<div id="leg-manual" style="margin-top:2px;"><i style="background:#d35400;"></i> <span {span_edit}>Punto de Referencia Manual</span></div>''' if hay_manual_cob else ""
         leyenda_csv_cob_html = f'''<div id="leg-csv" style="margin-top:2px;"><i style="background:#2980b9;"></i> <span {span_edit}>Punto Cargado por CSV</span></div>''' if hay_csv_cob else ""
 
+        leyenda_geo_cob_html = ""
+        if dic_leyenda_rocas_cob:
+            leyenda_geo_cob_html = f'''<div id="leg-geo" style="display: none; margin-top:4px; border-top: 1px solid #eee; padding-top:4px;">
+                <b style="color:#691C32; font-size:11px;"><span {span_edit}>Geología SGM ({col_sel_geo_cob})</span></b><div style="max-height: 140px; overflow-y: auto; margin-top:4px;">'''
+            for roca, color in dic_leyenda_rocas_cob.items():
+                leyenda_geo_cob_html += f'<i class="square" style="background:{color};"></i> <span {span_edit} style="font-size:9.5px;">{roca}</span><br>'
+            leyenda_geo_cob_html += '</div></div>'
+
         chk_repda_html = f'<label id="lbl-repda" style="display:flex;"><input type="checkbox" id="chk-repda"> 🏢 Concesiones REPDA ({n_repda_tab3:,})</label>' if tiene_repda_tab3 else ''
         chk_manual_html = '<label id="lbl-manual" style="display:flex;"><input type="checkbox" id="chk-manual" checked> 📍 Referencias Manuales</label>' if hay_manual_cob else ''
         chk_csv_html = '<label id="lbl-csv" style="display:flex;"><input type="checkbox" id="chk-csv" checked> 📄 Pozos Adicionales CSV</label>' if hay_csv_cob else ''
+        chk_geo_cob_html = f'<label id="lbl-geo" style="display:{"flex" if dic_leyenda_rocas_cob else "none"};"><input type="checkbox" id="chk-geo"> ⛰️ Geología SGM</label>'
         url_pmtiles_srv = obtener_url_pmtiles()
         html_maplibre_cob = f"""
         <!DOCTYPE html>
@@ -6883,6 +7000,13 @@ with tab_cobertura:
                             <span>Tenue</span><span id="val-opac-zonas">40%</span><span>Opaco</span>
                         </div>
                     </div>
+                    <div class="dock-section" id="sec-opac-geo" style="display: none;">
+                        <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">🎨 OPACIDAD GEOLOGÍA SGM</span>
+                        <input type="range" class="slider-ctrl" id="slider-opac-geo" min="0" max="1" step="0.05" value="0.50" oninput="cambiarOpacidadGeologia(this.value)">
+                        <div style="display:flex; justify-content:space-between; font-size:9.5px; color:#64748b; margin-top:2px;">
+                            <span>Tenue</span><span id="val-opac-geo">50%</span><span>Opaco</span>
+                        </div>
+                    </div>
 
                     <div class="dock-section">
                         <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">📊 CAPAS ANALÍTICAS</span>
@@ -6895,6 +7019,7 @@ with tab_cobertura:
                         <label id="lbl-repda-nac" style="display:flex;"><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
                         {chk_manual_html}
                         {chk_csv_html}
+                        {chk_geo_cob_html}
                     </div>
                 </div>
             </div>
@@ -7009,6 +7134,7 @@ with tab_cobertura:
                     </div>
                     {leyenda_manual_cob_html}
                     {leyenda_csv_cob_html}
+                    {leyenda_geo_cob_html}
                 </div>
             </div>
 
@@ -7183,6 +7309,22 @@ with tab_cobertura:
                         paint: {{ 'line-color': '#691C32', 'line-width': 2.2, 'line-dasharray': [3, 2] }}
                     }});
 
+                    // 1.1 Geología SGM
+                    const geoData = {geojson_geo_cob_str};
+                    if (geoData.features) {{
+                        map.addSource('geo-src', {{ type: 'geojson', data: geoData }});
+                        map.addLayer({{
+                            id: 'geo-fill', type: 'fill', source: 'geo-src',
+                            paint: {{ 'fill-color': ['get', 'COLOR_HEX'], 'fill-opacity': 0.45 }},
+                            layout: {{ 'visibility': 'none' }}
+                        }});
+                        map.addLayer({{
+                            id: 'geo-line', type: 'line', source: 'geo-src',
+                            paint: {{ 'line-color': '#555', 'line-width': 0.5, 'line-opacity': 0.6 }},
+                            layout: {{ 'visibility': 'none' }}
+                        }});
+                    }}
+
                     // 2. Cobertura Activa
                     map.addSource('source-cubierta', {{ type: 'geojson', data: geoCubierta }});
                     map.addLayer({{
@@ -7276,6 +7418,9 @@ with tab_cobertura:
 
                     // Click en Zona Ciega
                     map.on('click', 'ciega-fill', (e) => {{
+                        if (map.getLayer('geo-fill') && map.getLayoutProperty('geo-fill', 'visibility') === 'visible') {{
+                            return; // Permite que geo-fill procese el clic litológico
+                        }}
                         new maplibregl.Popup({{ className: 'gis-badge-popup' }})
                             .setLngLat(e.lngLat)
                             .setHTML(`
@@ -7289,6 +7434,66 @@ with tab_cobertura:
                             `)
                             .addTo(map);
                     }});
+
+                    // Click en Geología SGM
+                    map.on('click', 'geo-fill', (e) => {{
+                        if (typeof modoDibujoActivo !== 'undefined' && modoDibujoActivo) return;
+                        const puntosClickeados = map.queryRenderedFeatures(e.point, {{
+                            layers: ['pozos-circle', 'propuestas-circle', 'add-layer-manual', 'add-layer-csv', 'repda-layer', 'repda-nacional-layer'].filter(id => map.getLayer(id))
+                        }});
+                        if (puntosClickeados.length > 0) return;
+
+                        const p = e.features[0].properties;
+                        const formacion = (p.FORMACION && p.FORMACION !== 'null' && p.FORMACION !== 'NINGUNO') ? p.FORMACION : 'Formación No Asignada';
+                        const claveSgm = p["{col_sel_geo_cob}"] || p.ETIQUETA_LITO || 'S/C';
+                        const litologia = p.LITOLOGIA || 'Indiferenciada';
+                        const roca = p.ROCA || 'Sedimentaria';
+                        const colorHex = p.COLOR_HEX || '#B0BEC5';
+                        
+                        let edadGeo = p.PERIODO || '';
+                        if (p.EDINICIO || p.EDFINAL) {{
+                            const ini = p.EDINICIO || '';
+                            const fin = p.EDFINAL || '';
+                            edadGeo += (ini === fin || !fin) ? ` (${{ini}})` : ` (${{ini}} - ${{fin}})`;
+                        }}
+                        if (!edadGeo.trim()) edadGeo = p.ERA || 'S/D';
+
+                        const ptGeo = [e.lngLat.lng, e.lngLat.lat];
+                        let condCob = "";
+                        if (typeof turf !== 'undefined') {{
+                            let esCiega = false;
+                            if (geoCiega && geoCiega.features) {{
+                                for (let f of geoCiega.features) {{
+                                    if (turf.booleanPointInPolygon(ptGeo, f)) {{ esCiega = true; break; }}
+                                }}
+                            }}
+                            if (esCiega) {{
+                                condCob = '<div style="margin-top:4px; padding-top:3px; border-top:1px dashed #e2e8f0; color:#BE123C; font-size:10px; font-weight:700;">🔴 En Zona Ciega de Monitoreo</div>';
+                            }} else {{
+                                condCob = '<div style="margin-top:4px; padding-top:3px; border-top:1px dashed #e2e8f0; color:#059669; font-size:10px; font-weight:700;">🟢 En Cobertura Activa</div>';
+                            }}
+                        }}
+
+                        let html = `
+                            <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; line-height:1.5; min-width:200px;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1.5px solid #E2E8F0; padding-bottom:4px; margin-bottom:6px;">
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <span style="width:13px; height:13px; background:${{colorHex}}; border-radius:3px; border:1px solid #475569; display:inline-block;"></span>
+                                        <h4 style="margin:0; color:#691C32; font-size:13px; font-weight:700;">${{formacion}}</h4>
+                                    </div>
+                                    <span style="background:#F1F5F9; border:1px solid #CBD5E1; color:#334155; font-size:9.5px; font-weight:700; padding:1px 4px; border-radius:3px;">${{claveSgm}}</span>
+                                </div>
+                                <b>Litología:</b> <span style="color:#0f172a; font-weight:600;">${{litologia}}</span><br>
+                                <b>Tipo de Roca:</b> ${{roca}}<br>
+                                <b>Edad Geológica:</b> ${{edadGeo}}<br>
+                                ${{condCob}}
+                                <span style="color:#64748B; font-size:10px;">Coords: ${{e.lngLat.lat.toFixed(4)}}°, ${{e.lngLat.lng.toFixed(4)}}°</span>
+                            </div>
+                        `;
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }}).setLngLat(e.lngLat).setHTML(html).addTo(map);
+                    }});
+                    map.on('mouseenter', 'geo-fill', () => {{ if (typeof modoDibujoActivo !== 'undefined' && !modoDibujoActivo) map.getCanvas().style.cursor = 'pointer'; }});
+                    map.on('mouseleave', 'geo-fill', () => {{ if (typeof modoDibujoActivo !== 'undefined' && !modoDibujoActivo) map.getCanvas().style.cursor = ''; }});
 
                     // 6. Puntos de Referencia Adicionales (Manuales y CSV)
                     map.addSource('add-src', {{ type: 'geojson', data: geoAdd }});
@@ -7540,6 +7745,15 @@ with tab_cobertura:
                     }}
                 }}
 
+                function cambiarOpacidadGeologia(val) {{
+                    const numVal = parseFloat(val);
+                    const pctEl = document.getElementById('val-opac-geo');
+                    if (pctEl) pctEl.innerText = Math.round(numVal * 100) + '%';
+                    if (map.getLayer('geo-fill')) {{
+                        map.setPaintProperty('geo-fill', 'fill-opacity', numVal);
+                    }}
+                }}
+
                 // Conmutación Reactiva de Capas y Sincronización con Leyenda
                 const toggleLayerCob = (chkId, layerIds, legId = null) => {{
                     const chk = document.getElementById(chkId);
@@ -7566,6 +7780,14 @@ with tab_cobertura:
                 toggleLayerCob('chk-repda-nac', ['repda-nacional-layer'], 'leg-repda-nac');
                 toggleLayerCob('chk-manual', ['add-layer-manual'], 'leg-manual');
                 toggleLayerCob('chk-csv', ['add-layer-csv'], 'leg-csv');
+                toggleLayerCob('chk-geo', ['geo-fill', 'geo-line'], 'leg-geo');
+                const chkGeoCob = document.getElementById('chk-geo');
+                if (chkGeoCob) {{
+                    chkGeoCob.addEventListener('change', (e) => {{
+                        const secOpacGeo = document.getElementById('sec-opac-geo');
+                        if (secOpacGeo) secOpacGeo.style.display = e.target.checked ? 'block' : 'none';
+                    }});
+                }}
 
                 // Control de Dock Homologado
                 let dockAbierto = false;
