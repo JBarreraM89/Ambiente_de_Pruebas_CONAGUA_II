@@ -7436,7 +7436,7 @@ with tab_cobertura:
                         type: 'circle',
                         source: 'repda-nacional-src',
                         'source-layer': 'repda',
-                        maxzoom: { '11' if tiene_repda_pts else '24' },
+                        maxzoom: { '11' if tiene_repda_tab3 else '24' },
                         layout: {{ 'visibility': 'none' }},
                         paint: {{
                             'circle-radius': [
