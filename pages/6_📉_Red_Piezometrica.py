@@ -2552,6 +2552,7 @@ with tab_mapa:
                         var_titulo_limpio = "Carga Hidráulica (msnm)" if "Carga" in var_interp else "Profundidad del Nivel (m)"
                         
                         poly_bounds_str = json.dumps(list(geom_activa.bounds)) if geom_activa is not None else "null"
+                        poly_tab1_geojson_str = json.dumps(mapping(geom_activa)) if (geom_activa is not None and GEOPANDAS_INSTALADO) else "null"
                         
                         img_krig_b64 = base64.b64encode(img_kriging).decode('utf-8')
                         img_iso_b64 = base64.b64encode(img_isolineas).decode('utf-8')
@@ -2914,6 +2915,7 @@ with tab_mapa:
                                         <label><input type="checkbox" id="chk-vec" checked> 🧭 Vectores de Flujo</label>
                                         <label><input type="checkbox" id="chk-heat"> 🔥 Mapa de Calor</label>
                                         <label><input type="checkbox" id="chk-pozos" checked> 📍 Red Piezométrica</label>
+                                        <label style="display: {'flex' if geom_activa is not None else 'none'};"><input type="checkbox" id="chk-poly" checked> 🛡️ Límite del Acuífero</label>
                                         <label style="display: {'flex' if tiene_repda_tab1 else 'none'};"><input type="checkbox" id="chk-repda"> 🏢 Concesiones REPDA ({n_repda_tab1})</label>
                                         <label style="display: flex;"><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
                                         <label style="display: {'flex' if hay_manual else 'none'};"><input type="checkbox" id="chk-manual" checked> 🟠 Puntos Manuales</label>
@@ -3432,6 +3434,19 @@ with tab_mapa:
                                         id: 'temp-circle-line', type: 'line', source: 'temp-circle-src',
                                         paint: {{ 'line-color': '#008a3b', 'line-width': 2, 'line-dasharray': [2, 2] }}
                                     }});
+
+                                    const polyTab1Data = {poly_tab1_geojson_str};
+                                    if (polyTab1Data) {{
+                                        map.addSource('poly-tab1-src', {{ type: 'geojson', data: polyTab1Data }});
+                                        map.addLayer({{
+                                            id: 'poly-tab1-fill', type: 'fill', source: 'poly-tab1-src',
+                                            paint: {{ 'fill-color': '#000000', 'fill-opacity': 0.02 }}
+                                        }});
+                                        map.addLayer({{
+                                            id: 'poly-tab1-line', type: 'line', source: 'poly-tab1-src',
+                                            paint: {{ 'line-color': '#691C32', 'line-width': 2.0, 'line-dasharray': [3, 1.5] }}
+                                        }});
+                                    }}
 
                                     const geoData = {geojson_geo_str};
                                     if (geoData.features) {{
@@ -4351,6 +4366,7 @@ with tab_mapa:
                                 toggleLayer('chk-vec', ['vec-layer']);
                                 toggleLayer('chk-heat', ['heat-layer']);
                                 toggleLayer('chk-pozos', ['pozos-layer'], 'leg-pozos');
+                                toggleLayer('chk-poly', ['poly-tab1-fill', 'poly-tab1-line']);
                                 toggleLayer('chk-repda', ['repda-halo-layer', 'repda-layer'], 'leg-repda');
                                 toggleLayer('chk-repda-nac', ['repda-nacional-layer'], 'leg-repda-nac');
                                 toggleLayer('chk-manual', ['add-layer-manual'], 'leg-manual');
@@ -4639,7 +4655,7 @@ with tab_evolucion:
                 "delta_V_hm3": delta_V_hm3,
                 "tasa_V_anual_hm3": tasa_V_anual_hm3,
                 "sy": sy_param,
-                "periodo": f"{anio_ini} – {anio_fin}"
+                "periodo": f"{anio_t1} – {anio_t2}"
             }
 
             min_dh = float(np.min(delta_vals))
