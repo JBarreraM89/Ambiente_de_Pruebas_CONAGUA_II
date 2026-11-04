@@ -37,6 +37,19 @@ from utils.styles import inyectar_css_oficial, banner_institucional
 from core.data_loader import CARPETA_DATOS, cargar_catalogo, cargar_datos_maestros, DIRECTORIO_RAIZ
 from core.pmtiles_server import asegurar_servidor_pmtiles, obtener_url_pmtiles
 
+try:
+    import datetime
+    from docx import Document
+    from docx.shared import Cm, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from core.word_utils import activar_ortografia_y_gramatica_es_mx, configurar_encabezado_repetible_y_paginacion
+    DOCX_DISPONIBLE = True
+except ImportError:
+    DOCX_DISPONIBLE = False
+
 # =======================================================
 # ⚡ FUNCIÓN MÁGICA: Descargas Cero-Rerun (Scope Global)
 # =======================================================
@@ -1488,7 +1501,7 @@ def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
         
     return buf.getvalue(), geojson_bytes, shp_zip_bytes
 
-def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_flujo, inside_mask):
+def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_flujo, inside_mask, transmisividad=0.0):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -1553,6 +1566,9 @@ def render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, variable, densidad_f
             "AZIMUT_DEG": round(float(az), 1),
             "VX": round(float(vx), 5), "VY": round(float(vy), 5)
         }
+        if transmisividad > 0:
+            rec["TRANSMISIVIDAD_M2_DIA"] = round(float(transmisividad), 2)
+            rec["CAUDAL_UNIT_M2_DIA"] = round(float(transmisividad * float(mg)), 3)
         data_records.append(rec)
         features_vec.append({
             "type": "Feature",
@@ -1684,6 +1700,318 @@ def render_imagen_isolineas_evolucion(X, Y, delta_Z_masked, bounds, intervalo_is
     return buf.getvalue(), geojson_bytes, shp_zip_bytes
 
 # =======================================================
+# 📄 GENERADOR DE DICTAMEN GEOHIDROLÓGICO OFICIAL (.DOCX)
+# =======================================================
+def _formatear_celda_dictamen(celda, texto, fondo_hex=None, negrita=False, tamano_pt=9, alineacion=WD_ALIGN_PARAGRAPH.LEFT, color_hex="1E293B", cursiva=False):
+    tcPr = celda._tc.get_or_add_tcPr()
+    tcVAlign = tcPr.find(qn('w:vAlign'))
+    if tcVAlign is None:
+        tcVAlign = OxmlElement('w:vAlign')
+        tcPr.append(tcVAlign)
+    tcVAlign.set(qn('w:val'), "center")
+    
+    if fondo_hex:
+        shd = tcPr.find(qn('w:shd'))
+        if shd is not None:
+            tcPr.remove(shd)
+        tcShd = OxmlElement('w:shd')
+        tcShd.set(qn('w:val'), 'clear')
+        tcShd.set(qn('w:color'), 'auto')
+        tcShd.set(qn('w:fill'), fondo_hex)
+        tcPr.append(tcShd)
+        
+    celda.text = ""
+    p = celda.paragraphs[0]
+    p.alignment = alineacion
+    p.paragraph_format.space_before = Pt(2.5)
+    p.paragraph_format.space_after = Pt(2.5)
+    
+    run = p.add_run(str(texto))
+    run.font.name = 'Calibri'
+    run.font.size = Pt(tamano_pt)
+    run.font.bold = negrita
+    run.font.italic = cursiva
+    if color_hex:
+        run.font.color.rgb = RGBColor.from_string(color_hex)
+
+def _estilizar_tabla_dictamen(tabla, color_borde="CBD5E1"):
+    tabla.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tblPr = tabla._tbl.tblPr
+    tblBorders = tblPr.find(qn('w:tblBorders'))
+    if tblBorders is not None:
+        tblPr.remove(tblBorders)
+    tblBorders = OxmlElement('w:tblBorders')
+    for borde in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
+        el = OxmlElement(f'w:{borde}')
+        el.set(qn('w:val'), 'single')
+        el.set(qn('w:sz'), '4')
+        el.set(qn('w:color'), color_borde)
+        tblBorders.append(el)
+    tblPr.append(tblBorders)
+
+def _agregar_seccion_dictamen(doc, num, titulo):
+    p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(12)
+    p.paragraph_format.space_after = Pt(4)
+    run = p.add_run(f"{num}. {titulo.upper()}")
+    run.bold = True
+    run.font.size = Pt(11)
+    run.font.color.rgb = RGBColor(0x69, 0x1C, 0x32)
+
+def generar_docx_dictamen_piezometrico(
+    clave_acuifero,
+    nombre_acuifero,
+    estado_acuifero,
+    area_km2,
+    df_piezo,
+    poligono_geom=None,
+    t_darcy=0.0,
+    resumen_repda=None,
+    resumen_cobertura=None,
+    resumen_delta_v=None
+):
+    if not DOCX_DISPONIBLE:
+        return b""
+    
+    doc = Document()
+    for s in doc.sections:
+        s.top_margin = Cm(2.0)
+        s.bottom_margin = Cm(2.0)
+        s.left_margin = Cm(2.5)
+        s.right_margin = Cm(2.5)
+
+    # Membrete Oficial CONAGUA
+    p_header = doc.add_paragraph()
+    p_header.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    p_header.paragraph_format.space_after = Pt(2)
+    
+    r1 = p_header.add_run("COMISIÓN NACIONAL DEL AGUA\n")
+    r1.bold = True
+    r1.font.size = Pt(13)
+    r1.font.color.rgb = RGBColor(0x69, 0x1C, 0x32)
+    
+    r2 = p_header.add_run("SUBDIRECCIÓN GENERAL TÉCNICA | GERENCIA DE AGUAS SUBTERRÁNEAS\n")
+    r2.bold = True
+    r2.font.size = Pt(9.5)
+    r2.font.color.rgb = RGBColor(0x24, 0x40, 0x62)
+    
+    r3 = p_header.add_run("DICTAMEN GEOHIDROLÓGICO Y AUDITORÍA DE LA RED PIEZOMÉTRICA\n")
+    r3.bold = True
+    r3.font.size = Pt(12)
+    r3.font.color.rgb = RGBColor(0x11, 0x18, 0x27)
+    
+    p_meta = doc.add_paragraph()
+    p_meta.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_meta.paragraph_format.space_after = Pt(8)
+    fecha_hoy = datetime.date.today().strftime('%d/%m/%Y')
+    r_meta = p_meta.add_run(f"Fecha de emisión: {fecha_hoy} | Folio Oficial: SGT-GAS-PIEZO-{clave_acuifero}-{datetime.date.today().year}")
+    r_meta.font.size = Pt(8.5)
+    r_meta.font.italic = True
+    r_meta.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
+
+    # 1. Identificación
+    _agregar_seccion_dictamen(doc, "1", "Identificación Oficial del Acuífero")
+    t1 = doc.add_table(rows=3, cols=4)
+    _estilizar_tabla_dictamen(t1)
+    filas_t1 = [
+        [("Clave Oficial:", True, "C0D7EE", "244062"), (str(clave_acuifero), False, None, "111827"), ("Nombre Oficial:", True, "C0D7EE", "244062"), (str(nombre_acuifero), True, None, "111827")],
+        [("Entidad Federativa:", True, "C0D7EE", "244062"), (str(estado_acuifero or "N/D"), False, None, "111827"), ("Superficie Oficial:", True, "C0D7EE", "244062"), (f"{float(area_km2):,.2f} km²", False, None, "111827")],
+        [("Estatus Operativo:", True, "C0D7EE", "244062"), ("Red Piezométrica Activa", False, None, "059669"), ("Marco Normativo:", True, "C0D7EE", "244062"), ("NOM-011-CONAGUA-2015", False, None, "111827")]
+    ]
+    for r_i, fila in enumerate(filas_t1):
+        for c_i, (txt, neg, bg, col) in enumerate(fila):
+            _formatear_celda_dictamen(t1.cell(r_i, c_i), txt, fondo_hex=bg, negrita=neg, tamano_pt=9, color_hex=col)
+
+    # 2. Salud de la Red Piezométrica
+    _agregar_seccion_dictamen(doc, "2", "Diagnóstico de Salud y Operatividad de la Red Piezométrica")
+    total_pozos = 0
+    pozos_activos = 0
+    pct_activos = 0.0
+    densidad_str = "N/D"
+    media_prof_str = "N/D"
+    media_elev_str = "N/D"
+    periodo_str = "N/D"
+
+    if df_piezo is not None and not df_piezo.empty:
+        total_pozos = df_piezo['Pozo'].nunique() if 'Pozo' in df_piezo.columns else len(df_piezo)
+        if 'Año' in df_piezo.columns:
+            a_min = int(df_piezo['Año'].min())
+            a_max = int(df_piezo['Año'].max())
+            periodo_str = f"{a_min} – {a_max}"
+            pozos_activos = df_piezo[df_piezo['Año'] >= (a_max - 3)]['Pozo'].nunique() if 'Pozo' in df_piezo.columns else 0
+            pct_activos = (pozos_activos / total_pozos * 100.0) if total_pozos > 0 else 0.0
+        if area_km2 > 0 and pozos_activos > 0:
+            densidad_val = area_km2 / pozos_activos
+            densidad_str = f"1 pozo / {densidad_val:.1f} km²"
+        if 'Prof_NE_m' in df_piezo.columns:
+            m_p = df_piezo['Prof_NE_m'].dropna().mean()
+            if pd.notna(m_p): media_prof_str = f"{float(m_p):.2f} m.b.n.s."
+        if 'Elev_NE_msnm' in df_piezo.columns:
+            m_e = df_piezo['Elev_NE_msnm'].dropna().mean()
+            if pd.notna(m_e): media_elev_str = f"{float(m_e):.2f} m.s.n.m."
+
+    t2 = doc.add_table(rows=4, cols=4)
+    _estilizar_tabla_dictamen(t2)
+    filas_t2 = [
+        [("Pozos Registrados (Censo):", True, "C0D7EE", "244062"), (f"{total_pozos} aprovechamientos", False, None, "111827"), ("Pozos Activos (≤ 3 años):", True, "C0D7EE", "244062"), (f"{pozos_activos} ({pct_activos:.0f}% operatividad)", True, None, "059669" if pct_activos >= 70 else "B91C1C")],
+        [("Pozos Desatendidos:", True, "C0D7EE", "244062"), (f"{total_pozos - pozos_activos} pozos", False, None, "B91C1C" if (total_pozos - pozos_activos) > 0 else "111827"), ("Densidad de Observación:", True, "C0D7EE", "244062"), (densidad_str, False, None, "111827")],
+        [("Nivel Estático Promedio:", True, "C0D7EE", "244062"), (media_prof_str, False, None, "111827"), ("Elevación Piezométrica Media:", True, "C0D7EE", "244062"), (media_elev_str, False, None, "111827")],
+        [("Período de Registro:", True, "C0D7EE", "244062"), (periodo_str, False, None, "111827"), ("Estándar Normativo Requerido:", True, "C0D7EE", "244062"), ("1 pozo / 50–100 km²", False, None, "64748B")]
+    ]
+    for r_i, fila in enumerate(filas_t2):
+        for c_i, (txt, neg, bg, col) in enumerate(fila):
+            _formatear_celda_dictamen(t2.cell(r_i, c_i), txt, fondo_hex=bg, negrita=neg, tamano_pt=9, color_hex=col)
+
+    # 3. REPDA
+    _agregar_seccion_dictamen(doc, "3", "Derechos de Extracción de Aguas Subterráneas (REPDA Oficial)")
+    if resumen_repda and resumen_repda.get("volumen_total_hm3", 0.0) > 0:
+        vol_tot = resumen_repda.get("volumen_total_hm3", 0.0)
+        vol_m3 = resumen_repda.get("volumen_total_m3", vol_tot * 1e6)
+        total_aprov = resumen_repda.get("total_aprovechamientos", 0)
+        uso_pred = resumen_repda.get("uso_predominante", "N/D")
+        pct_pred = resumen_repda.get("pct_predominante", 0.0)
+
+        t3_res = doc.add_table(rows=2, cols=4)
+        _estilizar_tabla_dictamen(t3_res)
+        filas_t3_res = [
+            [("Volumen Total Concesionado:", True, "C0D7EE", "244062"), (f"{vol_tot:,.3f} hm³/año", True, None, "111827"), ("Equivalente en m³/año:", True, "C0D7EE", "244062"), (f"{vol_m3:,.0f} m³/año", False, None, "111827")],
+            [("Aprovechamientos Georreferenciados:", True, "C0D7EE", "244062"), (f"{total_aprov:,} pozos", False, None, "111827"), ("Uso Predominante:", True, "C0D7EE", "244062"), (f"{uso_pred} ({pct_pred:.1f}%)", True, None, "2563EB")]
+        ]
+        for r_i, fila in enumerate(filas_t3_res):
+            for c_i, (txt, neg, bg, col) in enumerate(fila):
+                _formatear_celda_dictamen(t3_res.cell(r_i, c_i), txt, fondo_hex=bg, negrita=neg, tamano_pt=9, color_hex=col)
+
+        df_usos = resumen_repda.get("df_usos", pd.DataFrame())
+        if not df_usos.empty:
+            p_sub = doc.add_paragraph()
+            p_sub.paragraph_format.space_before = Pt(6)
+            p_sub.paragraph_format.space_after = Pt(2)
+            r_sub = p_sub.add_run("Distribución de la Extracción por Tipo de Uso Consuntivo:")
+            r_sub.font.size = Pt(9.5)
+            r_sub.font.bold = True
+            r_sub.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+
+            t3_tab = doc.add_table(rows=len(df_usos) + 2, cols=4)
+            _estilizar_tabla_dictamen(t3_tab)
+            headers = ["Uso Consuntivo", "Volumen (hm³/año)", "Volumen (m³/año)", "Participación (%)"]
+            for c_i, h in enumerate(headers):
+                _formatear_celda_dictamen(t3_tab.cell(0, c_i), h, fondo_hex="244062", negrita=True, tamano_pt=9, color_hex="FFFFFF", alineacion=WD_ALIGN_PARAGRAPH.CENTER)
+
+            for r_idx, (_, row_u) in enumerate(df_usos.iterrows(), start=1):
+                u_nom = str(row_u['Uso'])
+                v_h = float(row_u['Volumen_hm3'])
+                v_m = float(row_u['Volumen_m3'])
+                p_v = float(row_u['Pct_Volumen'])
+                bg_row = "F8FAFC" if (r_idx % 2 == 1) else None
+                _formatear_celda_dictamen(t3_tab.cell(r_idx, 0), u_nom, fondo_hex=bg_row, negrita=False, tamano_pt=9, color_hex="1E293B")
+                _formatear_celda_dictamen(t3_tab.cell(r_idx, 1), f"{v_h:,.3f}", fondo_hex=bg_row, negrita=False, tamano_pt=9, color_hex="1E293B", alineacion=WD_ALIGN_PARAGRAPH.RIGHT)
+                _formatear_celda_dictamen(t3_tab.cell(r_idx, 2), f"{v_m:,.0f}", fondo_hex=bg_row, negrita=False, tamano_pt=9, color_hex="1E293B", alineacion=WD_ALIGN_PARAGRAPH.RIGHT)
+                _formatear_celda_dictamen(t3_tab.cell(r_idx, 3), f"{p_v:.1f}%", fondo_hex=bg_row, negrita=False, tamano_pt=9, color_hex="1E293B", alineacion=WD_ALIGN_PARAGRAPH.RIGHT)
+
+            tot_idx = len(df_usos) + 1
+            _formatear_celda_dictamen(t3_tab.cell(tot_idx, 0), "TOTAL ACUÍFERO", fondo_hex="C0D7EE", negrita=True, tamano_pt=9, color_hex="244062")
+            _formatear_celda_dictamen(t3_tab.cell(tot_idx, 1), f"{vol_tot:,.3f}", fondo_hex="C0D7EE", negrita=True, tamano_pt=9, color_hex="244062", alineacion=WD_ALIGN_PARAGRAPH.RIGHT)
+            _formatear_celda_dictamen(t3_tab.cell(tot_idx, 2), f"{vol_m3:,.0f}", fondo_hex="C0D7EE", negrita=True, tamano_pt=9, color_hex="244062", alineacion=WD_ALIGN_PARAGRAPH.RIGHT)
+            _formatear_celda_dictamen(t3_tab.cell(tot_idx, 3), "100.0%", fondo_hex="C0D7EE", negrita=True, tamano_pt=9, color_hex="244062", alineacion=WD_ALIGN_PARAGRAPH.RIGHT)
+    else:
+        p_no_repda = doc.add_paragraph()
+        p_no_repda.paragraph_format.space_before = Pt(4)
+        p_no_repda.add_run("No se localizaron títulos de concesión en el Registro Público de Derechos de Agua (REPDA) para esta demarcación geohidrológica.").italic = True
+
+    # 4. Auditoría Territorial y Zonas Ciegas
+    _agregar_seccion_dictamen(doc, "4", "Auditoría Territorial y Detección de Zonas Ciegas")
+    if resumen_cobertura:
+        t4 = doc.add_table(rows=3, cols=4)
+        _estilizar_tabla_dictamen(t4)
+        a_cub = resumen_cobertura.get('area_cubierta_km2', 0.0)
+        p_cub = resumen_cobertura.get('pct_cubierta', 0.0)
+        a_cie = resumen_cobertura.get('area_ciega_km2', 0.0)
+        p_cie = resumen_cobertura.get('pct_ciega', 0.0)
+        n_prop = len(resumen_cobertura.get('df_propuestas', [])) if isinstance(resumen_cobertura.get('df_propuestas'), pd.DataFrame) else resumen_cobertura.get('n_propuestos', 0)
+        calif = resumen_cobertura.get('diagnostico', resumen_cobertura.get('calificacion', 'En Evaluación'))
+
+        filas_t4 = [
+            [("Radio de Cobertura Representativo:", True, "C0D7EE", "244062"), ("5.0 km", False, None, "111827"), ("Calificación Territorial:", True, "C0D7EE", "244062"), (str(calif), True, None, "059669" if p_cub >= 70 else "B91C1C")],
+            [("Superficie con Cobertura Activa:", True, "C0D7EE", "244062"), (f"{a_cub:,.1f} km² ({p_cub:.1f}%)", True, None, "059669"), ("Superficie en Zona Ciega (Sin Monitoreo):", True, "C0D7EE", "244062"), (f"{a_cie:,.1f} km² ({p_cie:.1f}%)", True, None, "B91C1C")],
+            [("Pozos Estratégicos Propuestos:", True, "C0D7EE", "244062"), (f"{n_prop} piezómetros sugeridos", True, None, "2563EB"), ("Impacto Geostadístico:", True, "C0D7EE", "244062"), ("Alta incertidumbre en zonas ciegas", False, None, "64748B")]
+        ]
+        for r_i, fila in enumerate(filas_t4):
+            for c_i, (txt, neg, bg, col) in enumerate(fila):
+                _formatear_celda_dictamen(t4.cell(r_i, c_i), txt, fondo_hex=bg, negrita=neg, tamano_pt=9, color_hex=col)
+    else:
+        p_cob_nd = doc.add_paragraph()
+        p_cob_nd.paragraph_format.space_before = Pt(4)
+        p_cob_nd.add_run("Auditoría territorial ejecutada a partir de los puntos piezométricos georreferenciados disponibles en el modelo geostadístico.").italic = True
+
+    # 5. Dinámica de Flujo y Cambio de Almacenamiento
+    _agregar_seccion_dictamen(doc, "5", "Dinámica Hidráulica y Balance de Almacenamiento (NOM-011-CONAGUA-2015)")
+    if resumen_delta_v:
+        dV_hm3 = resumen_delta_v.get("delta_V_hm3", 0.0)
+        tasa_hm3 = resumen_delta_v.get("tasa_V_anual_hm3", 0.0)
+        sy_val = resumen_delta_v.get("sy", 0.10)
+        per_str = resumen_delta_v.get("periodo", "Período Evaluado")
+
+        t5 = doc.add_table(rows=2, cols=4)
+        _estilizar_tabla_dictamen(t5)
+        color_v = "059669" if dV_hm3 >= 0 else "B91C1C"
+        filas_t5 = [
+            [("Cambio de Almacenamiento (ΔV):", True, "C0D7EE", "244062"), (f"{dV_hm3:+,.2f} hm³", True, None, color_v), ("Tasa Anual de Variación:", True, "C0D7EE", "244062"), (f"{tasa_hm3:+,.2f} hm³/año", True, None, color_v)],
+            [("Coeficiente de Almacenamiento (Sy):", True, "C0D7EE", "244062"), (f"{sy_val:.3f}", False, None, "111827"), ("Período de Análisis:", True, "C0D7EE", "244062"), (str(per_str), False, None, "111827")]
+        ]
+        for r_i, fila in enumerate(filas_t5):
+            for c_i, (txt, neg, bg, col) in enumerate(fila):
+                _formatear_celda_dictamen(t5.cell(r_i, c_i), txt, fondo_hex=bg, negrita=neg, tamano_pt=9, color_hex=col)
+
+    # Evaluación de Darcy
+    p_darcy = doc.add_paragraph()
+    p_darcy.paragraph_format.space_before = Pt(6)
+    p_darcy.paragraph_format.space_after = Pt(2)
+    if t_darcy > 0:
+        r_d = p_darcy.add_run(f"• Hidráulica de Darcy Parametrizada: Se incorporó una Transmisividad representativa de T = {t_darcy:,.1f} m²/día. El caudal unitario subterráneo estimado (q = T · i) se calcula a lo largo de las trayectorias preferenciales y transectos de flujo.")
+        r_d.font.size = Pt(9)
+        r_d.font.italic = True
+    else:
+        r_d = p_darcy.add_run("• Criterio Hidráulico en Ausencia de Transmisividad (T): Al no disponerse de pruebas de bombeo calibradas en toda la malla, el análisis físico se fundó en el tensor de gradientes hidráulicos equipotenciales (i = -∇h). Este método identifica de forma rigurosa la dirección ortogonal de las líneas de corriente, las divisorias piezométricas y los conos de abatimiento inducidos por concentración de bombeo.")
+        r_d.font.size = Pt(9)
+        r_d.font.italic = True
+
+    # 6. Conclusiones y Recomendaciones
+    _agregar_seccion_dictamen(doc, "6", "Conclusiones y Recomendaciones Geohidrológicas")
+    recs = [
+        "1. Priorizar la perforación e instrumentación de pozos de observación en las zonas ciegas territoriales identificadas, a fin de mitigar la incertidumbre en la interpolación geostadística por Kriging Ordinario.",
+        "2. Reactivar el programa de medición piezométrica en los pozos desatendidos con más de 3 años de inactividad, restaurando la representatividad histórica de la serie de tiempo.",
+        "3. Establecer monitoreo telemétrico continuo automatizado con transductores piezoresistivos en los sectores con mayor abatimiento piezométrico y mayor densidad de concesiones REPDA.",
+        "4. Realizar pruebas de bombeo escalonadas y de gasto constante para calibrar localmente la transmisividad y el coeficiente de almacenamiento (Sy).",
+        "5. Integrar los resultados del presente dictamen a los estudios técnicos oficiales de actualización de disponibilidad media anual bajo la NOM-011-CONAGUA-2015."
+    ]
+    for rec in recs:
+        p_item = doc.add_paragraph()
+        p_item.paragraph_format.space_before = Pt(2)
+        p_item.paragraph_format.space_after = Pt(2)
+        r_item = p_item.add_run(rec)
+        r_item.font.size = Pt(9)
+        r_item.font.color.rgb = RGBColor(0x33, 0x41, 0x55)
+
+    # Pie de página / Certificación
+    p_cert = doc.add_paragraph()
+    p_cert.paragraph_format.space_before = Pt(16)
+    p_cert.paragraph_format.space_after = Pt(2)
+    p_cert.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r_cert = p_cert.add_run("_____________________________________________________\nDIRECCIÓN DE EVALUACIÓN Y MONITOREO GEOHIDROLÓGICO\nCOMISIÓN NACIONAL DEL AGUA")
+    r_cert.font.size = Pt(8.5)
+    r_cert.font.bold = True
+    r_cert.font.color.rgb = RGBColor(0x69, 0x1C, 0x32)
+
+    try:
+        activar_ortografia_y_gramatica_es_mx(doc)
+    except Exception:
+        pass
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+# =======================================================
 # 📊 8. EJE 1: SALUD E INVENTARIO DE LA RED
 # =======================================================
 with st.container(border=True):
@@ -1705,6 +2033,60 @@ with st.container(border=True):
         col_i3.metric("Densidad Espacial", "N/D", "Sin pozos activos")
 
     col_i4.metric("Sin Datos Recientes", total_pozos - pozos_activos, "Pozos Desatendidos", delta_color="inverse")
+
+st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+
+# =======================================================
+# 📋 8.1 GENERADOR DE DICTAMEN TÉCNICO OFICIAL (.DOCX)
+# =======================================================
+with st.expander("📋 Dictamen Geohidrológico y Ficha Técnica Oficial (.docx)", expanded=False):
+    col_d1, col_d2 = st.columns([3, 1])
+    with col_d1:
+        st.markdown(f"""
+        <div style="font-size:12.5px; color:#334155; line-height:1.5;">
+            <b>Emisión Institucional CONAGUA / Gerencia de Aguas Subterráneas</b><br>
+            Genera un informe pericial y dictamen técnico en formato <b>Microsoft Word (.docx)</b> conforme a los lineamientos
+            oficiales de la <b>NOM-011-CONAGUA-2015</b>. Incluye identificación del acuífero, diagnóstico de salud de la red piezométrica,
+            análisis de derechos de extracción REPDA por tipo de uso consuntivo, auditoría territorial de cobertura (zonas ciegas),
+            cálculo de desalmacenamiento (ΔV) y evaluación hidráulica (Darcy / equipotenciales).
+        </div>
+        """, unsafe_allow_html=True)
+    with col_d2:
+        try:
+            res_repda_doc = cargar_resumen_repda(clave_actual)
+            res_cob_doc = st.session_state.get(f"res_cob_{clave_actual}")
+            if not res_cob_doc and poligono_oficial_geom is not None and df_ac is not None and not df_ac.empty:
+                try:
+                    res_cob_doc = calcular_cobertura_y_zonas_ciegas(df_ac, radio_km=5.0, geom_acuifero=poligono_oficial_geom)
+                except Exception:
+                    res_cob_doc = None
+            
+            res_dv_doc = st.session_state.get(f"res_dv_{clave_actual}")
+            t_darcy_doc = float(st.session_state.get("input_transmisividad_darcy", 0.0) or 0.0)
+
+            fecha_doc_str = datetime.date.today().strftime('%Y%m%d')
+            bytes_dictamen = generar_docx_dictamen_piezometrico(
+                clave_acuifero=clave_actual,
+                nombre_acuifero=nombre_actual,
+                estado_acuifero=st.session_state.get("piezo_sel_edo", "N/D"),
+                area_km2=float(area_actual),
+                df_piezo=df_ac,
+                poligono_geom=poligono_oficial_geom,
+                t_darcy=t_darcy_doc,
+                resumen_repda=res_repda_doc,
+                resumen_cobertura=res_cob_doc,
+                resumen_delta_v=res_dv_doc
+            )
+
+            st.download_button(
+                label="📥 Descargar Dictamen Word (.docx)",
+                data=bytes_dictamen,
+                file_name=f"Dictamen_Geohidrologico_{clave_actual}_{fecha_doc_str}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+        except Exception as e_doc:
+            st.warning(f"Dictamen en preparación ({e_doc})")
 
 st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
 
@@ -1880,6 +2262,17 @@ with tab_mapa:
                 )
                 densidad_flujo = st.slider("Densidad de Vectores de Flujo:", 8, 36, 20, 2, key="slider_densidad_flujo")
 
+                with st.expander("💧 Hidráulica de Flujo Subterráneo (Darcy)", expanded=False):
+                    st.caption(r"Ingresa la Transmisividad representativa ($T$) para estimar el caudal unitario de flujo ($q = T \cdot i$). Si es 0, opera exclusivamente en modo de gradiente hidráulico.")
+                    t_darcy = st.number_input(
+                        "Transmisividad de Referencia (T, m²/día):", 
+                        min_value=0.0, max_value=25000.0, value=0.0, step=50.0, format="%.1f", 
+                        key="input_transmisividad_darcy",
+                        help="Transmisividad del acuífero (T = K · b). Permite calcular q = T · i en m³/día por metro de ancho."
+                    )
+                    if t_darcy > 0:
+                        st.info(f"Modo Darcy Activo: T = {t_darcy:,.1f} m²/día. Se calculará q = T · i en vectores y transecto.")
+
                 with st.expander("📁 Subir Polígono Personalizado", expanded=False):
                     st.caption("Carga un archivo (.geojson o .zip con shapefile) para delimitar el área de estudio.")
                     up_key = f"up_poly_piezo_{st.session_state.get('poly_uploader_key', 0)}"
@@ -1970,7 +2363,7 @@ with tab_mapa:
 
                         img_kriging, vmin, vmax = render_imagen_kriging(X, Y, Z_masked, bounds)
                         img_isolineas, geojson_iso, shp_iso_zip = render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_real)
-                        img_flujo, geojson_flujo, shp_flujo_zip = render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, var_real, densidad_flujo, inside_mask)
+                        img_flujo, geojson_flujo, shp_flujo_zip = render_imagen_vectores(X, Y, Z, grid_x, grid_y, bounds, var_real, densidad_flujo, inside_mask, transmisividad=t_darcy)
 
                         geotiff_bytes = generar_geotiff_bytes(Z_masked, bounds)
                         mask_val = ~np.isnan(Z_masked)
@@ -3173,6 +3566,7 @@ with tab_mapa:
                                         type: 'circle',
                                         source: 'repda-nacional-src',
                                         'source-layer': 'repda',
+                                        maxzoom: { '11' if tiene_repda_tab1 else '24' },
                                         layout: {{ 'visibility': 'none' }},
                                         paint: {{
                                             'circle-radius': [
@@ -3566,6 +3960,12 @@ with tab_mapa:
                                         `Longitud: ${{p.mTotal.toFixed(0)}} m | Azimut: ${{p.azimut.toFixed(1)}}° (${{p.cuadrante}}) | Gradiente: ${{p.gradienteM_Km.toFixed(3)}} m/km`;
 
                                     const statsBox = document.getElementById('perfil-stats-box');
+                                    const tDarcyVal = {t_darcy};
+                                    let qDarcyHtml = '';
+                                    if (tDarcyVal > 0) {{
+                                        const qUnit = (tDarcyVal * Math.abs(p.gradienteM_M)).toFixed(3);
+                                        qDarcyHtml = `<div class="perfil-stat-row" style="color:#0284c7;"><span>Caudal Darcy (q):</span> <b>${{qUnit}} m³/día/m</b></div>`;
+                                    }}
                                     statsBox.innerHTML = `
                                         <div class="perfil-stat-row"><span>Longitud A-A':</span> <b>${{p.mTotal.toFixed(0)}} m (${{p.kmTotal.toFixed(2)}} km)</b></div>
                                         <div class="perfil-stat-row"><span>Azimut Geográfico:</span> <b>${{p.azimut.toFixed(1)}}° (${{p.cuadrante}})</b></div>
@@ -3576,6 +3976,7 @@ with tab_mapa:
                                         <div class="perfil-stat-row" style="border-top:1px solid #e2e8f0; padding-top:4px;">
                                             <span>Flujo Subterráneo:</span> <b style="color:#166534;">${{p.direccionFlujo}}</b>
                                         </div>
+                                        ${{qDarcyHtml}}
                                     `;
 
                                     setTimeout(() => {{
@@ -4234,6 +4635,12 @@ with tab_evolucion:
             delta_V_m3 = float(np.sum(delta_vals * sy_param * dA_m2))
             delta_V_hm3 = delta_V_m3 / 1e6
             tasa_V_anual_hm3 = delta_V_hm3 / dt_anios
+            st.session_state[f"res_dv_{clave_actual}"] = {
+                "delta_V_hm3": delta_V_hm3,
+                "tasa_V_anual_hm3": tasa_V_anual_hm3,
+                "sy": sy_param,
+                "periodo": f"{anio_ini} – {anio_fin}"
+            }
 
             min_dh = float(np.min(delta_vals))
             max_dh = float(np.max(delta_vals))
@@ -5514,6 +5921,7 @@ with tab_evolucion:
                         type: 'circle',
                         source: 'repda-nacional-src',
                         'source-layer': 'repda',
+                        maxzoom: { '11' if tiene_repda_pts else '24' },
                         layout: {{ 'visibility': 'none' }},
                         paint: {{
                             'circle-radius': [
@@ -6129,6 +6537,8 @@ with tab_cobertura:
         if res is None:
             st.error("No se pudo calcular la cobertura espacial con la geometría proporcionada.")
             return
+
+        st.session_state[f"res_cob_{clave_actual}"] = res
 
         with st.container(border=True):
             m1, m2, m3, m4 = st.columns(4)
@@ -7010,6 +7420,7 @@ with tab_cobertura:
                         type: 'circle',
                         source: 'repda-nacional-src',
                         'source-layer': 'repda',
+                        maxzoom: { '11' if tiene_repda_pts else '24' },
                         layout: {{ 'visibility': 'none' }},
                         paint: {{
                             'circle-radius': [
