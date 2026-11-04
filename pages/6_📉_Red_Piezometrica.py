@@ -1467,7 +1467,7 @@ def _geom_a_kml(geom):
             res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
             for ring in coords[1:]:
                 inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
-                res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+                res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></innerBoundaryIs>")
             res.append("</Polygon>")
             return "".join(res)
         elif gtype == "MultiPolygon":
@@ -1479,7 +1479,7 @@ def _geom_a_kml(geom):
                 res.append(f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>")
                 for ring in poly[1:]:
                     inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
-                    res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+                    res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></innerBoundaryIs>")
                 res.append("</Polygon>")
             res.append("</MultiGeometry>")
             return "".join(res)
@@ -1504,7 +1504,7 @@ def _geom_a_kml(geom):
         res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
         for interior in geom.interiors:
             inte = " ".join([f"{x},{y},0" for x, y in interior.coords])
-            res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+            res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></innerBoundaryIs>")
         res.append("</Polygon>")
         return "".join(res)
     elif gt == 'MultiPolygon':
@@ -1514,6 +1514,32 @@ def _geom_a_kml(geom):
         res.append("</MultiGeometry>")
         return "".join(res)
     return ""
+
+def _extraer_punto_medio(geom):
+    """Extrae las coordenadas [lon, lat] del punto medio de una línea para rotular cotas en KML."""
+    if geom is None:
+        return None
+    try:
+        if isinstance(geom, dict):
+            gtype = geom.get("type", "")
+            coords = geom.get("coordinates", [])
+            if gtype == "LineString" and coords:
+                return coords[len(coords) // 2]
+            elif gtype == "MultiLineString" and coords:
+                longest = max(coords, key=lambda l: len(l)) if coords else []
+                return longest[len(longest) // 2] if longest else None
+        elif hasattr(geom, "geom_type"):
+            if geom.geom_type == "LineString" and not geom.is_empty:
+                pt = geom.interpolate(0.5, normalized=True)
+                return [pt.x, pt.y]
+            elif geom.geom_type == "MultiLineString" and not geom.is_empty:
+                longest = max(geom.geoms, key=lambda g: g.length) if geom.geoms else None
+                if longest:
+                    pt = longest.interpolate(0.5, normalized=True)
+                    return [pt.x, pt.y]
+    except Exception:
+        pass
+    return None
 
 def _parse_geojson_features(geojson_input):
     if not geojson_input:
@@ -1549,7 +1575,7 @@ def _construir_kml_geologia(geojson_geo):
     feat_geo = _parse_geojson_features(geojson_geo)
     if not feat_geo:
         return []
-    lines = [f'  <Folder><name>Geología SGM ({len(feat_geo)} unidades litológicas)</name>']
+    lines = [f'  <Folder><name>Geología SGM ({len(feat_geo)} unidades litológicas)</name><open>0</open>']
     for idx, feat in enumerate(feat_geo):
         props = feat.get("properties", {})
         geom = feat.get("geometry", {})
@@ -1569,6 +1595,7 @@ def _construir_kml_geologia(geojson_geo):
             lines.append('      <Style>')
             lines.append(f'        <LineStyle><color>{kml_borde}</color><width>1.0</width></LineStyle>')
             lines.append(f'        <PolyStyle><color>{kml_color}</color><fill>1</fill><outline>1</outline></PolyStyle>')
+            lines.append('        <LabelStyle><scale>0</scale></LabelStyle>')
             lines.append('      </Style>')
             lines.append('      <description><![CDATA[')
             lines.append('        <div style="font-family:Arial,sans-serif;font-size:11.5px;min-width:200px;">')
@@ -1589,11 +1616,11 @@ def _construir_kml_geologia(geojson_geo):
     return lines
 
 def _construir_kml_repda(geojson_repda):
-    """Genera las etiquetas KML para las Concesiones y Captaciones REPDA del acuífero."""
+    """Genera las etiquetas KML para las Concesiones y Captaciones REPDA del acuífero con colores de uso y sin saturación visual."""
     feat_repda = _parse_geojson_features(geojson_repda)
     if not feat_repda:
         return []
-    lines = [f'  <Folder><name>Concesiones REPDA ({len(feat_repda)} captaciones)</name>']
+    lines = [f'  <Folder><name>Concesiones REPDA ({len(feat_repda)} captaciones)</name><open>0</open>']
     for idx, feat in enumerate(feat_repda):
         props = feat.get("properties", {})
         coords = feat.get("geometry", {}).get("coordinates", [])
@@ -1605,13 +1632,16 @@ def _construir_kml_repda(geojson_repda):
         vol_m3 = float(props.get("volumen_m3", props.get("VOL_TOTAL", props.get("volumen", 0.0))))
         vol_hm3 = float(props.get("volumen_hm3", vol_m3 / 1e6))
         prof = float(props.get("profundidad_m", 0.0))
-        color_uso = props.get("color", "#9333ea")
+        color_uso = props.get("color") or get_repda_uso_color(uso)
         kml_color = _hex_a_kml_color(color_uso, alpha="ff")
+
+        prof_row = f'            <tr><td style="color:#64748b;">Profundidad de Perforación:</td><td>{prof:.1f} m</td></tr>' if prof > 0 else ''
 
         lines.append('    <Placemark>')
         lines.append(f'      <name>{folio} ({uso})</name>')
         lines.append('      <Style>')
-        lines.append(f'        <IconStyle><scale>0.85</scale><color>{kml_color}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+        lines.append(f'        <IconStyle><scale>0.6</scale><color>{kml_color}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+        lines.append('        <LabelStyle><scale>0</scale></LabelStyle>')
         lines.append('      </Style>')
         lines.append('      <description><![CDATA[')
         lines.append('        <div style="font-family:Arial,sans-serif;font-size:11.5px;min-width:220px;">')
@@ -1620,8 +1650,8 @@ def _construir_kml_repda(geojson_repda):
         lines.append(f'            <tr><td style="color:#64748b;">Titular:</td><td><b>{titular}</b></td></tr>')
         lines.append(f'            <tr><td style="color:#64748b;">Uso Concesionado:</td><td><b>{uso}</b></td></tr>')
         lines.append(f'            <tr><td style="color:#64748b;">Volumen Anual:</td><td><b>{vol_m3:,.1f} m³/año</b> ({vol_hm3:.4f} hm³)</td></tr>')
-        if prof > 0:
-            lines.append(f'            <tr><td style="color:#64748b;">Profundidad de Perforación:</td><td>{prof:.1f} m</td></tr>')
+        if prof_row:
+            lines.append(prof_row)
         lines.append(f'            <tr><td style="color:#64748b;">Coordenadas:</td><td>{coords[1]:.5f}, {coords[0]:.5f}</td></tr>')
         lines.append('          </table>')
         lines.append('        </div>')
@@ -1664,19 +1694,21 @@ def generar_kmz_dinamica_flujo(
         '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
         '  </Style>',
         '  <Style id="style-iso">',
-        '    <LineStyle><color>ffe0d000</color><width>2.0</width></LineStyle>',
+        '    <LineStyle><color>ffe0d000</color><width>2.2</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.85</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-flujo-line">',
-        '    <LineStyle><color>ffd07000</color><width>2.2</width></LineStyle>',
+        '    <LineStyle><color>ffd07000</color><width>2.6</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
         '  </Style>',
-        '  <Style id="style-pozo-real">',
-        '    <IconStyle><scale>0.9</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-circle.png</href></Icon></IconStyle>',
+        '  <Style id="style-pozo-extra-manual">',
+        '    <IconStyle><scale>0.85</scale><color>ff0054d3</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.8</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>',
-        '  <Style id="style-pozo-interp">',
-        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/ylw-circle.png</href></Icon></IconStyle>',
-        '  </Style>',
-        '  <Style id="style-pozo-extra">',
-        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-circle.png</href></Icon></IconStyle>',
+        '  <Style id="style-pozo-extra-csv">',
+        '    <IconStyle><scale>0.85</scale><color>ffb98029</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.8</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>'
     ]
 
@@ -1715,9 +1747,15 @@ def generar_kmz_dinamica_flujo(
             props = feat.get("properties", {})
             cota = props.get("COTA_M", "N/D")
             geom_kml = _geom_a_kml(geom)
+            mid_pt = _extraer_punto_medio(geom)
             if geom_kml:
+                if mid_pt:
+                    geom_final = f"<MultiGeometry>{geom_kml}<Point><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
+                else:
+                    geom_final = geom_kml
+
                 kml.append('    <Placemark>')
-                kml.append(f'      <name>Cota {cota} {unidad}</name>')
+                kml.append(f'      <name>{cota} {unidad}</name>')
                 kml.append('      <styleUrl>#style-iso</styleUrl>')
                 kml.append('      <description><![CDATA[')
                 kml.append(f'        <div style="font-family:Arial,sans-serif;font-size:11px;">')
@@ -1726,7 +1764,7 @@ def generar_kmz_dinamica_flujo(
                 kml.append(f'          Variable: {var_label}')
                 kml.append('        </div>')
                 kml.append('      ]]></description>')
-                kml.append(f'      {geom_kml}')
+                kml.append(f'      {geom_final}')
                 kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -1741,11 +1779,11 @@ def generar_kmz_dinamica_flujo(
             coords = feat.get("geometry", {}).get("coordinates", [])
             if len(coords) < 2:
                 continue
-            lo, la = coords[0], coords[1]
-            vx = props.get("VX", 0.0)
-            vy = props.get("VY", 0.0)
-            grad_m_km = props.get("GRAD_M_KM", 0.0)
-            az = props.get("AZIMUT_DEG", 0.0)
+            lo, la = float(coords[0]), float(coords[1])
+            vx = float(props.get("VX", 0.0))
+            vy = float(props.get("VY", 0.0))
+            grad_m_km = float(props.get("GRAD_M_KM", 0.0))
+            az = float(props.get("AZIMUT_DEG", 0.0))
             trans = props.get("TRANSMISIVIDAD_M2_DIA", None)
             caudal = props.get("CAUDAL_UNIT_M2_DIA", None)
 
@@ -1754,9 +1792,29 @@ def generar_kmz_dinamica_flujo(
                 dx = (vx / mag) * len_base
                 dy = (vy / mag) * len_base
             else:
-                dx, dy = 0.0, 0.0
+                continue
 
-            line_coords = f"{lo},{la},0 {lo + dx},{la + dy},0"
+            x1 = lo + dx
+            y1 = la + dy
+
+            # Geometría con cabeza de flecha continua (P0 -> P1 -> W1 -> W2 -> P1)
+            cos_lat = max(0.2, math.cos(math.radians(la)))
+            dx_m = dx * cos_lat
+            dy_m = dy
+            len_m = math.hypot(dx_m, dy_m)
+            if len_m > 0:
+                theta = math.atan2(dy_m, dx_m)
+                l_wing = len_m * 0.35
+                a1 = theta + math.radians(150)
+                a2 = theta - math.radians(150)
+                w1x = x1 + (l_wing * math.cos(a1)) / cos_lat
+                w1y = y1 + (l_wing * math.sin(a1))
+                w2x = x1 + (l_wing * math.cos(a2)) / cos_lat
+                w2y = y1 + (l_wing * math.sin(a2))
+                line_coords = f"{lo:.6f},{la:.6f},0 {x1:.6f},{y1:.6f},0 {w1x:.6f},{w1y:.6f},0 {w2x:.6f},{w2y:.6f},0 {x1:.6f},{y1:.6f},0"
+            else:
+                line_coords = f"{lo:.6f},{la:.6f},0 {x1:.6f},{y1:.6f},0"
+
             desc_flujo = f"""
             <div style="font-family:Arial,sans-serif;font-size:11px;min-width:200px;">
               <b style="color:#0284c7;">Vector Hidrodinámico #{idx+1}</b><br>
@@ -1785,13 +1843,18 @@ def generar_kmz_dinamica_flujo(
             val = float(r.get(var_real, 0.0))
             t_dato = str(r.get("Tipo_Dato", "Medición Real"))
             anio_m = int(r.get("Año_Medido", r.get("Año", anio_sel)))
-            style_u = "#style-pozo-real" if "real" in t_dato.lower() else "#style-pozo-interp"
+            col_p = r.get("Color")
+            if not col_p or pd.isna(col_p):
+                col_p = "#285c4d"
+            tend_p = str(r.get("Tendencia", "Monitoreo Oficial"))
+            kml_col = _hex_a_kml_color(col_p, alpha="ff")
 
             desc_pz = f"""
-            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:210px;">
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:215px;">
               <h4 style="color:#691C32;margin:0 0 4px 0;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">📍 Pozo: {pz_nom}</h4>
               <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
                 <tr><td style="color:#64748b;">Nivel ({unidad}):</td><td><b>{val:.2f} {unidad}</b></td></tr>
+                <tr><td style="color:#64748b;">Tendencia Piezométrica:</td><td><b>{tend_p}</b></td></tr>
                 <tr><td style="color:#64748b;">Año Sincronizado:</td><td>{anio_sel} (Medido: {anio_m})</td></tr>
                 <tr><td style="color:#64748b;">Tipo de Registro:</td><td>{t_dato}</td></tr>
                 <tr><td style="color:#64748b;">Coordenadas:</td><td>{lat:.5f}, {lon:.5f}</td></tr>
@@ -1800,7 +1863,10 @@ def generar_kmz_dinamica_flujo(
             """
             kml.append('    <Placemark>')
             kml.append(f'      <name>{pz_nom} ({val:.1f} {unidad})</name>')
-            kml.append(f'      <styleUrl>{style_u}</styleUrl>')
+            kml.append('      <Style>')
+            kml.append(f'        <IconStyle><scale>0.85</scale><color>{kml_col}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+            kml.append('        <LabelStyle><scale>0.75</scale><color>ffffffff</color></LabelStyle>')
+            kml.append('      </Style>')
             kml.append(f'      <description><![CDATA[{desc_pz}]]></description>')
             kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
@@ -1814,9 +1880,10 @@ def generar_kmz_dinamica_flujo(
             lon_pt = float(pt.get("lon", 0.0))
             fuente_pt = pt.get("fuente", "manual")
             tipo_pt = pt.get("tipo", "Marcador")
+            style_pt = "#style-pozo-extra-csv" if fuente_pt == "csv" else "#style-pozo-extra-manual"
             kml.append('    <Placemark>')
             kml.append(f'      <name>{nom_pt}</name>')
-            kml.append('      <styleUrl>#style-pozo-extra</styleUrl>')
+            kml.append(f'      <styleUrl>{style_pt}</styleUrl>')
             kml.append('      <description><![CDATA[')
             kml.append(f'        <b>{nom_pt}</b><br>Fuente: {fuente_pt}<br>Tipo: {tipo_pt}<br>Coord: {lat_pt:.5f}, {lon_pt:.5f}')
             kml.append('      ]]></description>')
@@ -1834,7 +1901,7 @@ def generar_kmz_dinamica_flujo(
 
     kml.append('</Document>')
     kml.append('</kml>')
-    kml_str = '\n'.join(kml)
+    kml_str = chr(10).join(kml)
 
     buf_kmz = io.BytesIO()
     with zipfile.ZipFile(buf_kmz, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -1873,31 +1940,19 @@ def generar_kmz_evolucion(
         '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
         '  </Style>',
         '  <Style id="style-iso-abat">',
-        '    <LineStyle><color>ff0000b3</color><width>2.0</width></LineStyle>',
+        '    <LineStyle><color>ff0000b3</color><width>2.2</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.85</scale><color>ff8888ff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-iso-recup">',
-        '    <LineStyle><color>ffcc5500</color><width>2.0</width></LineStyle>',
+        '    <LineStyle><color>ffcc5500</color><width>2.2</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.85</scale><color>ffffff88</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-iso-equil">',
         '    <LineStyle><color>ff503e2c</color><width>2.2</width></LineStyle>',
-        '  </Style>',
-        '  <Style id="style-pz-critico">',
-        '    <IconStyle><scale>1.0</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href></Icon></IconStyle>',
-        '  </Style>',
-        '  <Style id="style-pz-moderado">',
-        '    <IconStyle><scale>0.9</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-circle.png</href></Icon></IconStyle>',
-        '  </Style>',
-        '  <Style id="style-pz-leve">',
-        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/ylw-circle.png</href></Icon></IconStyle>',
-        '  </Style>',
-        '  <Style id="style-pz-recup">',
-        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-circle.png</href></Icon></IconStyle>',
-        '  </Style>',
-        '  <Style id="style-pz-equil">',
-        '    <IconStyle><scale>0.8</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/wht-circle.png</href></Icon></IconStyle>',
-        '  </Style>',
-        '  <Style id="style-repda">',
-        '    <IconStyle><scale>0.7</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_square.png</href></Icon><color>ff800080</color></IconStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.85</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>'
     ]
 
@@ -1943,14 +1998,20 @@ def generar_kmz_evolucion(
                 style_iso = "#style-iso-equil"
 
             geom_kml = _geom_a_kml(geom)
+            mid_pt = _extraer_punto_medio(geom)
             if geom_kml:
+                if mid_pt:
+                    geom_final = f"<MultiGeometry>{geom_kml}<Point><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
+                else:
+                    geom_final = geom_kml
+
                 kml.append('    <Placemark>')
-                kml.append(f'      <name>Δh = {dh_val:+.1f} m ({tipo_iso})</name>')
+                kml.append(f'      <name>Δh = {dh_val:+.1f} m</name>')
                 kml.append(f'      <styleUrl>{style_iso}</styleUrl>')
                 kml.append('      <description><![CDATA[')
                 kml.append(f'        <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Comportamiento:</b> {tipo_iso}')
                 kml.append('      ]]></description>')
-                kml.append(f'      {geom_kml}')
+                kml.append(f'      {geom_final}')
                 kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -1965,16 +2026,14 @@ def generar_kmz_evolucion(
             tasa = float(r.get("Tasa_m_anio", 0.0))
             cond = str(r.get("Condicion", "N/D"))
 
-            if "crítico" in cond.lower() or "severo" in cond.lower():
-                style_pz = "#style-pz-critico"
-            elif "moderado" in cond.lower():
-                style_pz = "#style-pz-moderado"
-            elif "leve" in cond.lower():
-                style_pz = "#style-pz-leve"
-            elif "recuper" in cond.lower():
-                style_pz = "#style-pz-recup"
-            else:
-                style_pz = "#style-pz-equil"
+            col_p = r.get("Color")
+            if not col_p or pd.isna(col_p):
+                if "crítico" in cond.lower() or "severo" in cond.lower(): col_p = "#9f2241"
+                elif "moderado" in cond.lower(): col_p = "#ea580c"
+                elif "leve" in cond.lower(): col_p = "#f59e0b"
+                elif "recuper" in cond.lower(): col_p = "#16a34a"
+                else: col_p = "#64748b"
+            kml_col = _hex_a_kml_color(col_p, alpha="ff")
 
             c1 = r.get(f"Carga_{anio_t1}_msnm", "N/D")
             c2 = r.get(f"Carga_{anio_t2}_msnm", "N/D")
@@ -1994,7 +2053,10 @@ def generar_kmz_evolucion(
             """
             kml.append('    <Placemark>')
             kml.append(f'      <name>{pz_nom} ({dh:+.1f} m | {tasa:+.2f} m/a)</name>')
-            kml.append(f'      <styleUrl>{style_pz}</styleUrl>')
+            kml.append('      <Style>')
+            kml.append(f'        <IconStyle><scale>0.85</scale><color>{kml_col}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+            kml.append('        <LabelStyle><scale>0.75</scale><color>ffffffff</color></LabelStyle>')
+            kml.append('      </Style>')
             kml.append(f'      <description><![CDATA[{desc_pz}]]></description>')
             kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
@@ -2010,7 +2072,7 @@ def generar_kmz_evolucion(
 
     kml.append('</Document>')
     kml.append('</kml>')
-    kml_str = '\n'.join(kml)
+    kml_str = chr(10).join(kml)
 
     buf_kmz = io.BytesIO()
     with zipfile.ZipFile(buf_kmz, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -2064,10 +2126,12 @@ def generar_kmz_cobertura(
         '    <PolyStyle><color>4d22aa22</color><fill>1</fill><outline>1</outline></PolyStyle>',
         '  </Style>',
         '  <Style id="style-pozo-exist">',
-        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-circle.png</href></Icon></IconStyle>',
+        '    <IconStyle><scale>0.85</scale><color>ffd07000</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.75</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-pozo-prop">',
-        '    <IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-stars.png</href></Icon></IconStyle>',
+        '    <IconStyle><scale>1.0</scale><color>ff0099ff</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/target.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.8</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>'
     ]
 
@@ -2162,7 +2226,7 @@ def generar_kmz_cobertura(
             </div>
             """
             kml.append('    <Placemark>')
-            kml.append(f'      <name>{p_id} (Prioridad {prio})</name>')
+            kml.append(f'      <name>Sitio Sugerido {p_id}</name>')
             kml.append('      <styleUrl>#style-pozo-prop</styleUrl>')
             kml.append(f'      <description><![CDATA[{desc_prop}]]></description>')
             kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
@@ -2179,7 +2243,7 @@ def generar_kmz_cobertura(
 
     kml.append('</Document>')
     kml.append('</kml>')
-    kml_str = '\n'.join(kml)
+    kml_str = chr(10).join(kml)
 
     buf_kmz = io.BytesIO()
     with zipfile.ZipFile(buf_kmz, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -3238,13 +3302,20 @@ with tab_mapa:
                         
                         # 1. Preparar GeoJSON de Pozos Oficiales
                         features_pozos = []
+                        colores_tab1 = []
+                        tendencias_tab1 = []
                         for _, row in df_ultimo.iterrows():
                             df_hist = df_ac[df_ac['Pozo'].astype(str) == str(row['Pozo'])]
                             if len(df_hist) >= 2:
                                 z_trend = np.polyfit(df_hist['Año'], df_hist['Profundidad_NE'], 1)[0]
                                 color_punto = "#9f2241" if z_trend > 0.1 else ("#285c4d" if z_trend < -0.1 else "#b38e5d")
+                                tend_txt = f"Abatimiento ({z_trend:+.2f} m/año)" if z_trend > 0.1 else (f"Recuperación ({z_trend:+.2f} m/año)" if z_trend < -0.1 else f"Estable ({z_trend:+.2f} m/año)")
                             else:
                                 color_punto = "#9e9d9e"
+                                tend_txt = "Sin Historial Suficiente"
+                            
+                            colores_tab1.append(color_punto)
+                            tendencias_tab1.append(tend_txt)
                             tipo_dato_txt = str(row.get('Tipo_Dato', 'Medición Real'))
                             anio_medido_txt = int(row.get('Año_Medido', row['Año']))
                             features_pozos.append({
@@ -3257,9 +3328,12 @@ with tab_mapa:
                                     "Año_Medido": anio_medido_txt,
                                     "Tipo": tipo_dato_txt,
                                     "Color": color_punto,
+                                    "Tendencia": tend_txt,
                                     "Variable": var_real
                                 }
                             })
+                        df_ultimo['Color'] = colores_tab1
+                        df_ultimo['Tendencia'] = tendencias_tab1
                         geojson_pozos_str = json.dumps({"type": "FeatureCollection", "features": features_pozos})
 
                         # 2. Preparar GeoJSON de Puntos Adicionales (Manual/CSV)
