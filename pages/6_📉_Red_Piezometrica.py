@@ -3402,16 +3402,19 @@ with tab_mapa:
                                     if (btn) btn.classList.remove('active');
                                 }}
 
-                                document.getElementById('sel-basemap').addEventListener('change', (e) => {{
-                                    const selected = e.target.value;
-                                    const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
-                                    
-                                    basemaps.forEach(id => {{
-                                        if (map.getLayer(id)) {{
-                                            map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
-                                        }}
+                                const selBasemap = document.getElementById('sel-basemap');
+                                if (selBasemap) {{
+                                    selBasemap.addEventListener('change', (e) => {{
+                                        const selected = e.target.value;
+                                        const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
+                                        
+                                        basemaps.forEach(id => {{
+                                            if (map.getLayer(id)) {{
+                                                map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
+                                            }}
+                                        }});
                                     }});
-                                }});
+                                }}
 
                                 const z_data = {z_data_json};
                                 const bounds = {bounds_json};
@@ -6041,18 +6044,22 @@ with tab_evolucion:
                     }}
                 }});
 
-                document.getElementById('sel-basemap').addEventListener('change', (e) => {{
-                    const selected = e.target.value;
-                    const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
-                    basemaps.forEach(id => {{
-                        if (map.getLayer(id)) {{
-                            map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
-                        }}
+                const selBasemap = document.getElementById('sel-basemap');
+                if (selBasemap) {{
+                    selBasemap.addEventListener('change', (e) => {{
+                        const selected = e.target.value;
+                        const basemaps = ['base-light-layer', 'base-sat-layer', 'base-topo-layer', 'base-osm-layer', 'base-street-layer', 'base-terrain-layer', 'base-ocean-layer', 'base-dark-layer', 'base-google-layer'];
+                        basemaps.forEach(id => {{
+                            if (map.getLayer(id)) {{
+                                map.setLayoutProperty(id, 'visibility', id === selected ? 'visible' : 'none');
+                            }}
+                        }});
                     }});
-                }});
+                }}
 
                 function cambiarOpacidadEvo(val) {{
-                    document.getElementById('val-opac').innerText = Math.round(val * 100) + '%';
+                    const el = document.getElementById('val-opac');
+                    if (el) el.innerText = Math.round(val * 100) + '%';
                     if (map.getLayer('kriging-layer')) {{
                         map.setPaintProperty('kriging-layer', 'raster-opacity', parseFloat(val));
                     }}
@@ -6066,59 +6073,33 @@ with tab_evolucion:
                     }}
                 }}
 
-                document.getElementById('chk-kriging').addEventListener('change', (e) => {{
-                    if (map.getLayer('kriging-layer')) {{
-                        map.setLayoutProperty('kriging-layer', 'visibility', e.target.checked ? 'visible' : 'none');
+                const toggleLayerEvo = (chkId, layerIds, legId = null) => {{
+                    const chk = document.getElementById(chkId);
+                    if (chk) {{
+                        chk.addEventListener('change', (e) => {{
+                            const vis = e.target.checked ? 'visible' : 'none';
+                            layerIds.forEach(id => {{
+                                if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+                            }});
+                            if (legId) {{
+                                const leg = document.getElementById(legId);
+                                if (leg) leg.style.display = e.target.checked ? 'block' : 'none';
+                            }}
+                        }});
                     }}
-                }});
+                }};
 
-                document.getElementById('chk-iso').addEventListener('change', (e) => {{
-                    if (map.getLayer('iso-layer')) {{
-                        map.setLayoutProperty('iso-layer', 'visibility', e.target.checked ? 'visible' : 'none');
-                    }}
-                }});
-
-                document.getElementById('chk-pozos').addEventListener('change', (e) => {{
-                    if (map.getLayer('pozos-layer')) {{
-                        map.setLayoutProperty('pozos-layer', 'visibility', e.target.checked ? 'visible' : 'none');
-                    }}
-                }});
-
-                const chkRepda = document.getElementById('chk-repda');
-                if (chkRepda) {{
-                    chkRepda.addEventListener('change', (e) => {{
-                        const vis = e.target.checked ? 'visible' : 'none';
-                        if (map.getLayer('repda-layer')) map.setLayoutProperty('repda-layer', 'visibility', vis);
-                        if (map.getLayer('repda-halo-layer')) map.setLayoutProperty('repda-halo-layer', 'visibility', vis);
-                    }});
-                }}
-
-                const chkRepdaNac = document.getElementById('chk-repda-nac');
-                if (chkRepdaNac) {{
-                    chkRepdaNac.addEventListener('change', (e) => {{
-                        const vis = e.target.checked ? 'visible' : 'none';
-                        if (map.getLayer('repda-nacional-layer')) map.setLayoutProperty('repda-nacional-layer', 'visibility', vis);
-                        const legNac = document.getElementById('leg-repda-nac');
-                        if (legNac) legNac.style.display = e.target.checked ? 'block' : 'none';
-                    }});
-                }}
-
-                document.getElementById('chk-poly').addEventListener('change', (e) => {{
-                    if (map.getLayer('poly-layer-line')) {{
-                        const vis = e.target.checked ? 'visible' : 'none';
-                        map.setLayoutProperty('poly-layer-line', 'visibility', vis);
-                        map.setLayoutProperty('poly-layer-fill', 'visibility', vis);
-                    }}
-                }});
+                toggleLayerEvo('chk-kriging', ['kriging-layer']);
+                toggleLayerEvo('chk-iso', ['iso-layer']);
+                toggleLayerEvo('chk-pozos', ['pozos-layer'], 'leg-pozos');
+                toggleLayerEvo('chk-poly', ['poly-layer-line', 'poly-layer-fill'], 'leg-poly');
+                toggleLayerEvo('chk-repda', ['repda-halo-layer', 'repda-layer'], 'leg-repda');
+                toggleLayerEvo('chk-repda-nac', ['repda-nacional-layer'], 'leg-repda-nac');
+                toggleLayerEvo('chk-geo', ['geo-fill', 'geo-line'], 'leg-geo');
 
                 const chkGeo = document.getElementById('chk-geo');
                 if (chkGeo) {{
                     chkGeo.addEventListener('change', (e) => {{
-                        const vis = e.target.checked ? 'visible' : 'none';
-                        if (map.getLayer('geo-fill')) map.setLayoutProperty('geo-fill', 'visibility', vis);
-                        if (map.getLayer('geo-line')) map.setLayoutProperty('geo-line', 'visibility', vis);
-                        const legGeo = document.getElementById('leg-geo');
-                        if (legGeo) legGeo.style.display = e.target.checked ? 'block' : 'none';
                         const secOpacGeo = document.getElementById('sec-opac-geo');
                         if (secOpacGeo) secOpacGeo.style.display = e.target.checked ? 'block' : 'none';
                     }});
@@ -8443,4 +8424,6 @@ with tab_alertas:
                     
                 fig_demo.update_layout(yaxis=dict(autorange="reversed"), height=450)
                 st.plotly_chart(fig_demo, use_container_width=True)
+        else:
+            st.info("ℹ️ No se identificaron pozos de monitoreo con al menos 3 años de registros históricos para generar proyecciones estadísticas al año 2035 en este acuífero.")
     renderizar_pestaña_alertas()
