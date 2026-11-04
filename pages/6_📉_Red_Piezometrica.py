@@ -8,6 +8,7 @@ Desacoplamiento de modelo matemático vs renderizado para interactividad instant
 import os
 import io
 import re
+import html
 import math
 import json
 import base64
