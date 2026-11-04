@@ -238,7 +238,8 @@ st.markdown("""
             border-radius: 6px !important;
             color: #333333 !important; 
             font-weight: 600 !important; 
-            font-size: 14px !important; 
+            font-size: 12.5px !important; 
+            padding: 0 6px !important;
             text-decoration: none !important; 
             width: 100% !important; 
             min-height: 38px !important;
@@ -1423,6 +1424,679 @@ def generar_geotiff_bytes(Z_masked, bounds):
         buf = io.BytesIO()
         plt.imsave(buf, Z_flipped, cmap='Blues', format='tiff')
         return buf.getvalue()
+
+# =======================================================
+# 🌐 6.5 EXPORTACIÓN GEOGRÁFICA KMZ (GOOGLE EARTH)
+# =======================================================
+def _hex_a_kml_color(hex_str, alpha="ff"):
+    """Convierte un color hexadecimal '#RRGGBB' a formato KML 'aabbggrr'."""
+    if not hex_str:
+        return f"{alpha}ffffff"
+    h = str(hex_str).lstrip('#').strip()
+    if len(h) == 6:
+        r, g, b = h[0:2], h[2:4], h[4:6]
+        return f"{alpha}{b}{g}{r}".lower()
+    elif len(h) == 8:
+        return h.lower()
+    return f"{alpha}ffffff"
+
+def _geom_a_kml(geom):
+    """Convierte geometrías Shapely o diccionarios GeoJSON a KML válido."""
+    if geom is None:
+        return ""
+    if isinstance(geom, dict):
+        gtype = geom.get("type", "")
+        coords = geom.get("coordinates", [])
+        if gtype == "Point":
+            return f"<Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>"
+        elif gtype == "LineString":
+            c_str = " ".join([f"{pt[0]},{pt[1]},0" for pt in coords if len(pt) >= 2])
+            return f"<LineString><tessellate>1</tessellate><coordinates>{c_str}</coordinates></LineString>"
+        elif gtype == "MultiLineString":
+            res = ["<MultiGeometry>"]
+            for line in coords:
+                c_str = " ".join([f"{pt[0]},{pt[1]},0" for pt in line if len(pt) >= 2])
+                res.append(f"<LineString><tessellate>1</tessellate><coordinates>{c_str}</coordinates></LineString>")
+            res.append("</MultiGeometry>")
+            return "".join(res)
+        elif gtype == "Polygon":
+            if not coords:
+                return ""
+            ext = " ".join([f"{pt[0]},{pt[1]},0" for pt in coords[0] if len(pt) >= 2])
+            res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
+            for ring in coords[1:]:
+                inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
+                res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+            res.append("</Polygon>")
+            return "".join(res)
+        elif gtype == "MultiPolygon":
+            res = ["<MultiGeometry>"]
+            for poly in coords:
+                if not poly:
+                    continue
+                ext = " ".join([f"{pt[0]},{pt[1]},0" for pt in poly[0] if len(pt) >= 2])
+                res.append(f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>")
+                for ring in poly[1:]:
+                    inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
+                    res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+                res.append("</Polygon>")
+            res.append("</MultiGeometry>")
+            return "".join(res)
+        return ""
+    if hasattr(geom, "is_empty") and geom.is_empty:
+        return ""
+    gt = getattr(geom, "geom_type", "")
+    if gt == 'Point':
+        return f"<Point><coordinates>{geom.x},{geom.y},0</coordinates></Point>"
+    elif gt == 'LineString':
+        coords = " ".join([f"{x},{y},0" for x, y in geom.coords])
+        return f"<LineString><tessellate>1</tessellate><coordinates>{coords}</coordinates></LineString>"
+    elif gt == 'MultiLineString':
+        res = ["<MultiGeometry>"]
+        for line in geom.geoms:
+            coords = " ".join([f"{x},{y},0" for x, y in line.coords])
+            res.append(f"<LineString><tessellate>1</tessellate><coordinates>{coords}</coordinates></LineString>")
+        res.append("</MultiGeometry>")
+        return "".join(res)
+    elif gt == 'Polygon':
+        ext = " ".join([f"{x},{y},0" for x, y in geom.exterior.coords])
+        res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
+        for interior in geom.interiors:
+            inte = " ".join([f"{x},{y},0" for x, y in interior.coords])
+            res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+        res.append("</Polygon>")
+        return "".join(res)
+    elif gt == 'MultiPolygon':
+        res = ["<MultiGeometry>"]
+        for p in geom.geoms:
+            res.append(_geom_a_kml(p))
+        res.append("</MultiGeometry>")
+        return "".join(res)
+    return ""
+
+def _parse_geojson_features(geojson_input):
+    if not geojson_input:
+        return []
+    if isinstance(geojson_input, (bytes, bytearray)):
+        geojson_input = geojson_input.decode('utf-8', errors='ignore')
+    if isinstance(geojson_input, str):
+        try:
+            data = json.loads(geojson_input)
+        except Exception:
+            return []
+    elif isinstance(geojson_input, dict):
+        data = geojson_input
+    elif hasattr(geojson_input, "iterfeatures"):
+        try:
+            return list(geojson_input.iterfeatures())
+        except Exception:
+            return []
+    elif hasattr(geojson_input, "__geo_interface__"):
+        gi = geojson_input.__geo_interface__
+        return gi.get("features", [gi]) if gi.get("type") == "FeatureCollection" else [gi]
+    else:
+        return []
+    
+    if data.get("type") == "FeatureCollection":
+        return data.get("features", [])
+    elif data.get("type") == "Feature":
+        return [data]
+    return []
+
+def generar_kmz_dinamica_flujo(
+    clave_actual, nombre_acuifero, anio_sel, var_real,
+    bounds, img_kriging_png, geojson_iso, geojson_flujo,
+    df_pozos, delim_geom=None, props_kriging=None, marcadores_adicionales=None
+):
+    nombre_acuifero_safe = html.escape(str(nombre_acuifero))
+    var_label = "Elevación Piezométrica" if "elev" in str(var_real).lower() or "carga" in str(var_real).lower() else "Profundidad al Nivel Estático"
+    unidad = "msnm" if "elev" in str(var_real).lower() or "carga" in str(var_real).lower() else "m"
+
+    min_y, min_x = float(bounds[0][0]), float(bounds[0][1])
+    max_y, max_x = float(bounds[1][0]), float(bounds[1][1])
+
+    kml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        f'  <name>Piezometría y Dinámica de Flujo ({anio_sel}) - {clave_actual} {nombre_acuifero_safe}</name>',
+        '  <open>1</open>',
+        '  <description><![CDATA[',
+        '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
+        f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_acuifero_safe}</h3>',
+        f'      <p style="margin:4px 0;"><b>Variable Modelada:</b> {var_label} ({unidad})</p>',
+        f'      <p style="margin:4px 0;"><b>Año de Análisis:</b> {anio_sel}</p>',
+        f'      <p style="margin:4px 0;"><b>Pozos Activos:</b> {len(df_pozos) if df_pozos is not None else 0}</p>',
+        '      <p style="font-size:10.5px;color:#64748b;margin-top:6px;">Generado por la Plataforma Oficial de Geohidrología y Balances de Aguas Subterráneas.</p>',
+        '    </div>',
+        '  ]]></description>',
+        '  <Style id="style-limite">',
+        '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
+        '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-iso">',
+        '    <LineStyle><color>ffe0d000</color><width>2.0</width></LineStyle>',
+        '  </Style>',
+        '  <Style id="style-flujo-line">',
+        '    <LineStyle><color>ffd07000</color><width>2.2</width></LineStyle>',
+        '  </Style>',
+        '  <Style id="style-pozo-real">',
+        '    <IconStyle><scale>0.9</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pozo-interp">',
+        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/ylw-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pozo-extra">',
+        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-circle.png</href></Icon></IconStyle>',
+        '  </Style>'
+    ]
+
+    if delim_geom is not None:
+        geom_kml = _geom_a_kml(delim_geom)
+        if geom_kml:
+            kml.append('  <Folder><name>1. Límite del Acuífero</name>')
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>Polígono Oficial ({clave_actual})</name>')
+            kml.append('      <styleUrl>#style-limite</styleUrl>')
+            kml.append(f'      {geom_kml}')
+            kml.append('    </Placemark>')
+            kml.append('  </Folder>')
+
+    if img_kriging_png:
+        r2_txt = f"{props_kriging.get('Determination (R²)', 'N/D')}" if props_kriging else "N/D"
+        rango_txt = f"{props_kriging.get('Fitting Range', 'N/D')}" if props_kriging else "N/D"
+        kml.append('  <Folder><name>2. Superficie Piezométrica (Ráster Kriging)</name>')
+        kml.append('    <GroundOverlay>')
+        kml.append(f'      <name>Malla Kriging {var_label} ({anio_sel})</name>')
+        kml.append('      <description><![CDATA[')
+        kml.append(f'        <b>Modelo Geostadístico:</b> Kriging Ordinario<br><b>R²:</b> {r2_txt}<br><b>Rango de Ajuste:</b> {rango_txt}')
+        kml.append('      ]]></description>')
+        kml.append('      <Icon><href>kriging_overlay.png</href></Icon>')
+        kml.append('      <LatLonBox>')
+        kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
+        kml.append('      </LatLonBox>')
+        kml.append('    </GroundOverlay>')
+        kml.append('  </Folder>')
+
+    feat_iso = _parse_geojson_features(geojson_iso)
+    if feat_iso:
+        kml.append(f'  <Folder><name>3. Isopiezas Piezométricas ({len(feat_iso)} curvas)</name>')
+        for idx, feat in enumerate(feat_iso):
+            geom = feat.get("geometry", {})
+            props = feat.get("properties", {})
+            cota = props.get("COTA_M", "N/D")
+            geom_kml = _geom_a_kml(geom)
+            if geom_kml:
+                kml.append('    <Placemark>')
+                kml.append(f'      <name>Cota {cota} {unidad}</name>')
+                kml.append('      <styleUrl>#style-iso</styleUrl>')
+                kml.append('      <description><![CDATA[')
+                kml.append(f'        <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                kml.append(f'          <b>Isopieza Piezométrica</b><br>')
+                kml.append(f'          Cota: <b>{cota} {unidad}</b><br>')
+                kml.append(f'          Variable: {var_label}')
+                kml.append('        </div>')
+                kml.append('      ]]></description>')
+                kml.append(f'      {geom_kml}')
+                kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    feat_flujo = _parse_geojson_features(geojson_flujo)
+    if feat_flujo:
+        kml.append(f'  <Folder><name>4. Vectores de Flujo Subterráneo ({len(feat_flujo)} vectores)</name>')
+        span_diag = math.hypot(max_x - min_x, max_y - min_y)
+        len_base = max(span_diag * 0.022, 0.005)
+        
+        for idx, feat in enumerate(feat_flujo):
+            props = feat.get("properties", {})
+            coords = feat.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            lo, la = coords[0], coords[1]
+            vx = props.get("VX", 0.0)
+            vy = props.get("VY", 0.0)
+            grad_m_km = props.get("GRAD_M_KM", 0.0)
+            az = props.get("AZIMUT_DEG", 0.0)
+            trans = props.get("TRANSMISIVIDAD_M2_DIA", None)
+            caudal = props.get("CAUDAL_UNIT_M2_DIA", None)
+
+            mag = math.hypot(vx, vy)
+            if mag > 0:
+                dx = (vx / mag) * len_base
+                dy = (vy / mag) * len_base
+            else:
+                dx, dy = 0.0, 0.0
+
+            line_coords = f"{lo},{la},0 {lo + dx},{la + dy},0"
+            desc_flujo = f"""
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:200px;">
+              <b style="color:#0284c7;">Vector Hidrodinámico #{idx+1}</b><br>
+              <table style="width:100%;border-collapse:collapse;margin-top:4px;">
+                <tr><td style="color:#64748b;">Gradiente (i):</td><td><b>{grad_m_km:.2f} m/km</b></td></tr>
+                <tr><td style="color:#64748b;">Dirección (Azimut):</td><td><b>{az:.1f}°</b></td></tr>
+                {"<tr><td style='color:#64748b;'>Transmisividad (T):</td><td><b>" + f"{trans:.2f} m²/d</b></td></tr>" if trans is not None else ""}
+                {"<tr><td style='color:#64748b;'>Caudal Unitario (q):</td><td><b>" + f"{caudal:.3f} m²/d</b></td></tr>" if caudal is not None else ""}
+              </table>
+            </div>
+            """
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>Flujo #{idx+1} ({az:.0f}° | {grad_m_km:.1f} m/km)</name>')
+            kml.append('      <styleUrl>#style-flujo-line</styleUrl>')
+            kml.append(f'      <description><![CDATA[{desc_flujo}]]></description>')
+            kml.append(f'      <LineString><tessellate>1</tessellate><coordinates>{line_coords}</coordinates></LineString>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    if df_pozos is not None and not df_pozos.empty:
+        kml.append(f'  <Folder><name>5. Red de Monitoreo Piezométrico ({len(df_pozos)} pozos)</name>')
+        for _, r in df_pozos.iterrows():
+            pz_nom = html.escape(str(r.get("Pozo", "Sin Nombre")))
+            lat = float(r.get("Latitud", 0.0))
+            lon = float(r.get("Longitud", 0.0))
+            val = float(r.get(var_real, 0.0))
+            t_dato = str(r.get("Tipo_Dato", "Medición Real"))
+            anio_m = int(r.get("Año_Medido", r.get("Año", anio_sel)))
+            style_u = "#style-pozo-real" if "real" in t_dato.lower() else "#style-pozo-interp"
+
+            desc_pz = f"""
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:210px;">
+              <h4 style="color:#691C32;margin:0 0 4px 0;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">📍 Pozo: {pz_nom}</h4>
+              <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
+                <tr><td style="color:#64748b;">Nivel ({unidad}):</td><td><b>{val:.2f} {unidad}</b></td></tr>
+                <tr><td style="color:#64748b;">Año Sincronizado:</td><td>{anio_sel} (Medido: {anio_m})</td></tr>
+                <tr><td style="color:#64748b;">Tipo de Registro:</td><td>{t_dato}</td></tr>
+                <tr><td style="color:#64748b;">Coordenadas:</td><td>{lat:.5f}, {lon:.5f}</td></tr>
+              </table>
+            </div>
+            """
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{pz_nom} ({val:.1f} {unidad})</name>')
+            kml.append(f'      <styleUrl>{style_u}</styleUrl>')
+            kml.append(f'      <description><![CDATA[{desc_pz}]]></description>')
+            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    if marcadores_adicionales:
+        kml.append(f'  <Folder><name>6. Puntos Adicionales ({len(marcadores_adicionales)} puntos)</name>')
+        for idx, pt in enumerate(marcadores_adicionales):
+            nom_pt = html.escape(str(pt.get("nombre", f"Punto {idx+1}")))
+            lat_pt = float(pt.get("lat", 0.0))
+            lon_pt = float(pt.get("lon", 0.0))
+            fuente_pt = pt.get("fuente", "manual")
+            tipo_pt = pt.get("tipo", "Marcador")
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{nom_pt}</name>')
+            kml.append('      <styleUrl>#style-pozo-extra</styleUrl>')
+            kml.append('      <description><![CDATA[')
+            kml.append(f'        <b>{nom_pt}</b><br>Fuente: {fuente_pt}<br>Tipo: {tipo_pt}<br>Coord: {lat_pt:.5f}, {lon_pt:.5f}')
+            kml.append('      ]]></description>')
+            kml.append(f'      <Point><coordinates>{lon_pt},{lat_pt},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    kml.append('</Document>')
+    kml.append('</kml>')
+    kml_str = '\n'.join(kml)
+
+    buf_kmz = io.BytesIO()
+    with zipfile.ZipFile(buf_kmz, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('doc.kml', kml_str.encode('utf-8'))
+        if img_kriging_png:
+            zf.writestr('kriging_overlay.png', img_kriging_png)
+    buf_kmz.seek(0)
+    return buf_kmz.getvalue()
+
+def generar_kmz_evolucion(
+    clave_actual, nombre_acuifero, anio_t1, anio_t2,
+    bounds, img_evo_png, geojson_iso_bytes,
+    df_pz_evo, delim_geom=None, resumen_repda=None, geojson_repda_str=None
+):
+    nombre_acuifero_safe = html.escape(str(nombre_acuifero))
+    min_y, min_x = float(bounds[0][0]), float(bounds[0][1])
+    max_y, max_x = float(bounds[1][0]), float(bounds[1][1])
+
+    kml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        f'  <name>Evolución Piezométrica Δh ({anio_t1} - {anio_t2}) - {clave_actual} {nombre_acuifero_safe}</name>',
+        '  <open>1</open>',
+        '  <description><![CDATA[',
+        '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
+        f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_acuifero_safe}</h3>',
+        f'      <p style="margin:4px 0;"><b>Periodo Multianual:</b> {anio_t1} → {anio_t2}</p>',
+        f'      <p style="margin:4px 0;"><b>Pozos con Diagnóstico:</b> {len(df_pz_evo) if df_pz_evo is not None else 0}</p>',
+        '      <p style="font-size:10.5px;color:#64748b;margin-top:6px;">Generado por la Plataforma Oficial de Geohidrología y Balances de Aguas Subterráneas.</p>',
+        '    </div>',
+        '  ]]></description>',
+        '  <Style id="style-limite">',
+        '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
+        '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-abat">',
+        '    <LineStyle><color>ff0000b3</color><width>2.0</width></LineStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-recup">',
+        '    <LineStyle><color>ffcc5500</color><width>2.0</width></LineStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-equil">',
+        '    <LineStyle><color>ff503e2c</color><width>2.2</width></LineStyle>',
+        '  </Style>',
+        '  <Style id="style-pz-critico">',
+        '    <IconStyle><scale>1.0</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/red-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pz-moderado">',
+        '    <IconStyle><scale>0.9</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pz-leve">',
+        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/ylw-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pz-recup">',
+        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pz-equil">',
+        '    <IconStyle><scale>0.8</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/wht-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-repda">',
+        '    <IconStyle><scale>0.7</scale><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_square.png</href></Icon><color>ff800080</color></IconStyle>',
+        '  </Style>'
+    ]
+
+    if delim_geom is not None:
+        geom_kml = _geom_a_kml(delim_geom)
+        if geom_kml:
+            kml.append('  <Folder><name>1. Límite del Acuífero</name>')
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>Polígono Oficial ({clave_actual})</name>')
+            kml.append('      <styleUrl>#style-limite</styleUrl>')
+            kml.append(f'      {geom_kml}')
+            kml.append('    </Placemark>')
+            kml.append('  </Folder>')
+
+    if img_evo_png:
+        kml.append('  <Folder><name>2. Superficie de Abatimiento Δh (Ráster Divergente)</name>')
+        kml.append('    <GroundOverlay>')
+        kml.append(f'      <name>Variación Piezométrica Δh ({anio_t1} - {anio_t2})</name>')
+        kml.append('      <description><![CDATA[')
+        kml.append(f'        <b>Cálculo Diferencial:</b> Δh = Carga({anio_t2}) - Carga({anio_t1})<br>Ráster con escala cromática divergente (Rojo: Abatimiento | Azul: Recuperación)')
+        kml.append('      ]]></description>')
+        kml.append('      <Icon><href>evolucion_overlay.png</href></Icon>')
+        kml.append('      <LatLonBox>')
+        kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
+        kml.append('      </LatLonBox>')
+        kml.append('    </GroundOverlay>')
+        kml.append('  </Folder>')
+
+    feat_iso = _parse_geojson_features(geojson_iso_bytes)
+    if feat_iso:
+        kml.append(f'  <Folder><name>3. Isolíneas de Variación Δh ({len(feat_iso)} isolíneas)</name>')
+        for idx, feat in enumerate(feat_iso):
+            geom = feat.get("geometry", {})
+            props = feat.get("properties", {})
+            dh_val = float(props.get("DELTA_H_M", 0.0))
+            tipo_iso = props.get("TIPO", "Abatimiento" if dh_val < 0 else "Recuperación")
+
+            if dh_val < -1e-4:
+                style_iso = "#style-iso-abat"
+            elif dh_val > 1e-4:
+                style_iso = "#style-iso-recup"
+            else:
+                style_iso = "#style-iso-equil"
+
+            geom_kml = _geom_a_kml(geom)
+            if geom_kml:
+                kml.append('    <Placemark>')
+                kml.append(f'      <name>Δh = {dh_val:+.1f} m ({tipo_iso})</name>')
+                kml.append(f'      <styleUrl>{style_iso}</styleUrl>')
+                kml.append('      <description><![CDATA[')
+                kml.append(f'        <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Comportamiento:</b> {tipo_iso}')
+                kml.append('      ]]></description>')
+                kml.append(f'      {geom_kml}')
+                kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    df_pz_df = df_pz_evo if isinstance(df_pz_evo, pd.DataFrame) else pd.DataFrame(df_pz_evo if df_pz_evo else [])
+    if df_pz_df is not None and not df_pz_df.empty:
+        kml.append(f'  <Folder><name>4. Diagnóstico de Pozos ({len(df_pz_df)} pozos)</name>')
+        for _, r in df_pz_df.iterrows():
+            pz_nom = html.escape(str(r.get("Pozo", "Sin Nombre")))
+            lat = float(r.get("Latitud", 0.0))
+            lon = float(r.get("Longitud", 0.0))
+            dh = float(r.get("Delta_h_m", 0.0))
+            tasa = float(r.get("Tasa_m_anio", 0.0))
+            cond = str(r.get("Condicion", "N/D"))
+
+            if "crítico" in cond.lower() or "severo" in cond.lower():
+                style_pz = "#style-pz-critico"
+            elif "moderado" in cond.lower():
+                style_pz = "#style-pz-moderado"
+            elif "leve" in cond.lower():
+                style_pz = "#style-pz-leve"
+            elif "recuper" in cond.lower():
+                style_pz = "#style-pz-recup"
+            else:
+                style_pz = "#style-pz-equil"
+
+            c1 = r.get(f"Carga_{anio_t1}_msnm", "N/D")
+            c2 = r.get(f"Carga_{anio_t2}_msnm", "N/D")
+
+            desc_pz = f"""
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:220px;">
+              <h4 style="color:#691C32;margin:0 0 4px 0;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">📍 Pozo: {pz_nom}</h4>
+              <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
+                <tr><td style="color:#64748b;">Condición:</td><td><b>{cond}</b></td></tr>
+                <tr><td style="color:#64748b;">Variación Neta (Δh):</td><td><b>{dh:+.2f} m</b></td></tr>
+                <tr><td style="color:#64748b;">Tasa Promedio Anual:</td><td><b>{tasa:+.2f} m/año</b></td></tr>
+                <tr><td style="color:#64748b;">Nivel en {anio_t1}:</td><td>{c1} msnm</td></tr>
+                <tr><td style="color:#64748b;">Nivel en {anio_t2}:</td><td>{c2} msnm</td></tr>
+                <tr><td style="color:#64748b;">Coordenadas:</td><td>{lat:.5f}, {lon:.5f}</td></tr>
+              </table>
+            </div>
+            """
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{pz_nom} ({dh:+.1f} m | {tasa:+.2f} m/a)</name>')
+            kml.append(f'      <styleUrl>{style_pz}</styleUrl>')
+            kml.append(f'      <description><![CDATA[{desc_pz}]]></description>')
+            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    feat_repda = _parse_geojson_features(geojson_repda_str)
+    if feat_repda:
+        kml.append(f'  <Folder><name>5. Aprovechamientos REPDA ({len(feat_repda)} concesiones)</name>')
+        for idx, feat in enumerate(feat_repda):
+            props = feat.get("properties", {})
+            coords = feat.get("geometry", {}).get("coordinates", [])
+            if len(coords) < 2:
+                continue
+            tit = html.escape(str(props.get("TITULO", props.get("titulo", f"Concesión #{idx+1}"))))
+            vol = float(props.get("VOL_TOTAL", props.get("volumen", 0.0)))
+            uso = html.escape(str(props.get("USO", props.get("uso", "N/D"))))
+            desc_repda = f"""
+            <div style="font-family:Arial,sans-serif;font-size:11px;">
+              <b>Concesión REPDA:</b> {tit}<br>
+              Volumen: <b>{vol:,.1f} m³/año</b><br>
+              Uso: {uso}
+            </div>
+            """
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{tit}</name>')
+            kml.append('      <styleUrl>#style-repda</styleUrl>')
+            kml.append(f'      <description><![CDATA[{desc_repda}]]></description>')
+            kml.append(f'      <Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    kml.append('</Document>')
+    kml.append('</kml>')
+    kml_str = '\n'.join(kml)
+
+    buf_kmz = io.BytesIO()
+    with zipfile.ZipFile(buf_kmz, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('doc.kml', kml_str.encode('utf-8'))
+        if img_evo_png:
+            zf.writestr('evolucion_overlay.png', img_evo_png)
+    buf_kmz.seek(0)
+    return buf_kmz.getvalue()
+
+def generar_kmz_cobertura(
+    clave_actual, nombre_acuifero, radio_km,
+    geojson_ciega, geojson_cubierta,
+    df_pozos, df_propuestas, delim_geom=None, res_metricas=None
+):
+    nombre_acuifero_safe = html.escape(str(nombre_acuifero))
+    metricas = res_metricas or {}
+    area_tot = metricas.get('area_total_km2', 0.0)
+    area_cie = metricas.get('area_ciega_km2', 0.0)
+    pct_cie = metricas.get('pct_ciega', 0.0)
+    pct_cub = metricas.get('pct_cubierta', 0.0)
+    km2_pz = metricas.get('km2_por_pozo', 0.0)
+
+    kml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        f'  <name>Cobertura y Zonas Ciegas (R={radio_km:.1f} km) - {clave_actual} {nombre_acuifero_safe}</name>',
+        '  <open>1</open>',
+        '  <description><![CDATA[',
+        '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
+        f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_acuifero_safe}</h3>',
+        f'      <p style="margin:4px 0;"><b>Superficie Total:</b> {area_tot:,.1f} km²</p>',
+        f'      <p style="margin:4px 0;"><b>Radio de Representatividad:</b> {radio_km:.1f} km</p>',
+        f'      <p style="margin:4px 0;"><b>Cobertura de Monitoreo:</b> <span style="color:#16a34a;font-weight:700;">{pct_cub:.1f}%</span></p>',
+        f'      <p style="margin:4px 0;"><b>Zonas Ciegas (Sin Datos):</b> <span style="color:#dc2626;font-weight:700;">{pct_cie:.1f}% ({area_cie:,.1f} km²)</span></p>',
+        f'      <p style="margin:4px 0;"><b>Densidad Media:</b> 1 pozo c/{km2_pz:.1f} km²</p>',
+        '      <p style="font-size:10.5px;color:#64748b;margin-top:6px;">Generado por la Plataforma Oficial de Geohidrología y Balances de Aguas Subterráneas.</p>',
+        '    </div>',
+        '  ]]></description>',
+        '  <Style id="style-limite">',
+        '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
+        '    <PolyStyle><color>10321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-ciega">',
+        '    <LineStyle><color>ff1111cc</color><width>2.0</width></LineStyle>',
+        '    <PolyStyle><color>731111cc</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-cubierta">',
+        '    <LineStyle><color>ff228822</color><width>1.5</width></LineStyle>',
+        '    <PolyStyle><color>4d22aa22</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-pozo-exist">',
+        '    <IconStyle><scale>0.85</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/blu-circle.png</href></Icon></IconStyle>',
+        '  </Style>',
+        '  <Style id="style-pozo-prop">',
+        '    <IconStyle><scale>1.1</scale><Icon><href>http://maps.google.com/mapfiles/kml/paddle/orange-stars.png</href></Icon></IconStyle>',
+        '  </Style>'
+    ]
+
+    if delim_geom is not None:
+        geom_kml = _geom_a_kml(delim_geom)
+        if geom_kml:
+            kml.append('  <Folder><name>1. Límite del Acuífero</name>')
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>Polígono Oficial ({area_tot:,.1f} km²)</name>')
+            kml.append('      <styleUrl>#style-limite</styleUrl>')
+            kml.append(f'      {geom_kml}')
+            kml.append('    </Placemark>')
+            kml.append('  </Folder>')
+
+    feat_cie = _parse_geojson_features(geojson_ciega)
+    if feat_cie:
+        kml.append(f'  <Folder><name>2. Zonas Ciegas de Monitoreo (Sin Cobertura: {pct_cie:.1f}%)</name>')
+        for idx, feat in enumerate(feat_cie):
+            geom = feat.get("geometry", {})
+            geom_kml = _geom_a_kml(geom)
+            if geom_kml:
+                kml.append('    <Placemark>')
+                kml.append(f'      <name>Zona Ciega #{idx+1}</name>')
+                kml.append('      <styleUrl>#style-ciega</styleUrl>')
+                kml.append('      <description><![CDATA[')
+                kml.append('        <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                kml.append('          <b style="color:#b91c1c;">⚠️ Vacío de Información Geohidrológica</b><br>')
+                kml.append('          Esta región carece de pozos de observación activos en el radio especificado.<br>')
+                kml.append('          Cualquier interpolación espacial en este sector incurre en alta incertidumbre.')
+                kml.append('        </div>')
+                kml.append('      ]]></description>')
+                kml.append(f'      {geom_kml}')
+                kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    feat_cub = _parse_geojson_features(geojson_cubierta)
+    if feat_cub:
+        kml.append(f'  <Folder><name>3. Cobertura Activa de Pozos (Radio R={radio_km:.1f} km: {pct_cub:.1f}%)</name>')
+        for idx, feat in enumerate(feat_cub):
+            geom = feat.get("geometry", {})
+            geom_kml = _geom_a_kml(geom)
+            if geom_kml:
+                kml.append('    <Placemark>')
+                kml.append(f'      <name>Polígono Cobertura #{idx+1}</name>')
+                kml.append('      <styleUrl>#style-cubierta</styleUrl>')
+                kml.append('      <description><![CDATA[')
+                kml.append('        <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                kml.append(f'          <b>Superficie Monitoreada</b><br>Radio de Influencia: <b>{radio_km:.1f} km</b>')
+                kml.append('        </div>')
+                kml.append('      ]]></description>')
+                kml.append(f'      {geom_kml}')
+                kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    df_pz_ex = df_pozos if isinstance(df_pozos, pd.DataFrame) else pd.DataFrame(df_pozos if df_pozos else [])
+    if df_pz_ex is not None and not df_pz_ex.empty:
+        kml.append(f'  <Folder><name>4. Pozos de Monitoreo Existentes ({len(df_pz_ex)} pozos)</name>')
+        for _, r in df_pz_ex.iterrows():
+            pz_nom = html.escape(str(r.get("Pozo", "Sin Nombre")))
+            lat = float(r.get("Latitud", 0.0))
+            lon = float(r.get("Longitud", 0.0))
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{pz_nom}</name>')
+            kml.append('      <styleUrl>#style-pozo-exist</styleUrl>')
+            kml.append('      <description><![CDATA[')
+            kml.append(f'        <b>Pozo de Monitoreo:</b> {pz_nom}<br>Radio de Cobertura: {radio_km:.1f} km<br>Coord: {lat:.5f}, {lon:.5f}')
+            kml.append('      ]]></description>')
+            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    df_pr = df_propuestas if isinstance(df_propuestas, pd.DataFrame) else pd.DataFrame(df_propuestas if df_propuestas else [])
+    if df_pr is not None and not df_pr.empty:
+        kml.append(f'  <Folder><name>5. Propuestas de Nuevos Pozos ({len(df_pr)} sitios prioritarios)</name>')
+        for _, r in df_pr.iterrows():
+            p_id = html.escape(str(r.get("ID", "Sitio")))
+            lat = float(r.get("Latitud", 0.0))
+            lon = float(r.get("Longitud", 0.0))
+            area_v = float(r.get("Area_Vacio_km2", 0.0))
+            dist_p = float(r.get("Dist_Pozo_km", 0.0))
+            prio = str(r.get("Prioridad", "Media"))
+
+            desc_prop = f"""
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:210px;">
+              <h4 style="color:#ea580c;margin:0 0 4px 0;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">🎯 Nuevo Sitio Propuesto: {p_id}</h4>
+              <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
+                <tr><td style="color:#64748b;">Prioridad de Instalación:</td><td><b>{prio}</b></td></tr>
+                <tr><td style="color:#64748b;">Área de Vacío a Capturar:</td><td><b>{area_v:,.1f} km²</b></td></tr>
+                <tr><td style="color:#64748b;">Distancia a Pozo Cercano:</td><td><b>{dist_p:.1f} km</b></td></tr>
+                <tr><td style="color:#64748b;">Coordenadas:</td><td>{lat:.5f}, {lon:.5f}</td></tr>
+              </table>
+            </div>
+            """
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{p_id} (Prioridad {prio})</name>')
+            kml.append('      <styleUrl>#style-pozo-prop</styleUrl>')
+            kml.append(f'      <description><![CDATA[{desc_prop}]]></description>')
+            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    kml.append('</Document>')
+    kml.append('</kml>')
+    kml_str = '\n'.join(kml)
+
+    buf_kmz = io.BytesIO()
+    with zipfile.ZipFile(buf_kmz, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('doc.kml', kml_str.encode('utf-8'))
+    buf_kmz.seek(0)
+    return buf_kmz.getvalue()
 
 # =======================================================
 # 🎨 7. RENDERIZADO VISUAL REACTIVO (<30 ms)
@@ -4429,7 +5103,7 @@ with tab_mapa:
                         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
                         with st.container(border=True):
                             st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:8px; font-size:13px;'>💾 EXPORTACIÓN DE RESULTADOS SIG Y MODELACIÓN (CERO-RERUN)</p>", unsafe_allow_html=True)
-                            c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+                            c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
 
                             btn_tif = generar_enlace_descarga(
                                 geotiff_bytes, f"kriging_{clave_actual}_{var_real}_{anio_sel}.tif", 
@@ -4475,6 +5149,18 @@ with tab_mapa:
                                     "application/geo+json", "📄 GeoJSON Vectores"
                                 )
                                 c_d4.markdown(btn_json_flujo, unsafe_allow_html=True)
+
+                            kmz_flujo_bytes = generar_kmz_dinamica_flujo(
+                                clave_actual, nombre_actual, anio_sel, var_real,
+                                bounds, img_kriging, geojson_iso, geojson_flujo,
+                                df_ultimo, delim_geom=geom_activa, props_kriging=props_kriging,
+                                marcadores_adicionales=st.session_state.get("marcadores_piezo", [])
+                            )
+                            btn_kmz_flujo = generar_enlace_descarga(
+                                kmz_flujo_bytes, f"dinamica_flujo_{clave_actual}_{anio_sel}.kmz",
+                                "application/vnd.google-earth.kmz", "🌐 Paquete KMZ (Google Earth)"
+                            )
+                            c_d5.markdown(btn_kmz_flujo, unsafe_allow_html=True)
                         
                         if dic_leyenda_rocas:
                             st.markdown(f"""
@@ -6254,7 +6940,7 @@ with tab_evolucion:
         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:8px; font-size:13px;'>💾 EXPORTACIÓN DE RESULTADOS SIG Y TABULARES (CERO-RERUN)</p>", unsafe_allow_html=True)
-            c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+            c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
 
             btn_tif = generar_enlace_descarga(
                 geotiff_evo_bytes, f"geotiff_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.tif",
@@ -6286,6 +6972,18 @@ with tab_evolucion:
                 c_d4.markdown(btn_csv, unsafe_allow_html=True)
             else:
                 c_d4.info("Sin pozos a exportar")
+
+            kmz_evo_bytes = generar_kmz_evolucion(
+                clave_actual, nombre_actual, anio_t1, anio_t2,
+                bounds, img_evo_png, geojson_iso_bytes,
+                df_pz_evo, delim_geom=delim_geom, resumen_repda=resumen_repda,
+                geojson_repda_str=geojson_repda_str if tiene_repda_pts else None
+            )
+            btn_kmz_evo = generar_enlace_descarga(
+                kmz_evo_bytes, f"evolucion_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.kmz",
+                "application/vnd.google-earth.kmz", "🌐 Paquete KMZ (Google Earth)"
+            )
+            c_d5.markdown(btn_kmz_evo, unsafe_allow_html=True)
 
         # =======================================================
         # 🏢 INCISO D: CORRELACIÓN ESPACIAL CAUSA VS EFECTO (REPDA)
@@ -8230,7 +8928,7 @@ with tab_cobertura:
         st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:8px; font-size:13px;'>💾 EXPORTACIÓN DE RESULTADOS SIG Y DIAGNÓSTICO (CERO-RERUN)</p>", unsafe_allow_html=True)
-            c_d1, c_d2, c_d3, c_d4 = st.columns(4)
+            c_d1, c_d2, c_d3, c_d4, c_d5 = st.columns(5)
 
             if shp_ciegas_zip:
                 btn_shp_ciegas = generar_enlace_descarga(
@@ -8280,6 +8978,18 @@ with tab_cobertura:
                 c_d4.markdown(btn_csv, unsafe_allow_html=True)
             else:
                 c_d4.info("Sin vacíos para exportar")
+
+            kmz_cob_bytes = generar_kmz_cobertura(
+                clave_actual, nombre_actual, radio_km,
+                geojson_ciega_str, geojson_cubierta_str,
+                df_unicos, res.get('df_propuestas'), delim_geom=geom_activa,
+                res_metricas=res
+            )
+            btn_kmz_cob = generar_enlace_descarga(
+                kmz_cob_bytes, f"cobertura_zonas_ciegas_{clave_actual}_{radio_km:.1f}km.kmz",
+                "application/vnd.google-earth.kmz", "🌐 Paquete KMZ (Google Earth)"
+            )
+            c_d5.markdown(btn_kmz_cob, unsafe_allow_html=True)
 
     renderizar_pestaña_cobertura()
 
