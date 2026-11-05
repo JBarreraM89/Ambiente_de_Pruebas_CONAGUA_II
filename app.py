@@ -140,10 +140,11 @@ analista_virtual = st.Page("pages/4_🤖_Analista_Virtual.py", title="Analista E
 red_piezometrica = st.Page("pages/6_📉_Red_Piezometrica.py", title="Red Piezométrica", icon="📉")
 vulnerabilidad = st.Page("pages/5_🗺️_Geovisor_Vulnerabilidad.py", title="Vulnerabilidad", icon="🌍")
 modelo_conceptual = st.Page("pages/7_🧊_Modelo_Conceptual.py", title="Modelo Conceptual", icon="🧊")
+hidrogeoquimica = st.Page("pages/8_🧪_Hidrogeoquimica.py", title="Hidrogeoquímica", icon="🧪")
 
 paginas = {
     "Herramientas Base": [geovisor, calculadora],
-    "Reportes y Análisis": [reportes, analista_virtual, red_piezometrica],
+    "Reportes y Análisis": [reportes, analista_virtual, red_piezometrica, hidrogeoquimica],
     "Vulnerabilidad": [vulnerabilidad],
     "Modelo Conceptual": [modelo_conceptual]
 }
