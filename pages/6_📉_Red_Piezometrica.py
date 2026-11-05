@@ -7578,7 +7578,7 @@ def calcular_cobertura_y_zonas_ciegas(df_pozos, radio_km, geom_acuifero, min_are
     from shapely.geometry import Point, Polygon, MultiPolygon
     from shapely.ops import unary_union, transform
 
-    if df_pozos is None or df_pozos.empty or geom_acuifero is None:
+    if geom_acuifero is None or geom_acuifero.is_empty:
         return None
 
     centro_lon = float(geom_acuifero.centroid.x)
