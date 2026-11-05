@@ -915,31 +915,711 @@ if df_crudo is None or df_largo is None:
     st.stop()
 
 # =======================================================
-# 🔍 4.1 FILTRADO ESTRICTO POR CLAVE DEL ACUÍFERO
+# 🗺️ 5. POLÍGONO OFICIAL DEL ACUÍFERO
+# =======================================================
+@st.cache_resource(show_spinner=False)
+def obtener_poligono_oficial(clave):
+    try:
+        gdf = cargar_datos_maestros()
+        if gdf is not None and not gdf.empty:
+            cve_str = str(clave).strip().zfill(4)
+            col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'CLAVE'] if c in gdf.columns), gdf.columns[0])
+            coincidencias = gdf[gdf[col_cve].astype(str).str.zfill(4) == cve_str]
+            if not coincidencias.empty:
+                return coincidencias.iloc[0].geometry
+    except Exception:
+        pass
+    return None
+
+poligono_oficial_geom = obtener_poligono_oficial(clave_actual)
+
+# =======================================================
+# 📥 HELPER: PLANTILLA EXCEL Y CARGA DE DATOS LOCALES
+# =======================================================
+def generar_plantilla_excel_piezo():
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df_ejemplo = pd.DataFrame([
+            {
+                'Pozo': 'PZ-01_San_Pedro',
+                'Latitud': 21.8853,
+                'Longitud': -102.2915,
+                'Elev.Terr': 1885.0,
+                '2020': 42.5,
+                '2021': 43.1,
+                '2022': 44.0,
+                '2023': 44.8,
+                '2024': 45.6
+            },
+            {
+                'Pozo': 'PZ-02_El_Sauz',
+                'Latitud': 21.9120,
+                'Longitud': -102.3204,
+                'Elev.Terr': 1860.0,
+                '2020': 38.0,
+                '2021': 38.9,
+                '2022': 39.5,
+                '2023': 40.2,
+                '2024': 41.0
+            },
+            {
+                'Pozo': 'PZ-03_La_Labor',
+                'Latitud': 21.8402,
+                'Longitud': -102.2610,
+                'Elev.Terr': 1902.0,
+                '2020': 50.1,
+                '2021': 51.0,
+                '2022': 51.8,
+                '2023': 52.7,
+                '2024': 53.5
+            }
+        ])
+        df_ejemplo.to_excel(writer, sheet_name='Mediciones_Piezometricas', index=False)
+
+        df_instrucciones = pd.DataFrame([
+            {'Campo': 'Pozo', 'Descripcion': 'Nombre o identificador único del pozo de monitoreo', 'Ejemplo': 'PZ-01_San_Pedro'},
+            {'Campo': 'Latitud', 'Descripcion': 'Coordenada en grados decimales WGS84 (positivo en México)', 'Ejemplo': '21.8853'},
+            {'Campo': 'Longitud', 'Descripcion': 'Coordenada en grados decimales WGS84 (negativo en México)', 'Ejemplo': '-102.2915'},
+            {'Campo': 'Elev.Terr', 'Descripcion': 'Elevación del brocal o terreno en metros sobre el nivel del mar (msnm)', 'Ejemplo': '1885.0'},
+            {'Campo': 'Años (Columnas)', 'Descripcion': 'Profundidad al Nivel Estático (NE) en metros para cada año medido', 'Ejemplo': '45.6'}
+        ])
+        df_instrucciones.to_excel(writer, sheet_name='Guia_Llenado', index=False)
+    return output.getvalue()
+
+
+def procesar_archivo_piezo_local(archivo, clave_acuifero, nombre_acuifero):
+    try:
+        if archivo.name.lower().endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(archivo)
+        else:
+            try:
+                df = pd.read_csv(archivo, encoding='utf-8-sig')
+            except Exception:
+                df = pd.read_csv(archivo, encoding='latin1')
+
+        df.columns = df.columns.astype(str).str.strip()
+        cols_upper = [c.upper() for c in df.columns]
+
+        col_pozo = next((c for c, u in zip(df.columns, cols_upper) if any(k in u for k in ['POZO', 'NOM_POZ', 'ID', 'NOMBRE', 'CLAVE_POZ'])), None)
+        col_lat = next((c for c, u in zip(df.columns, cols_upper) if any(k in u for k in ['LATITUD', 'LAT', 'Y', 'NORTH'])), None)
+        col_lon = next((c for c, u in zip(df.columns, cols_upper) if any(k in u for k in ['LONGITUD', 'LON', 'LNG', 'X', 'WEST'])), None)
+        col_elev = next((c for c, u in zip(df.columns, cols_upper) if any(k in u for k in ['ELEV', 'COTA', 'ALTITUD', 'MSNM', 'Z'])), None)
+
+        if not col_pozo or not col_lat or not col_lon:
+            return None, "El archivo debe contener al menos las columnas 'Pozo', 'Latitud' y 'Longitud'."
+
+        renombre_anios = {}
+        for col in df.columns:
+            m = re.search(r'(19\d{2}|20\d{2})', str(col))
+            if m:
+                renombre_anios[col] = m.group(1)
+
+        if renombre_anios:
+            df = df.rename(columns=renombre_anios)
+            columnas_anios = list(renombre_anios.values())
+            id_vars = [col_pozo, col_lat, col_lon]
+            if col_elev and col_elev in df.columns:
+                id_vars.append(col_elev)
+
+            df_largo = df.melt(id_vars=id_vars, value_vars=columnas_anios, var_name='Año', value_name='Profundidad_NE')
+            rename_dict = {col_pozo: 'Pozo', col_lat: 'Latitud', col_lon: 'Longitud'}
+            if col_elev:
+                rename_dict[col_elev] = 'Elev.Terr'
+            df_largo = df_largo.rename(columns=rename_dict)
+        else:
+            col_anio = next((c for c, u in zip(df.columns, cols_upper) if any(k in u for k in ['AÑO', 'ANIO', 'YEAR', 'FECHA'])), None)
+            col_pne = next((c for c, u in zip(df.columns, cols_upper) if any(k in u for k in ['PROFUNDIDAD', 'PNE', 'NE', 'NIVEL_ESTATICO'])), None)
+            if not col_anio or not col_pne:
+                return None, "No se identificaron columnas de años (ej. 2020, 2021) ni columnas de 'Año' y 'Profundidad_NE'."
+            rename_dict = {col_pozo: 'Pozo', col_lat: 'Latitud', col_lon: 'Longitud', col_anio: 'Año', col_pne: 'Profundidad_NE'}
+            if col_elev:
+                rename_dict[col_elev] = 'Elev.Terr'
+            df_largo = df.rename(columns=rename_dict)
+
+        if 'Elev.Terr' not in df_largo.columns:
+            df_largo['Elev.Terr'] = 0.0
+
+        df_largo['Clave'] = str(clave_acuifero).strip().zfill(4)
+        df_largo['Acuifero'] = str(nombre_acuifero).strip()
+        df_largo['Latitud'] = pd.to_numeric(df_largo['Latitud'], errors='coerce')
+        df_largo['Longitud'] = pd.to_numeric(df_largo['Longitud'], errors='coerce')
+        df_largo['Elev.Terr'] = pd.to_numeric(df_largo['Elev.Terr'], errors='coerce').fillna(0.0)
+        df_largo['Año'] = pd.to_numeric(df_largo['Año'], errors='coerce')
+        df_largo['Profundidad_NE'] = pd.to_numeric(df_largo['Profundidad_NE'], errors='coerce')
+        df_largo['Carga_Hidraulica'] = df_largo['Elev.Terr'] - df_largo['Profundidad_NE']
+
+        df_largo = df_largo.dropna(subset=['Pozo', 'Latitud', 'Longitud', 'Año', 'Profundidad_NE'])
+        if df_largo.empty:
+            return None, "El archivo contiene datos pero ninguna fila con coordenadas y mediciones numéricas válidas."
+
+        return df_largo, None
+    except Exception as e:
+        return None, f"Error al procesar archivo: {str(e)}"
+
+
+def generar_propuesta_red_inicial(geom_acuifero, radio_km=8.0):
+    import pyproj
+    from shapely.geometry import Point
+    from shapely.ops import transform
+
+    if geom_acuifero is None or geom_acuifero.is_empty:
+        return pd.DataFrame(), None
+
+    centro_lon = float(geom_acuifero.centroid.x)
+    centro_lat = float(geom_acuifero.centroid.y)
+    utm_zone = int((centro_lon + 180) / 6) + 1
+    epsg_utm = 32600 + utm_zone if centro_lat >= 0 else 32700 + utm_zone
+
+    to_utm = pyproj.Transformer.from_crs('EPSG:4326', f'EPSG:{epsg_utm}', always_xy=True).transform
+    to_wgs = pyproj.Transformer.from_crs(f'EPSG:{epsg_utm}', 'EPSG:4326', always_xy=True).transform
+
+    poly_utm = transform(to_utm, geom_acuifero)
+    minx, miny, maxx, maxy = poly_utm.bounds
+
+    paso_m = float(radio_km) * 1000.0 * 1.6
+    if paso_m <= 0:
+        paso_m = 12000.0
+
+    xs = np.arange(minx + paso_m / 2, maxx, paso_m)
+    ys = np.arange(miny + paso_m / 2, maxy, paso_m)
+
+    puntos_propuestos = []
+    idx = 1
+    for y in ys:
+        for x in xs:
+            pt = Point(x, y)
+            if poly_utm.contains(pt):
+                pt_wgs = transform(to_wgs, pt)
+                puntos_propuestos.append({
+                    'ID': f"PROP-{idx:02d}",
+                    'Longitud': round(float(pt_wgs.x), 5),
+                    'Latitud': round(float(pt_wgs.y), 5),
+                    'Radio_Cobertura_km': float(radio_km),
+                    'Area_Objetivo_km2': round(math.pi * (float(radio_km) ** 2), 1),
+                    'Prioridad': 'Muy Alta' if (idx <= 3 or idx % 3 == 1) else 'Alta'
+                })
+                idx += 1
+
+    if not puntos_propuestos:
+        pt_rep = poly_utm.representative_point()
+        pt_rep_wgs = transform(to_wgs, pt_rep)
+        puntos_propuestos.append({
+            'ID': "PROP-01",
+            'Longitud': round(float(pt_rep_wgs.x), 5),
+            'Latitud': round(float(pt_rep_wgs.y), 5),
+            'Radio_Cobertura_km': float(radio_km),
+            'Area_Objetivo_km2': round(math.pi * (float(radio_km) ** 2), 1),
+            'Prioridad': 'Muy Alta'
+        })
+
+    return pd.DataFrame(puntos_propuestos), poly_utm
+
+
+def generar_kmz_propuesta_red(clave_actual, nombre_acuifero, radio_km, delim_geom, df_propuestas, geojson_repda=None):
+    nombre_safe = html.escape(str(nombre_acuifero))
+    kml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        f'  <name>Propuesta de Red de Monitoreo - {clave_actual} {nombre_safe}</name>',
+        '  <open>1</open>',
+        '  <description><![CDATA[',
+        '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
+        f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_safe}</h3>',
+        f'      <p style="margin:4px 0;"><b>Estado de Red:</b> <span style="color:#dc2626;font-weight:700;">Sin Instrumentación Vigente</span></p>',
+        f'      <p style="margin:4px 0;"><b>Radio de Representatividad:</b> {radio_km:.1f} km</p>',
+        f'      <p style="margin:4px 0;"><b>Pozos Propuestos:</b> {len(df_propuestas)} sitios</p>',
+        '      <p style="font-size:10.5px;color:#64748b;margin-top:6px;">Diseño geoespacial generado por la Plataforma Oficial de Geohidrología y Balances CONAGUA.</p>',
+        '    </div>',
+        '  ]]></description>',
+        '  <Style id="style-limite">',
+        '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
+        '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-circulo-prop">',
+        '    <LineStyle><color>ffc78402</color><width>1.8</width></LineStyle>',
+        '    <PolyStyle><color>26c78402</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-pozo-prop">',
+        '    <IconStyle><scale>1.1</scale><color>ffc78402</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/target.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.85</scale><color>ffffffff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-repda">',
+        '    <IconStyle><scale>0.65</scale><color>ff0c58ea</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.0</scale></LabelStyle>',
+        '  </Style>'
+    ]
+
+    if delim_geom is not None:
+        def _geom_to_kml_simple(g):
+            if g.geom_type == 'Polygon':
+                ext = " ".join([f"{x},{y},0" for x, y in g.exterior.coords])
+                inners = []
+                for interior in g.interiors:
+                    inte = " ".join([f"{x},{y},0" for x, y in interior.coords])
+                    inners.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
+                return f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>{''.join(inners)}</Polygon>"
+            elif g.geom_type == 'MultiPolygon':
+                return f"<MultiGeometry>{''.join([_geom_to_kml_simple(p) for p in g.geoms])}</MultiGeometry>"
+            return ""
+
+        kml_limite = _geom_to_kml_simple(delim_geom)
+        if kml_limite:
+            kml.append('  <Folder><name>1. Límite Oficial del Acuífero</name>')
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>Polígono Oficial ({clave_actual})</name>')
+            kml.append('      <styleUrl>#style-limite</styleUrl>')
+            kml.append(f'      {kml_limite}')
+            kml.append('    </Placemark>')
+            kml.append('  </Folder>')
+
+    if df_propuestas is not None and not df_propuestas.empty:
+        kml.append(f'  <Folder><name>2. Pozos de Monitoreo Propuestos ({len(df_propuestas)} sitios)</name>')
+        for _, r in df_propuestas.iterrows():
+            p_id = html.escape(str(r.get("ID", "Sitio")))
+            lat = float(r.get("Latitud", 0.0))
+            lon = float(r.get("Longitud", 0.0))
+            area_obj = float(r.get("Area_Objetivo_km2", 0.0))
+            r_km = float(r.get("Radio_Cobertura_km", radio_km))
+            prio = str(r.get("Prioridad", "Alta"))
+
+            desc = f"""
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:220px;">
+              <h4 style="color:#0284c7;margin:0 0 4px 0;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">📍 Nuevo Pozo Propuesto: {p_id}</h4>
+              <table style="width:100%;border-collapse:collapse;font-size:10.5px;">
+                <tr><td style="color:#64748b;">Prioridad de Instalación:</td><td><b>{prio}</b></td></tr>
+                <tr><td style="color:#64748b;">Radio de Cobertura:</td><td><b>{r_km:.1f} km</b></td></tr>
+                <tr><td style="color:#64748b;">Área de Influencia:</td><td><b>{area_obj:,.1f} km²</b></td></tr>
+                <tr><td style="color:#64748b;">Coordenadas:</td><td>{lat:.5f}° N, {lon:.5f}° W</td></tr>
+              </table>
+            </div>
+            """
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>{p_id}</name>')
+            kml.append('      <styleUrl>#style-pozo-prop</styleUrl>')
+            kml.append(f'      <description><![CDATA[{desc}]]></description>')
+            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append('    </Placemark>')
+
+            circ_pts = []
+            r_lat = r_km / 111.32
+            r_lon = r_km / (111.32 * math.cos(math.radians(lat)))
+            for i in range(33):
+                ang = 2 * math.pi * i / 32
+                c_lon = lon + r_lon * math.cos(ang)
+                c_lat = lat + r_lat * math.sin(ang)
+                circ_pts.append(f"{c_lon:.6f},{c_lat:.6f},0")
+            circ_str = " ".join(circ_pts)
+
+            kml.append('    <Placemark>')
+            kml.append(f'      <name>Cobertura {p_id} (R={r_km:.1f} km)</name>')
+            kml.append('      <styleUrl>#style-circulo-prop</styleUrl>')
+            kml.append(f'      <Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{circ_str}</coordinates></LinearRing></outerBoundaryIs></Polygon>')
+            kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    if geojson_repda:
+        try:
+            feats_rep = json.loads(geojson_repda).get("features", []) if isinstance(geojson_repda, str) else geojson_repda.get("features", [])
+            if feats_rep:
+                kml.append(f'  <Folder><name>3. Concesiones de Extracción REPDA ({len(feats_rep)} captaciones)</name>')
+                for feat in feats_rep:
+                    geom = feat.get("geometry", {})
+                    if geom.get("type") == "Point":
+                        coords = geom.get("coordinates", [])
+                        if len(coords) >= 2:
+                            p = feat.get("properties", {})
+                            tit = html.escape(str(p.get("TITULO", p.get("titulo", "Concesión"))))
+                            vol = float(p.get("VOL_ANUAL", p.get("volumen", 0.0)) or 0.0)
+                            kml.append('    <Placemark>')
+                            kml.append(f'      <name>{tit}</name>')
+                            kml.append('      <styleUrl>#style-repda</styleUrl>')
+                            kml.append('      <description><![CDATA[')
+                            kml.append(f'        <b>Título REPDA:</b> {tit}<br><b>Volumen Concesionado:</b> {vol:,.0f} m³/año')
+                            kml.append('      ]]></description>')
+                            kml.append(f'      <Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
+                            kml.append('    </Placemark>')
+                kml.append('  </Folder>')
+        except Exception:
+            pass
+
+    kml.append('</Document>')
+    kml.append('</kml>')
+
+    buf_kmz = io.BytesIO()
+    with zipfile.ZipFile(buf_kmz, 'w', compression=zipfile.ZIP_DEFLATED) as z:
+        z.writestr('doc.kml', chr(10).join(kml))
+    return buf_kmz.getvalue()
+
+
+def renderizar_modo_acuifero_sin_red(clave_actual, nombre_actual, area_actual, geom_acuifero):
+    st.markdown(f"""
+        <div style="background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border-left: 5px solid #0284c7; padding: 16px 20px; border-radius: 6px; margin-bottom: 18px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 14px;">
+                <span style="font-size: 32px;">📡</span>
+                <div>
+                    <h3 style="margin: 0; color: #0f172a; font-size: 16px; font-weight: 700;">Acuífero sin Red Piezométrica Oficial Activa</h3>
+                    <p style="margin: 4px 0 0 0; color: #475569; font-size: 13px;">
+                        El acuífero <b>{clave_actual} - {nombre_actual}</b> no cuenta actualmente con registros en la base de monitoreo histórico nacional de CONAGUA.
+                        Puedes <b>cargar mediciones locales de campo</b> para habilitar el diagnóstico geohidrológico completo o utilizar el <b>planificador de red</b> para diseñar una nueva red de monitoreo.
+                    </p>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    tab_subir, tab_planificar = st.tabs([
+        "📥 Cargar Mediciones Locales (Excel / CSV)",
+        "📐 Planificador y Diseño de Red (Zonas Ciegas y REPDA)"
+    ])
+
+    with tab_subir:
+        col_sub1, col_sub2 = st.columns([1.3, 1.0], gap="large")
+        with col_sub1:
+            st.markdown("<h4 style='color:#691C32; margin-top:0; font-size:15px; margin-bottom:8px;'>📂 Incorporar Datos de Campo o Estudio Técnico</h4>", unsafe_allow_html=True)
+            st.markdown("""
+                Si dispones de registros de un estudio técnico, monitoreo local o comité de cuenca (COTAS), cárgalos aquí.
+                La plataforma procesará automáticamente las profundidades al nivel estático (NE), calculará las cargas hidráulicas y <b>activará las 5 pestañas de análisis espacial</b>.
+            """)
+            archivo_subido = st.file_uploader(
+                "Selecciona o arrastra el archivo de mediciones (.xlsx o .csv):",
+                type=["xlsx", "xls", "csv"],
+                key=f"uploader_local_piezo_{clave_actual}"
+            )
+            if archivo_subido is not None:
+                df_procesado, err_msg = procesar_archivo_piezo_local(archivo_subido, clave_actual, nombre_actual)
+                if err_msg:
+                    st.error(f"❌ {err_msg}")
+                else:
+                    st.session_state[f"piezo_local_{str(clave_actual).strip().zfill(4)}"] = df_procesado
+                    st.success(f"✅ Se cargaron exitosamente {len(df_procesado['Pozo'].unique())} pozos con {len(df_procesado)} registros. Activando modelado...")
+                    st.rerun()
+
+        with col_sub2:
+            st.markdown("<h4 style='color:#0f172a; margin-top:0; font-size:15px; margin-bottom:8px;'>📋 Plantilla Oficial de Carga</h4>", unsafe_allow_html=True)
+            st.markdown("""
+                Descarga la plantilla oficial en Excel prediseñada para este módulo.
+                Incluye la estructura de columnas requeridas:
+                - <b>Pozo</b>: Nombre o código de la estación de monitoreo.
+                - <b>Latitud / Longitud</b>: Coordenadas en grados decimales (WGS84).
+                - <b>Elev.Terr</b>: Cota del terreno en msnm.
+                - <b>Columnas de Años (ej. 2020, 2021, 2022...)</b>: Profundidad al nivel estático en metros.
+            """, unsafe_allow_html=True)
+            bytes_plantilla = generar_plantilla_excel_piezo()
+            btn_plantilla = generar_enlace_descarga(
+                bytes_plantilla,
+                f"Plantilla_Piezometria_{clave_actual}.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "📥 Descargar Plantilla Oficial Excel (.xlsx)"
+            )
+            st.markdown(btn_plantilla, unsafe_allow_html=True)
+
+    with tab_planificar:
+        res_repda = cargar_resumen_repda(clave_actual)
+        conteo_repda = res_repda.get('total_aprovechamientos', 0) if res_repda else 0
+        vol_repda = res_repda.get('volumen_total_hm3', 0.0) if res_repda else 0.0
+
+        col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+        col_m1.metric("Superficie del Acuífero", f"{float(area_actual):,.1f} km²")
+        col_m2.metric("Aprovechamientos REPDA", f"{conteo_repda:,}")
+        col_m3.metric("Volumen Concesionado", f"{vol_repda:,.2f} hm³/a")
+        col_m4.metric("Cobertura de Monitoreo", "0.0% (Zona Ciega)")
+
+        st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
+        col_ctl1, col_ctl2 = st.columns([1, 2])
+        with col_ctl1:
+            radio_km = st.slider(
+                "Radio de representatividad por pozo (km):",
+                min_value=3,
+                max_value=25,
+                value=8,
+                step=1,
+                key=f"slider_radio_sin_red_{clave_actual}"
+            )
+
+        df_propuestas, _ = generar_propuesta_red_inicial(geom_acuifero, radio_km=radio_km)
+
+        geojson_ac_str = "{}"
+        bounds = None
+        if geom_acuifero is not None:
+            geojson_ac_str = json.dumps({
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "geometry": mapping(geom_acuifero),
+                    "properties": {"nombre": str(nombre_actual), "clave": str(clave_actual)}
+                }]
+            })
+            bounds = geom_acuifero.bounds
+
+        features_p = []
+        for _, r in df_propuestas.iterrows():
+            features_p.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [float(r['Longitud']), float(r['Latitud'])]},
+                "properties": {
+                    "id": str(r['ID']),
+                    "radio_km": float(r['Radio_Cobertura_km']),
+                    "area_km2": float(r['Area_Objetivo_km2']),
+                    "prioridad": str(r['Prioridad'])
+                }
+            })
+        geojson_prop_str = json.dumps({"type": "FeatureCollection", "features": features_p})
+
+        df_rep, geojson_repda_str, tiene_repda = cargar_capas_repda_geo(clave_actual)
+        if not tiene_repda or not geojson_repda_str:
+            geojson_repda_str = '{"type":"FeatureCollection","features":[]}'
+
+        c_lon = float(geom_acuifero.centroid.x) if geom_acuifero else -102.0
+        c_lat = float(geom_acuifero.centroid.y) if geom_acuifero else 23.0
+        bounds_js = f"[[{bounds[0]:.5f}, {bounds[1]:.5f}], [{bounds[2]:.5f}, {bounds[3]:.5f}]]" if bounds else "null"
+
+        html_mapa_plan = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+            <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+            <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+            <style>
+                body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; }}
+                .map-card {{
+                    position: absolute; top: 10px; right: 10px; z-index: 1000;
+                    background: rgba(255, 255, 255, 0.95); padding: 10px 14px;
+                    border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 11px;
+                }}
+                .map-legend {{
+                    position: absolute; bottom: 20px; left: 10px; z-index: 1000;
+                    background: rgba(255, 255, 255, 0.95); padding: 10px 14px;
+                    border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 11px;
+                }}
+                .legend-item {{ display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }}
+                .legend-color {{ width: 12px; height: 12px; border-radius: 50%; display: inline-block; }}
+            </style>
+        </head>
+        <body>
+            <div id="map"></div>
+            <div class="map-card">
+                <b>Capas Visibles</b><br>
+                <label><input type="checkbox" id="chk-limite" checked> Límite Acuífero</label><br>
+                <label><input type="checkbox" id="chk-prop" checked> Pozos Propuestos</label><br>
+                <label><input type="checkbox" id="chk-repda" checked> Captaciones REPDA</label>
+            </div>
+            <div class="map-legend">
+                <b>Simbología de Planificación</b>
+                <div class="legend-item"><span class="legend-color" style="background:#691C32; border:1px solid #691C32;"></span> Límite del Acuífero</div>
+                <div class="legend-item"><span class="legend-color" style="background:#0284c7; border:2px solid #ffffff;"></span> Pozo Propuesto (R={radio_km} km)</div>
+                <div class="legend-item"><span class="legend-color" style="background:#ea580c;"></span> Aprovechamiento REPDA</div>
+            </div>
+            <script>
+                const map = new maplibregl.Map({{
+                    container: 'map',
+                    style: {{
+                        version: 8,
+                        sources: {{
+                            'osm-tiles': {{
+                                type: 'raster',
+                                tiles: ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'],
+                                tileSize: 256,
+                                attribution: '&copy; OpenStreetMap'
+                            }}
+                        }},
+                        layers: [{{ id: 'osm-layer', type: 'raster', source: 'osm-tiles', minzoom: 0, maxzoom: 19 }}]
+                    }},
+                    center: [{c_lon:.5f}, {c_lat:.5f}],
+                    zoom: 9
+                }});
+
+                map.addControl(new maplibregl.NavigationControl(), 'top-left');
+                map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-left');
+
+                const geoAcuifero = {geojson_ac_str};
+                const geoPropuestas = {geojson_prop_str};
+                const geoRepda = {geojson_repda_str};
+
+                map.on('load', () => {{
+                    const bounds = {bounds_js};
+                    if (bounds) map.fitBounds(bounds, {{ padding: 35 }});
+
+                    if (geoAcuifero && geoAcuifero.features && geoAcuifero.features.length > 0) {{
+                        map.addSource('src-acuifero', {{ type: 'geojson', data: geoAcuifero }});
+                        map.addLayer({{
+                            id: 'layer-acuifero-fill',
+                            type: 'fill',
+                            source: 'src-acuifero',
+                            paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.08 }}
+                        }});
+                        map.addLayer({{
+                            id: 'layer-acuifero-line',
+                            type: 'line',
+                            source: 'src-acuifero',
+                            paint: {{ 'line-color': '#691C32', 'line-width': 2.5 }}
+                        }});
+                    }}
+
+                    if (geoPropuestas && geoPropuestas.features && geoPropuestas.features.length > 0) {{
+                        const featuresBuffers = [];
+                        geoPropuestas.features.forEach(f => {{
+                            try {{
+                                const b = turf.buffer(f, {radio_km}, {{ units: 'kilometers' }});
+                                b.properties = f.properties;
+                                featuresBuffers.push(b);
+                            }} catch(e) {{}}
+                        }});
+                        map.addSource('src-buffers-prop', {{ type: 'geojson', data: turf.featureCollection(featuresBuffers) }});
+                        map.addLayer({{
+                            id: 'layer-buffers-fill',
+                            type: 'fill',
+                            source: 'src-buffers-prop',
+                            paint: {{ 'fill-color': '#0284c7', 'fill-opacity': 0.12 }}
+                        }});
+                        map.addLayer({{
+                            id: 'layer-buffers-line',
+                            type: 'line',
+                            source: 'src-buffers-prop',
+                            paint: {{ 'line-color': '#0284c7', 'line-width': 1.5, 'line-dasharray': [3, 2] }}
+                        }});
+
+                        map.addSource('src-propuestas', {{ type: 'geojson', data: geoPropuestas }});
+                        map.addLayer({{
+                            id: 'layer-propuestas-circle',
+                            type: 'circle',
+                            source: 'src-propuestas',
+                            paint: {{
+                                'circle-radius': 7,
+                                'circle-color': '#0284c7',
+                                'circle-stroke-width': 2,
+                                'circle-stroke-color': '#ffffff'
+                            }}
+                        }});
+                    }}
+
+                    if (geoRepda && geoRepda.features && geoRepda.features.length > 0) {{
+                        map.addSource('src-repda', {{ type: 'geojson', data: geoRepda }});
+                        map.addLayer({{
+                            id: 'layer-repda-circle',
+                            type: 'circle',
+                            source: 'src-repda',
+                            paint: {{
+                                'circle-radius': 3.5,
+                                'circle-color': '#ea580c',
+                                'circle-stroke-width': 1,
+                                'circle-stroke-color': '#ffffff',
+                                'circle-opacity': 0.85
+                            }}
+                        }});
+                    }}
+
+                    map.on('click', 'layer-propuestas-circle', (e) => {{
+                        const p = e.features[0].properties;
+                        const c = e.features[0].geometry.coordinates;
+                        new maplibregl.Popup({{ offset: 10 }})
+                            .setLngLat(c)
+                            .setHTML(`
+                                <div style="font-size:11px;">
+                                    <b style="color:#0284c7;">📍 Sitio Propuesto: ${{p.id}}</b><br>
+                                    <b>Prioridad:</b> ${{p.prioridad}}<br>
+                                    <b>Radio:</b> ${{p.radio_km}} km<br>
+                                    <b>Área Cobertura:</b> ${{p.area_km2}} km²<br>
+                                    <b>Coord:</b> ${{c[1].toFixed(5)}}° N, ${{c[0].toFixed(5)}}° W
+                                </div>
+                            `)
+                            .addTo(map);
+                    }});
+
+                    map.on('mouseenter', 'layer-propuestas-circle', () => {{ map.getCanvas().style.cursor = 'pointer'; }});
+                    map.on('mouseleave', 'layer-propuestas-circle', () => {{ map.getCanvas().style.cursor = ''; }});
+
+                    document.getElementById('chk-limite').addEventListener('change', (e) => {{
+                        const v = e.target.checked ? 'visible' : 'none';
+                        if (map.getLayer('layer-acuifero-fill')) map.setLayoutProperty('layer-acuifero-fill', 'visibility', v);
+                        if (map.getLayer('layer-acuifero-line')) map.setLayoutProperty('layer-acuifero-line', 'visibility', v);
+                    }});
+                    document.getElementById('chk-prop').addEventListener('change', (e) => {{
+                        const v = e.target.checked ? 'visible' : 'none';
+                        if (map.getLayer('layer-buffers-fill')) map.setLayoutProperty('layer-buffers-fill', 'visibility', v);
+                        if (map.getLayer('layer-buffers-line')) map.setLayoutProperty('layer-buffers-line', 'visibility', v);
+                        if (map.getLayer('layer-propuestas-circle')) map.setLayoutProperty('layer-propuestas-circle', 'visibility', v);
+                    }});
+                    document.getElementById('chk-repda').addEventListener('change', (e) => {{
+                        const v = e.target.checked ? 'visible' : 'none';
+                        if (map.getLayer('layer-repda-circle')) map.setLayoutProperty('layer-repda-circle', 'visibility', v);
+                    }});
+                }});
+            </script>
+        </body>
+        </html>
+        """
+        components.html(html_mapa_plan, height=580)
+
+        st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
+        col_t1, col_t2 = st.columns([1.4, 1.0], gap="large")
+        with col_t1:
+            st.markdown("<p style='font-weight:700; color:#691C32; margin-bottom:6px; font-size:13px;'>📋 INVENTARIO DE SITIOS PROPUESTOS PARA LA NUEVA RED</p>", unsafe_allow_html=True)
+            st.dataframe(df_propuestas, use_container_width=True, hide_index=True, height=240)
+
+        with col_t2:
+            st.markdown("<p style='font-weight:700; color:#0f172a; margin-bottom:6px; font-size:13px;'>🚀 EXPORTACIÓN DE PROPUESTA (CERO-RERUN)</p>", unsafe_allow_html=True)
+            csv_prop_bytes = df_propuestas.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            btn_csv = generar_enlace_descarga(csv_prop_bytes, f"propuesta_red_{clave_actual}.csv", "text/csv", "📊 Descargar Propuesta (CSV)")
+            st.markdown(btn_csv, unsafe_allow_html=True)
+
+            geojson_prop_bytes = geojson_prop_str.encode('utf-8')
+            btn_geojson = generar_enlace_descarga(geojson_prop_bytes, f"propuesta_red_{clave_actual}.geojson", "application/geo+json", "🌐 Descargar Propuesta (GeoJSON)")
+            st.markdown(btn_geojson, unsafe_allow_html=True)
+
+            kmz_bytes = generar_kmz_propuesta_red(
+                clave_actual, nombre_actual, radio_km,
+                geom_acuifero, df_propuestas,
+                geojson_repda=geojson_repda_str if tiene_repda else None
+            )
+            btn_kmz = generar_enlace_descarga(kmz_bytes, f"propuesta_red_{clave_actual}.kmz", "application/vnd.google-earth.kmz", "🗺️ Descargar KMZ (Google Earth)")
+            st.markdown(btn_kmz, unsafe_allow_html=True)
+
+# =======================================================
+# 🔍 4.1 FILTRADO Y COMPROBACIÓN DE DATOS (OFICIAL O LOCAL)
 # =======================================================
 clave_limpia_global = str(clave_actual).strip().zfill(4)
+key_local = f"piezo_local_{clave_limpia_global}"
 
-if 'Clave' in df_largo.columns:
-    df_ac_completo = df_largo[df_largo['Clave'] == clave_limpia_global].copy()
+df_ac_completo = pd.DataFrame()
+es_dato_local = False
+
+if key_local in st.session_state and st.session_state[key_local] is not None and not st.session_state[key_local].empty:
+    df_ac_completo = st.session_state[key_local].copy()
+    es_dato_local = True
 else:
-    def normalizar(texto):
-        if pd.isna(texto) or not texto: return ""
-        t = str(texto).upper().strip()
-        t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
-        t = re.sub(r'[^A-Z0-9\s]', '', t)
-        return re.sub(r'\s+', ' ', t)
+    if 'Clave' in df_largo.columns:
+        df_ac_completo = df_largo[df_largo['Clave'] == clave_limpia_global].copy()
+    else:
+        def normalizar(texto):
+            if pd.isna(texto) or not texto: return ""
+            t = str(texto).upper().strip()
+            t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
+            t = re.sub(r'[^A-Z0-9\s]', '', t)
+            return re.sub(r'\s+', ' ', t)
 
-    nombre_limpio_global = normalizar(nombre_actual)
-    df_largo['Ac_Norm'] = df_largo['Acuifero'].apply(normalizar)
-    df_ac_completo = df_largo[df_largo['Ac_Norm'] == nombre_limpio_global].copy()
+        nombre_limpio_global = normalizar(nombre_actual)
+        df_largo['Ac_Norm'] = df_largo['Acuifero'].apply(normalizar)
+        df_ac_completo = df_largo[df_largo['Ac_Norm'] == nombre_limpio_global].copy()
 
-if df_ac_completo.empty:
-    st.error(f"❌ El acuífero **{clave_actual} - {nombre_actual}** no cuenta con registros en la base de monitoreo.")
-    st.stop()
+df_ac = df_ac_completo.dropna(subset=['Profundidad_NE', 'Año']).copy() if not df_ac_completo.empty else pd.DataFrame()
 
-df_ac = df_ac_completo.dropna(subset=['Profundidad_NE', 'Año']).copy()
+# Si es dato local, mostrar banner informativo con opción de restaurar
+if es_dato_local and not df_ac.empty:
+    col_loc1, col_loc2 = st.columns([4, 1])
+    with col_loc1:
+        st.success(f"📂 **Modo Datos Locales Activo:** Se están utilizando las mediciones de campo cargadas por el usuario ({len(df_ac['Pozo'].unique())} pozos activos).")
+    with col_loc2:
+        if st.button("🗑️ Descartar datos locales", key="btn_reset_local_piezo", use_container_width=True):
+            del st.session_state[key_local]
+            st.rerun()
+
+# Si el acuífero no cuenta con información oficial ni local: MODO ACUÍFERO SIN RED ACTIVA
 if df_ac.empty:
-    st.warning(f"⚠️ El acuífero **{nombre_actual}** existe en la base, pero todas sus mediciones de profundidad están en blanco.")
+    renderizar_modo_acuifero_sin_red(clave_actual, nombre_actual, area_actual, poligono_oficial_geom)
     st.stop()
 
 pozos_disponibles = sorted(df_ac['Pozo'].astype(str).unique().tolist())
