@@ -1366,7 +1366,7 @@ def renderizar_modo_acuifero_sin_red(clave_actual, nombre_actual, area_actual, g
             })
         geojson_prop_str = json.dumps({"type": "FeatureCollection", "features": features_p})
 
-        df_rep, geojson_repda_str, tiene_repda = cargar_capas_repda_geo(clave_actual)
+        df_rep, geojson_repda_str, tiene_repda = cargar_concesiones_repda_puntos(clave_actual)
         if not tiene_repda or not geojson_repda_str:
             geojson_repda_str = '{"type":"FeatureCollection","features":[]}'
 
