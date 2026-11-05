@@ -1467,7 +1467,7 @@ def _geom_a_kml(geom):
             res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
             for ring in coords[1:]:
                 inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
-                res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></innerBoundaryIs>")
+                res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
             res.append("</Polygon>")
             return "".join(res)
         elif gtype == "MultiPolygon":
@@ -1479,7 +1479,7 @@ def _geom_a_kml(geom):
                 res.append(f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>")
                 for ring in poly[1:]:
                     inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
-                    res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></innerBoundaryIs>")
+                    res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
                 res.append("</Polygon>")
             res.append("</MultiGeometry>")
             return "".join(res)
@@ -1504,7 +1504,7 @@ def _geom_a_kml(geom):
         res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
         for interior in geom.interiors:
             inte = " ".join([f"{x},{y},0" for x, y in interior.coords])
-            res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></innerBoundaryIs>")
+            res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
         res.append("</Polygon>")
         return "".join(res)
     elif gt == 'MultiPolygon':
