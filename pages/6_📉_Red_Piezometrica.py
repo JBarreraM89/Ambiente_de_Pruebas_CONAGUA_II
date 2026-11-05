@@ -1661,6 +1661,44 @@ def _construir_kml_repda(geojson_repda):
     lines.append('  </Folder>')
     return lines
 
+def _generar_png_flecha_flujo():
+    """Genera una imagen PNG estilizada de flecha hidrológica con antialiasing para vectores KMZ."""
+    try:
+        from PIL import Image, ImageDraw
+        size = 128
+        scale = 4
+        S = size * scale  # 512
+        img = Image.new('RGBA', (S, S), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        cx = S / 2.0
+        top_y = 35.0 * scale
+        bot_y = 100.0 * scale
+        stem_w = 8.5 * scale
+        head_w = 32.0 * scale
+        head_h = 48.0 * scale
+        
+        p_tip = (cx, top_y)
+        p_head_r = (cx + head_w, top_y + head_h)
+        p_in_r = (cx + stem_w, top_y + head_h - 8.0 * scale)
+        p_stem_br = (cx + stem_w, bot_y)
+        p_stem_bl = (cx - stem_w, bot_y)
+        p_in_l = (cx - stem_w, top_y + head_h - 8.0 * scale)
+        p_head_l = (cx - head_w, top_y + head_h)
+        
+        poly = [p_tip, p_head_r, p_in_r, p_stem_br, p_stem_bl, p_in_l, p_head_l]
+        
+        # Borde blanco exterior para alto contraste sobre satélite, ráster o geología
+        draw.polygon(poly, fill=(2, 132, 199, 255), outline=(255, 255, 255, 255), width=int(5.5 * scale))
+        draw.polygon(poly, fill=(2, 132, 199, 255))
+        
+        img_res = img.resize((size, size), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img_res.save(buf, format='PNG')
+        return buf.getvalue()
+    except Exception:
+        return None
+
 def generar_kmz_dinamica_flujo(
     clave_actual, nombre_acuifero, anio_sel, var_real,
     bounds, img_kriging_png, geojson_iso, geojson_flujo,
@@ -1771,66 +1809,53 @@ def generar_kmz_dinamica_flujo(
     feat_flujo = _parse_geojson_features(geojson_flujo)
     if feat_flujo:
         kml.append(f'  <Folder><name>4. Vectores de Flujo Subterráneo ({len(feat_flujo)} vectores)</name>')
-        span_diag = math.hypot(max_x - min_x, max_y - min_y)
-        len_base = max(span_diag * 0.022, 0.005)
         
+        # Graduación suave de escala por gradiente hidráulico
+        todos_grad = [float(f.get("properties", {}).get("GRAD_M_KM", 0.0)) for f in feat_flujo if f.get("properties")]
+        max_grad = max(todos_grad) if todos_grad else 1.0
+
         for idx, feat in enumerate(feat_flujo):
             props = feat.get("properties", {})
             coords = feat.get("geometry", {}).get("coordinates", [])
             if len(coords) < 2:
                 continue
             lo, la = float(coords[0]), float(coords[1])
-            vx = float(props.get("VX", 0.0))
-            vy = float(props.get("VY", 0.0))
             grad_m_km = float(props.get("GRAD_M_KM", 0.0))
             az = float(props.get("AZIMUT_DEG", 0.0))
             trans = props.get("TRANSMISIVIDAD_M2_DIA", None)
             caudal = props.get("CAUDAL_UNIT_M2_DIA", None)
 
-            mag = math.hypot(vx, vy)
-            if mag > 0:
-                dx = (vx / mag) * len_base
-                dy = (vy / mag) * len_base
+            # Escala suave proporcional al gradiente hidráulico (entre 0.72 y 1.15)
+            if max_grad > 0:
+                scale_v = round(0.72 + 0.38 * min(1.0, math.sqrt(max(0.0, grad_m_km) / max(max_grad, 1e-4))), 2)
             else:
-                continue
-
-            x1 = lo + dx
-            y1 = la + dy
-
-            # Geometría con cabeza de flecha continua (P0 -> P1 -> W1 -> W2 -> P1)
-            cos_lat = max(0.2, math.cos(math.radians(la)))
-            dx_m = dx * cos_lat
-            dy_m = dy
-            len_m = math.hypot(dx_m, dy_m)
-            if len_m > 0:
-                theta = math.atan2(dy_m, dx_m)
-                l_wing = len_m * 0.35
-                a1 = theta + math.radians(150)
-                a2 = theta - math.radians(150)
-                w1x = x1 + (l_wing * math.cos(a1)) / cos_lat
-                w1y = y1 + (l_wing * math.sin(a1))
-                w2x = x1 + (l_wing * math.cos(a2)) / cos_lat
-                w2y = y1 + (l_wing * math.sin(a2))
-                line_coords = f"{lo:.6f},{la:.6f},0 {x1:.6f},{y1:.6f},0 {w1x:.6f},{w1y:.6f},0 {w2x:.6f},{w2y:.6f},0 {x1:.6f},{y1:.6f},0"
-            else:
-                line_coords = f"{lo:.6f},{la:.6f},0 {x1:.6f},{y1:.6f},0"
+                scale_v = 0.85
 
             desc_flujo = f"""
-            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:200px;">
-              <b style="color:#0284c7;">Vector Hidrodinámico #{idx+1}</b><br>
-              <table style="width:100%;border-collapse:collapse;margin-top:4px;">
-                <tr><td style="color:#64748b;">Gradiente (i):</td><td><b>{grad_m_km:.2f} m/km</b></td></tr>
+            <div style="font-family:Arial,sans-serif;font-size:11px;min-width:215px;">
+              <div style="font-weight:700;color:#0284c7;font-size:12px;margin-bottom:4px;border-bottom:1px solid #CBD5E1;padding-bottom:2px;">🧭 Vector Hidrodinámico #{idx+1}</div>
+              <table style="width:100%;border-collapse:collapse;margin-top:4px;font-size:10.5px;">
                 <tr><td style="color:#64748b;">Dirección (Azimut):</td><td><b>{az:.1f}°</b></td></tr>
+                <tr><td style="color:#64748b;">Gradiente (i):</td><td><b>{grad_m_km:.2f} m/km</b></td></tr>
                 {"<tr><td style='color:#64748b;'>Transmisividad (T):</td><td><b>" + f"{trans:.2f} m²/d</b></td></tr>" if trans is not None else ""}
                 {"<tr><td style='color:#64748b;'>Caudal Unitario (q):</td><td><b>" + f"{caudal:.3f} m²/d</b></td></tr>" if caudal is not None else ""}
+                <tr><td style="color:#64748b;">Coordenadas:</td><td>{la:.5f}, {lo:.5f}</td></tr>
               </table>
             </div>
             """
             kml.append('    <Placemark>')
             kml.append(f'      <name>Flujo #{idx+1} ({az:.0f}° | {grad_m_km:.1f} m/km)</name>')
-            kml.append('      <styleUrl>#style-flujo-line</styleUrl>')
+            kml.append('      <Style>')
+            kml.append('        <IconStyle>')
+            kml.append(f'          <scale>{scale_v}</scale>')
+            kml.append(f'          <heading>{az:.1f}</heading>')
+            kml.append('          <Icon><href>arrow_flow.png</href></Icon>')
+            kml.append('          <hotSpot x="0.5" y="0.5" xunits="fraction" yunits="fraction"/>')
+            kml.append('        </IconStyle>')
+            kml.append('        <LabelStyle><scale>0</scale></LabelStyle>')
+            kml.append('      </Style>')
             kml.append(f'      <description><![CDATA[{desc_flujo}]]></description>')
-            kml.append(f'      <LineString><tessellate>1</tessellate><coordinates>{line_coords}</coordinates></LineString>')
+            kml.append(f'      <Point><coordinates>{lo:.6f},{la:.6f},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -1908,6 +1933,9 @@ def generar_kmz_dinamica_flujo(
         zf.writestr('doc.kml', kml_str.encode('utf-8'))
         if img_kriging_png:
             zf.writestr('kriging_overlay.png', img_kriging_png)
+        img_arrow_png = _generar_png_flecha_flujo()
+        if img_arrow_png:
+            zf.writestr('arrow_flow.png', img_arrow_png)
     buf_kmz.seek(0)
     return buf_kmz.getvalue()
 
