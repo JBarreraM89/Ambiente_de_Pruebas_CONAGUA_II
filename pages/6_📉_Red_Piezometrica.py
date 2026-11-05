@@ -1606,7 +1606,9 @@ def _extraer_puntos_rotulacion(geom, es_maestra=False):
             else:
                 fracs = [0.15, 0.35, 0.55, 0.75, 0.90]
         else:
-            if km < 6.0:
+            if km < 2.5:
+                fracs = []
+            elif km < 8.0:
                 fracs = [0.5]
             else:
                 fracs = [0.35, 0.65]
@@ -1820,11 +1822,22 @@ def _generar_png_flecha_flujo():
     except Exception:
         return None
 
+def _generar_png_anchor():
+    """Genera un PNG transparente de 1x1 pixel para anclar rótulos de texto flotantes en Google Earth sin iconos visibles."""
+    try:
+        from PIL import Image
+        img = Image.new('RGBA', (1, 1), (0, 0, 0, 0))
+        buf = io.BytesIO()
+        img.save(buf, format='PNG')
+        return buf.getvalue()
+    except Exception:
+        return None
+
 def generar_kmz_dinamica_flujo(
     clave_actual, nombre_acuifero, anio_sel, var_real,
     bounds, img_kriging_png, geojson_iso, geojson_flujo,
     df_pozos, delim_geom=None, props_kriging=None, marcadores_adicionales=None,
-    geojson_geo=None, geojson_repda=None
+    geojson_geo=None, geojson_repda=None, img_isolineas_png=None
 ):
     nombre_acuifero_safe = html.escape(str(nombre_acuifero))
     var_label = "Elevación Piezométrica" if "elev" in str(var_real).lower() or "carga" in str(var_real).lower() else "Profundidad al Nivel Estático"
@@ -1851,6 +1864,22 @@ def generar_kmz_dinamica_flujo(
         '  <Style id="style-limite">',
         '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
         '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-maestra-line">',
+        '    <LineStyle><color>ffffd000</color><width>3.0</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-intermedia-line">',
+        '    <LineStyle><color>b0e0d000</color><width>1.4</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-cota-maestra-lbl">',
+        '    <IconStyle><scale>0.8</scale><Icon><href>label_anchor.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.88</scale><color>ffffffff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-cota-intermedia-lbl">',
+        '    <IconStyle><scale>0.7</scale><Icon><href>label_anchor.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.72</scale><color>ccffffff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-iso-maestra">',
         '    <LineStyle><color>ffffd000</color><width>3.0</width></LineStyle>',
@@ -1909,88 +1938,127 @@ def generar_kmz_dinamica_flujo(
         kml.append('  </Folder>')
 
     feat_iso = _parse_geojson_features(geojson_iso)
-    if feat_iso:
-        # Extraer cotas unicas para jerarquia cartografica (Maestras vs Intermedias)
-        cotas_unicas = sorted(list(set([
-            round(float(f.get("properties", {}).get("COTA_M", 0.0)), 2)
-            for f in feat_iso if f.get("properties") and "COTA_M" in f["properties"]
-        ])))
-        cotas_maestras = _identificar_cotas_maestras(cotas_unicas)
-
-        feats_maestras = []
-        feats_intermedias = []
-        for feat in feat_iso:
-            props = feat.get("properties", {})
-            try:
-                cota_val = round(float(props.get("COTA_M", 0.0)), 2)
-            except Exception:
-                cota_val = None
-            if cota_val is not None and cota_val in cotas_maestras:
-                feats_maestras.append((feat, cota_val))
-            else:
-                feats_intermedias.append((feat, cota_val))
-
-        kml.append(f'  <Folder><name>3. Isopiezas Piezométricas ({len(feat_iso)} curvas)</name>')
+    if feat_iso or img_isolineas_png:
+        kml.append('  <Folder><name>3. Isopiezas Piezométricas</name>')
         kml.append('    <open>1</open>')
 
-        if feats_maestras:
-            kml.append(f'    <Folder><name>⭐ Curvas Maestras / Índice ({len(feats_maestras)} curvas)</name>')
-            for feat, cota_val in feats_maestras:
-                geom = feat.get("geometry", {})
+        if img_isolineas_png:
+            kml.append('    <GroundOverlay>')
+            kml.append(f'      <name>🗺️ Isopiezas Cartográficas HD ({var_label})</name>')
+            kml.append('      <description><![CDATA[')
+            kml.append(f'        <b>Isopiezas con Cotas en Línea (HD):</b><br>Curvas de nivel piezométricas estilizadas con rótulos tipográficos alineados a la trayectoria e inserción en línea con halo protector (estilo carta topográfica oficial INEGI/USGS).')
+            kml.append('      ]]></description>')
+            kml.append('      <Icon><href>isolineas_overlay.png</href></Icon>')
+            kml.append('      <LatLonBox>')
+            kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
+            kml.append('      </LatLonBox>')
+            kml.append('    </GroundOverlay>')
+
+        if feat_iso:
+            cotas_unicas = sorted(list(set([
+                round(float(f.get("properties", {}).get("COTA_M", 0.0)), 2)
+                for f in feat_iso if f.get("properties") and "COTA_M" in f["properties"]
+            ])))
+            cotas_maestras = _identificar_cotas_maestras(cotas_unicas)
+
+            feats_maestras = []
+            feats_intermedias = []
+            for feat in feat_iso:
                 props = feat.get("properties", {})
-                cota_txt = f"{cota_val:.1f}" if cota_val is not None else str(props.get("COTA_M", "N/D"))
-                if cota_val is not None and abs(cota_val - round(cota_val)) < 1e-3:
-                    cota_txt = f"{int(round(cota_val))}"
+                try:
+                    cota_val = round(float(props.get("COTA_M", 0.0)), 2)
+                except Exception:
+                    cota_val = None
+                if cota_val is not None and cota_val in cotas_maestras:
+                    feats_maestras.append((feat, cota_val))
+                else:
+                    feats_intermedias.append((feat, cota_val))
 
-                geom_kml = _geom_a_kml(geom)
-                puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=True)
-                if geom_kml:
-                    pts_kml = "".join(f"<Point><coordinates>{p[0]},{p[1]},0</coordinates></Point>" for p in puntos_rot)
-                    geom_final = f"<MultiGeometry>{geom_kml}{pts_kml}</MultiGeometry>" if pts_kml else geom_kml
+            rotulos_maestras = []
+            rotulos_intermedias = []
 
+            if feats_maestras:
+                kml.append(f'    <Folder><name>⭐ Curvas Maestras / Índice ({len(feats_maestras)} curvas)</name>')
+                for feat, cota_val in feats_maestras:
+                    geom = feat.get("geometry", {})
+                    props = feat.get("properties", {})
+                    cota_txt = f"{cota_val:.1f}" if cota_val is not None else str(props.get("COTA_M", "N/D"))
+                    if cota_val is not None and abs(cota_val - round(cota_val)) < 1e-3:
+                        cota_txt = f"{int(round(cota_val))}"
+
+                    geom_kml = _geom_a_kml(geom)
+                    puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=True)
+                    for pt in puntos_rot:
+                        rotulos_maestras.append((pt, cota_txt))
+
+                    if geom_kml:
+                        kml.append('      <Placemark>')
+                        kml.append(f'        <name>Cota {cota_txt} {unidad}</name>')
+                        kml.append('        <styleUrl>#style-iso-maestra-line</styleUrl>')
+                        kml.append('        <description><![CDATA[')
+                        kml.append(f'          <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                        kml.append(f'            <b style="color:#007799;">⭐ Curva Maestra (Índice)</b><br>')
+                        kml.append(f'            Cota: <b>{cota_txt} {unidad}</b><br>')
+                        kml.append(f'            Variable: {var_label}<br>')
+                        kml.append(f'            Rótulos distribuidos: {len(puntos_rot)}')
+                        kml.append('          </div>')
+                        kml.append('        ]]></description>')
+                        kml.append(f'        {geom_kml}')
+                        kml.append('      </Placemark>')
+                kml.append('    </Folder>')
+
+            if feats_intermedias:
+                kml.append(f'    <Folder><name>Curvas Intermedias ({len(feats_intermedias)} curvas)</name>')
+                for feat, cota_val in feats_intermedias:
+                    geom = feat.get("geometry", {})
+                    props = feat.get("properties", {})
+                    cota_txt = f"{cota_val:.1f}" if cota_val is not None else str(props.get("COTA_M", "N/D"))
+                    if cota_val is not None and abs(cota_val - round(cota_val)) < 1e-3:
+                        cota_txt = f"{int(round(cota_val))}"
+
+                    geom_kml = _geom_a_kml(geom)
+                    puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=False)
+                    for pt in puntos_rot:
+                        rotulos_intermedias.append((pt, cota_txt))
+
+                    if geom_kml:
+                        kml.append('      <Placemark>')
+                        kml.append(f'        <name>Cota {cota_txt} {unidad}</name>')
+                        kml.append('        <styleUrl>#style-iso-intermedia-line</styleUrl>')
+                        kml.append('        <description><![CDATA[')
+                        kml.append(f'          <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                        kml.append(f'            <b>Curva Intermedia</b><br>')
+                        kml.append(f'            Cota: <b>{cota_txt} {unidad}</b><br>')
+                        kml.append(f'            Variable: {var_label}')
+                        kml.append('          </div>')
+                        kml.append('        ]]></description>')
+                        kml.append(f'        {geom_kml}')
+                        kml.append('      </Placemark>')
+                kml.append('    </Folder>')
+
+            total_rot = len(rotulos_maestras) + len(rotulos_intermedias)
+            if total_rot > 0:
+                kml.append(f'    <Folder><name>🏷️ Rótulos de Cota en Pantalla ({total_rot} etiquetas)</name>')
+                kml.append('      <open>1</open>')
+                for pt, c_txt in rotulos_maestras:
                     kml.append('      <Placemark>')
-                    kml.append(f'        <name>{cota_txt} {unidad}</name>')
-                    kml.append('        <styleUrl>#style-iso-maestra</styleUrl>')
+                    kml.append(f'        <name>{c_txt} {unidad}</name>')
+                    kml.append('        <styleUrl>#style-cota-maestra-lbl</styleUrl>')
                     kml.append('        <description><![CDATA[')
-                    kml.append(f'          <div style="font-family:Arial,sans-serif;font-size:11px;">')
-                    kml.append(f'            <b style="color:#007799;">⭐ Curva Maestra (Índice)</b><br>')
-                    kml.append(f'            Cota: <b>{cota_txt} {unidad}</b><br>')
-                    kml.append(f'            Variable: {var_label}<br>')
-                    kml.append(f'            Rótulos distribuidos: {len(puntos_rot)}')
-                    kml.append('          </div>')
+                    kml.append(f'          <b>Cota Piezométrica:</b> {c_txt} {unidad}<br><b>Variable:</b> {var_label}<br><b>Jerarquía:</b> ⭐ Curva Maestra (Índice)')
                     kml.append('        ]]></description>')
-                    kml.append(f'        {geom_final}')
+                    kml.append(f'        <Point><coordinates>{pt[0]:.6f},{pt[1]:.6f},0</coordinates></Point>')
                     kml.append('      </Placemark>')
-            kml.append('    </Folder>')
-
-        if feats_intermedias:
-            kml.append(f'    <Folder><name>Curvas Intermedias ({len(feats_intermedias)} curvas)</name>')
-            for feat, cota_val in feats_intermedias:
-                geom = feat.get("geometry", {})
-                props = feat.get("properties", {})
-                cota_txt = f"{cota_val:.1f}" if cota_val is not None else str(props.get("COTA_M", "N/D"))
-                if cota_val is not None and abs(cota_val - round(cota_val)) < 1e-3:
-                    cota_txt = f"{int(round(cota_val))}"
-
-                geom_kml = _geom_a_kml(geom)
-                puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=False)
-                if geom_kml:
-                    pts_kml = "".join(f"<Point><coordinates>{p[0]},{p[1]},0</coordinates></Point>" for p in puntos_rot)
-                    geom_final = f"<MultiGeometry>{geom_kml}{pts_kml}</MultiGeometry>" if pts_kml else geom_kml
-
+                for pt, c_txt in rotulos_intermedias:
                     kml.append('      <Placemark>')
-                    kml.append(f'        <name>{cota_txt} {unidad}</name>')
-                    kml.append('        <styleUrl>#style-iso-intermedia</styleUrl>')
+                    kml.append(f'        <name>{c_txt} {unidad}</name>')
+                    kml.append('        <styleUrl>#style-cota-intermedia-lbl</styleUrl>')
                     kml.append('        <description><![CDATA[')
-                    kml.append(f'          <div style="font-family:Arial,sans-serif;font-size:11px;">')
-                    kml.append(f'            <b>Curva Intermedia</b><br>')
-                    kml.append(f'            Cota: <b>{cota_txt} {unidad}</b><br>')
-                    kml.append(f'            Variable: {var_label}')
-                    kml.append('          </div>')
+                    kml.append(f'          <b>Cota Piezométrica:</b> {c_txt} {unidad}<br><b>Variable:</b> {var_label}<br><b>Jerarquía:</b> Curva Intermedia')
                     kml.append('        ]]></description>')
-                    kml.append(f'        {geom_final}')
+                    kml.append(f'        <Point><coordinates>{pt[0]:.6f},{pt[1]:.6f},0</coordinates></Point>')
                     kml.append('      </Placemark>')
-            kml.append('    </Folder>')
+                kml.append('    </Folder>')
 
         kml.append('  </Folder>')
 
@@ -2121,9 +2189,14 @@ def generar_kmz_dinamica_flujo(
         zf.writestr('doc.kml', kml_str.encode('utf-8'))
         if img_kriging_png:
             zf.writestr('kriging_overlay.png', img_kriging_png)
+        if img_isolineas_png:
+            zf.writestr('isolineas_overlay.png', img_isolineas_png)
         img_arrow_png = _generar_png_flecha_flujo()
         if img_arrow_png:
             zf.writestr('arrow_flow.png', img_arrow_png)
+        img_anchor_png = _generar_png_anchor()
+        if img_anchor_png:
+            zf.writestr('label_anchor.png', img_anchor_png)
     buf_kmz.seek(0)
     return buf_kmz.getvalue()
 
@@ -2131,7 +2204,7 @@ def generar_kmz_evolucion(
     clave_actual, nombre_acuifero, anio_t1, anio_t2,
     bounds, img_evo_png, geojson_iso_bytes,
     df_pz_evo, delim_geom=None, resumen_repda=None, geojson_repda_str=None,
-    geojson_geo=None
+    geojson_geo=None, img_iso_png=None
 ):
     nombre_acuifero_safe = html.escape(str(nombre_acuifero))
     min_y, min_x = float(bounds[0][0]), float(bounds[0][1])
@@ -2154,6 +2227,42 @@ def generar_kmz_evolucion(
         '  <Style id="style-limite">',
         '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
         '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-abat-maestra-line">',
+        '    <LineStyle><color>ff0000b3</color><width>2.8</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-abat-intermedia-line">',
+        '    <LineStyle><color>990000b3</color><width>1.4</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-recup-maestra-line">',
+        '    <LineStyle><color>ffcc5500</color><width>2.8</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-recup-intermedia-line">',
+        '    <LineStyle><color>99cc5500</color><width>1.4</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-equil-maestra-line">',
+        '    <LineStyle><color>ff503e2c</color><width>2.8</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-equil-intermedia-line">',
+        '    <LineStyle><color>99503e2c</color><width>1.4</width></LineStyle>',
+        '    <LabelStyle><scale>0</scale></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-dh-abat-lbl">',
+        '    <IconStyle><scale>0.8</scale><Icon><href>label_anchor.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.88</scale><color>ff8888ff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-dh-recup-lbl">',
+        '    <IconStyle><scale>0.8</scale><Icon><href>label_anchor.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.88</scale><color>ffffff88</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-dh-equil-lbl">',
+        '    <IconStyle><scale>0.8</scale><Icon><href>label_anchor.png</href></Icon></IconStyle>',
+        '    <LabelStyle><scale>0.88</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-iso-abat-maestra">',
         '    <LineStyle><color>ff0000b3</color><width>2.8</width></LineStyle>',
@@ -2228,42 +2337,117 @@ def generar_kmz_evolucion(
         kml.append('  </Folder>')
 
     feat_iso = _parse_geojson_features(geojson_iso_bytes)
-    if feat_iso:
-        deltas_unicos = sorted(list(set([
-            round(float(f.get("properties", {}).get("DELTA_H_M", 0.0)), 2)
-            for f in feat_iso if f.get("properties") and "DELTA_H_M" in f["properties"]
-        ])))
-        deltas_maestras = _identificar_cotas_maestras(deltas_unicos)
+    if feat_iso or img_iso_png:
+        kml.append(f'  <Folder><name>3. Isolíneas de Variación Δh</name>')
+        kml.append('    <open>1</open>')
 
-        kml.append(f'  <Folder><name>3. Isolíneas de Variación Δh ({len(feat_iso)} isolíneas)</name>')
-        for idx, feat in enumerate(feat_iso):
-            geom = feat.get("geometry", {})
-            props = feat.get("properties", {})
-            dh_val = float(props.get("DELTA_H_M", 0.0))
-            tipo_iso = props.get("TIPO", "Abatimiento" if dh_val < 0 else "Recuperación")
-            es_maestra = round(dh_val, 2) in deltas_maestras
+        if img_iso_png:
+            kml.append('    <GroundOverlay>')
+            kml.append(f'      <name>🗺️ Isolíneas Δh Cartográficas HD ({anio_t1} - {anio_t2})</name>')
+            kml.append('      <description><![CDATA[')
+            kml.append('        <b>Isolíneas Diferenciales Δh en Alta Resolución:</b><br>Curvas de abatimiento (-) y recuperación (+) con rótulos tipográficos rotados en línea con halo protector (estilo publicación técnica).')
+            kml.append('      ]]></description>')
+            kml.append('      <Icon><href>isolineas_evo_overlay.png</href></Icon>')
+            kml.append('      <LatLonBox>')
+            kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
+            kml.append('      </LatLonBox>')
+            kml.append('    </GroundOverlay>')
 
-            if dh_val < -1e-4:
-                style_iso = "#style-iso-abat-maestra" if es_maestra else "#style-iso-abat-intermedia"
-            elif dh_val > 1e-4:
-                style_iso = "#style-iso-recup-maestra" if es_maestra else "#style-iso-recup-intermedia"
-            else:
-                style_iso = "#style-iso-equil-maestra" if es_maestra else "#style-iso-equil-intermedia"
+        if feat_iso:
+            deltas_unicos = sorted(list(set([
+                round(float(f.get("properties", {}).get("DELTA_H_M", 0.0)), 2)
+                for f in feat_iso if f.get("properties") and "DELTA_H_M" in f["properties"]
+            ])))
+            deltas_maestras = _identificar_cotas_maestras(deltas_unicos)
 
-            geom_kml = _geom_a_kml(geom)
-            puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=es_maestra)
-            if geom_kml:
-                pts_kml = "".join(f"<Point><coordinates>{p[0]},{p[1]},0</coordinates></Point>" for p in puntos_rot)
-                geom_final = f"<MultiGeometry>{geom_kml}{pts_kml}</MultiGeometry>" if pts_kml else geom_kml
+            rotulos_dh = []
+            feats_maestras_dh = []
+            feats_inter_dh = []
 
-                kml.append('    <Placemark>')
-                kml.append(f'      <name>Δh = {dh_val:+.1f} m</name>')
-                kml.append(f'      <styleUrl>{style_iso}</styleUrl>')
-                kml.append('      <description><![CDATA[')
-                kml.append(f'        <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Jerarquía:</b> {"⭐ Maestra (Índice)" if es_maestra else "Intermedia"}<br><b>Comportamiento:</b> {tipo_iso}')
-                kml.append('      ]]></description>')
-                kml.append(f'      {geom_final}')
-                kml.append('    </Placemark>')
+            for feat in feat_iso:
+                props = feat.get("properties", {})
+                dh_val = float(props.get("DELTA_H_M", 0.0))
+                es_maestra = round(dh_val, 2) in deltas_maestras
+                if es_maestra:
+                    feats_maestras_dh.append((feat, dh_val))
+                else:
+                    feats_inter_dh.append((feat, dh_val))
+
+            if feats_maestras_dh:
+                kml.append(f'    <Folder><name>⭐ Isolíneas Maestras / Índice ({len(feats_maestras_dh)} curvas)</name>')
+                for feat, dh_val in feats_maestras_dh:
+                    geom = feat.get("geometry", {})
+                    props = feat.get("properties", {})
+                    tipo_iso = props.get("TIPO", "Abatimiento" if dh_val < 0 else "Recuperación")
+                    if dh_val < -1e-4:
+                        style_line = "#style-iso-abat-maestra-line"
+                        style_lbl = "#style-dh-abat-lbl"
+                    elif dh_val > 1e-4:
+                        style_line = "#style-iso-recup-maestra-line"
+                        style_lbl = "#style-dh-recup-lbl"
+                    else:
+                        style_line = "#style-iso-equil-maestra-line"
+                        style_lbl = "#style-dh-equil-lbl"
+
+                    geom_kml = _geom_a_kml(geom)
+                    puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=True)
+                    for pt in puntos_rot:
+                        rotulos_dh.append((pt, f"Δh = {dh_val:+.1f} m", style_lbl))
+
+                    if geom_kml:
+                        kml.append('      <Placemark>')
+                        kml.append(f'        <name>Δh = {dh_val:+.1f} m</name>')
+                        kml.append(f'        <styleUrl>{style_line}</styleUrl>')
+                        kml.append('        <description><![CDATA[')
+                        kml.append(f'          <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Jerarquía:</b> ⭐ Maestra (Índice)<br><b>Comportamiento:</b> {tipo_iso}')
+                        kml.append('        ]]></description>')
+                        kml.append(f'        {geom_kml}')
+                        kml.append('      </Placemark>')
+                kml.append('    </Folder>')
+
+            if feats_inter_dh:
+                kml.append(f'    <Folder><name>Isolíneas Intermedias ({len(feats_inter_dh)} curvas)</name>')
+                for feat, dh_val in feats_inter_dh:
+                    geom = feat.get("geometry", {})
+                    props = feat.get("properties", {})
+                    tipo_iso = props.get("TIPO", "Abatimiento" if dh_val < 0 else "Recuperación")
+                    if dh_val < -1e-4:
+                        style_line = "#style-iso-abat-intermedia-line"
+                        style_lbl = "#style-dh-abat-lbl"
+                    elif dh_val > 1e-4:
+                        style_line = "#style-iso-recup-intermedia-line"
+                        style_lbl = "#style-dh-recup-lbl"
+                    else:
+                        style_line = "#style-iso-equil-intermedia-line"
+                        style_lbl = "#style-dh-equil-lbl"
+
+                    geom_kml = _geom_a_kml(geom)
+                    puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=False)
+                    for pt in puntos_rot:
+                        rotulos_dh.append((pt, f"Δh = {dh_val:+.1f} m", style_lbl))
+
+                    if geom_kml:
+                        kml.append('      <Placemark>')
+                        kml.append(f'        <name>Δh = {dh_val:+.1f} m</name>')
+                        kml.append(f'        <styleUrl>{style_line}</styleUrl>')
+                        kml.append('        <description><![CDATA[')
+                        kml.append(f'          <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Jerarquía:</b> Intermedia<br><b>Comportamiento:</b> {tipo_iso}')
+                        kml.append('        ]]></description>')
+                        kml.append(f'        {geom_kml}')
+                        kml.append('      </Placemark>')
+                kml.append('    </Folder>')
+
+            if rotulos_dh:
+                kml.append(f'    <Folder><name>🏷️ Rótulos de Variación Δh ({len(rotulos_dh)} etiquetas)</name>')
+                kml.append('      <open>1</open>')
+                for pt, dh_txt, st_lbl in rotulos_dh:
+                    kml.append('      <Placemark>')
+                    kml.append(f'        <name>{dh_txt}</name>')
+                    kml.append(f'        <styleUrl>{st_lbl}</styleUrl>')
+                    kml.append('        <Point><coordinates>{pt[0]:.6f},{pt[1]:.6f},0</coordinates></Point>')
+                    kml.append('      </Placemark>')
+                kml.append('    </Folder>')
+
         kml.append('  </Folder>')
 
     df_pz_df = df_pz_evo if isinstance(df_pz_evo, pd.DataFrame) else pd.DataFrame(df_pz_evo if df_pz_evo else [])
@@ -2330,6 +2514,11 @@ def generar_kmz_evolucion(
         zf.writestr('doc.kml', kml_str.encode('utf-8'))
         if img_evo_png:
             zf.writestr('evolucion_overlay.png', img_evo_png)
+        if img_iso_png:
+            zf.writestr('isolineas_evo_overlay.png', img_iso_png)
+        img_anchor_png = _generar_png_anchor()
+        if img_anchor_png:
+            zf.writestr('label_anchor.png', img_anchor_png)
     buf_kmz.seek(0)
     return buf_kmz.getvalue()
 
@@ -2546,11 +2735,15 @@ def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
                         intervalo_iso)
     if len(niveles) < 2: niveles = np.linspace(vmin, vmax, 5)
         
+    import matplotlib.patheffects as patheffects
     contours = ax.contour(X, Y, Z_masked, levels=niveles, colors='white', linestyles='dashed', linewidths=1.6, alpha=0.95)
-    ax.clabel(contours, inline=True, fontsize=10.5, fmt='%1.1f', colors='#002B49')
+    fmt_c = '%1.0f' if all(abs(lvl - round(lvl)) < 1e-3 for lvl in niveles) else '%1.1f'
+    clbls = ax.clabel(contours, inline=True, fontsize=10.5, fmt=fmt_c, colors='#002B49')
+    for txt in clbls:
+        txt.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
     
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', transparent=True, pad_inches=0)
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=150)
     plt.close(fig)
     
     features, line_geoms, cotas = [], [], []
@@ -2731,22 +2924,29 @@ def render_imagen_isolineas_evolucion(X, Y, delta_Z_masked, bounds, intervalo_is
     niveles_cero = [round(float(n), 2) for n in niveles if abs(n) <= 1e-4]
     niveles_pos = [round(float(n), 2) for n in niveles if n > 1e-4]
     
+    import matplotlib.patheffects as patheffects
     contours_all = []
     if niveles_neg:
         c_neg = ax.contour(X, Y, delta_Z_masked, levels=niveles_neg, colors='#990000', linestyles='solid', linewidths=1.8, alpha=0.95)
-        ax.clabel(c_neg, inline=True, fontsize=10, fmt='%.1f m', colors='#660000')
+        cl_neg = ax.clabel(c_neg, inline=True, fontsize=10, fmt='%.1f m', colors='#660000')
+        for t in cl_neg:
+            t.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
         contours_all.append(c_neg)
     if niveles_cero:
         c_cero = ax.contour(X, Y, delta_Z_masked, levels=niveles_cero, colors='#2C3E50', linestyles='solid', linewidths=2.2, alpha=0.95)
-        ax.clabel(c_cero, inline=True, fontsize=10.5, fmt='0.0 m (Equilibrio)', colors='#1A252F')
+        cl_cero = ax.clabel(c_cero, inline=True, fontsize=10.5, fmt='0.0 m (Equilibrio)', colors='#1A252F')
+        for t in cl_cero:
+            t.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
         contours_all.append(c_cero)
     if niveles_pos:
         c_pos = ax.contour(X, Y, delta_Z_masked, levels=niveles_pos, colors='#0055AA', linestyles='dashed', linewidths=1.8, alpha=0.95)
-        ax.clabel(c_pos, inline=True, fontsize=10, fmt='+%.1f m', colors='#003366')
+        cl_pos = ax.clabel(c_pos, inline=True, fontsize=10, fmt='+%.1f m', colors='#003366')
+        for t in cl_pos:
+            t.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
         contours_all.append(c_pos)
         
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', transparent=True, pad_inches=0)
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=150)
     plt.close(fig)
     
     features, line_geoms, cotas = [], [], []
@@ -5570,7 +5770,8 @@ with tab_mapa:
                                 df_ultimo, delim_geom=geom_activa, props_kriging=props_kriging,
                                 marcadores_adicionales=st.session_state.get("marcadores_piezo", []),
                                 geojson_geo=geojson_geo_str,
-                                geojson_repda=geojson_repda_tab1_str if tiene_repda_tab1 else None
+                                geojson_repda=geojson_repda_tab1_str if tiene_repda_tab1 else None,
+                                img_isolineas_png=img_isolineas
                             )
                             btn_kmz_flujo = generar_enlace_descarga(
                                 kmz_flujo_bytes, f"dinamica_flujo_{clave_actual}_{anio_sel}.kmz",
@@ -7394,7 +7595,8 @@ with tab_evolucion:
                 bounds, img_evo_png, geojson_iso_bytes,
                 df_pz_evo, delim_geom=delim_geom, resumen_repda=resumen_repda,
                 geojson_repda_str=geojson_repda_str if tiene_repda_pts else None,
-                geojson_geo=geojson_geo_evo_str
+                geojson_geo=geojson_geo_evo_str,
+                img_iso_png=img_iso_png
             )
             btn_kmz_evo = generar_enlace_descarga(
                 kmz_evo_bytes, f"evolucion_delta_h_{clave_actual}_{anio_t1}_{anio_t2}.kmz",
