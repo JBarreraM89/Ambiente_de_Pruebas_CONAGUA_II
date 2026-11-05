@@ -1660,10 +1660,10 @@ def _geom_a_kml(geom):
         gtype = geom.get("type", "")
         coords = geom.get("coordinates", [])
         if gtype == "Point":
-            return f"<Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>"
+            return f"<Point><altitudeMode>clampToGround</altitudeMode><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>"
         elif gtype == "LineString":
             c_str = " ".join([f"{pt[0]},{pt[1]},0" for pt in coords if len(pt) >= 2])
-            return f"<LineString><tessellate>1</tessellate><coordinates>{c_str}</coordinates></LineString>"
+            return f"<LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>{c_str}</coordinates></LineString>"
         elif gtype == "MultiLineString":
             res = ["<MultiGeometry>"]
             for line in coords:
@@ -1675,7 +1675,7 @@ def _geom_a_kml(geom):
             if not coords:
                 return ""
             ext = " ".join([f"{pt[0]},{pt[1]},0" for pt in coords[0] if len(pt) >= 2])
-            res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
+            res = [f"<Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
             for ring in coords[1:]:
                 inte = " ".join([f"{pt[0]},{pt[1]},0" for pt in ring if len(pt) >= 2])
                 res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
@@ -1699,10 +1699,10 @@ def _geom_a_kml(geom):
         return ""
     gt = getattr(geom, "geom_type", "")
     if gt == 'Point':
-        return f"<Point><coordinates>{geom.x},{geom.y},0</coordinates></Point>"
+        return f"<Point><altitudeMode>clampToGround</altitudeMode><coordinates>{geom.x},{geom.y},0</coordinates></Point>"
     elif gt == 'LineString':
         coords = " ".join([f"{x},{y},0" for x, y in geom.coords])
-        return f"<LineString><tessellate>1</tessellate><coordinates>{coords}</coordinates></LineString>"
+        return f"<LineString><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><coordinates>{coords}</coordinates></LineString>"
     elif gt == 'MultiLineString':
         res = ["<MultiGeometry>"]
         for line in geom.geoms:
@@ -1712,7 +1712,7 @@ def _geom_a_kml(geom):
         return "".join(res)
     elif gt == 'Polygon':
         ext = " ".join([f"{x},{y},0" for x, y in geom.exterior.coords])
-        res = [f"<Polygon><tessellate>1</tessellate><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
+        res = [f"<Polygon><tessellate>1</tessellate><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>{ext}</coordinates></LinearRing></outerBoundaryIs>"]
         for interior in geom.interiors:
             inte = " ".join([f"{x},{y},0" for x, y in interior.coords])
             res.append(f"<innerBoundaryIs><LinearRing><coordinates>{inte}</coordinates></LinearRing></innerBoundaryIs>")
@@ -1851,7 +1851,7 @@ def _construir_kml_repda(geojson_repda):
         lines.append('    <Placemark>')
         lines.append(f'      <name>{folio} ({uso})</name>')
         lines.append('      <Style>')
-        lines.append(f'        <IconStyle><scale>0.6</scale><color>{kml_color}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+        lines.append(f'        <IconStyle><scale>0.6</scale><color>{kml_color}</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
         lines.append('        <LabelStyle><scale>0</scale></LabelStyle>')
         lines.append('      </Style>')
         lines.append('      <description><![CDATA[')
@@ -1867,7 +1867,7 @@ def _construir_kml_repda(geojson_repda):
         lines.append('          </table>')
         lines.append('        </div>')
         lines.append('      ]]></description>')
-        lines.append(f'      <Point><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
+        lines.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{coords[0]},{coords[1]},0</coordinates></Point>')
         lines.append('    </Placemark>')
     lines.append('  </Folder>')
     return lines
@@ -1923,12 +1923,27 @@ def generar_kmz_dinamica_flujo(
     min_y, min_x = float(bounds[0][0]), float(bounds[0][1])
     max_y, max_x = float(bounds[1][0]), float(bounds[1][1])
 
+    centro_lon = (min_x + max_x) / 2.0
+    centro_lat = (min_y + max_y) / 2.0
+    dx_m = (max_x - min_x) * 111320.0 * math.cos(math.radians(centro_lat))
+    dy_m = (max_y - min_y) * 110574.0
+    range_flujo_m = max(30000.0, max(dx_m, dy_m) * 1.5)
+
     kml = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<kml xmlns="http://www.opengis.net/kml/2.2">',
         '<Document>',
         f'  <name>Piezometría y Dinámica de Flujo ({anio_sel}) - {clave_actual} {nombre_acuifero_safe}</name>',
         '  <open>1</open>',
+        '  <LookAt>',
+        f'    <longitude>{centro_lon:.6f}</longitude>',
+        f'    <latitude>{centro_lat:.6f}</latitude>',
+        '    <altitude>0</altitude>',
+        '    <heading>0</heading>',
+        '    <tilt>0</tilt>',
+        f'    <range>{range_flujo_m:.0f}</range>',
+        '    <altitudeMode>clampToGround</altitudeMode>',
+        '  </LookAt>',
         '  <description><![CDATA[',
         '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
         f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_acuifero_safe}</h3>',
@@ -1952,11 +1967,11 @@ def generar_kmz_dinamica_flujo(
         '    <LabelStyle><scale>0</scale></LabelStyle>',
         '  </Style>',
         '  <Style id="style-pozo-extra-manual">',
-        '    <IconStyle><scale>0.85</scale><color>ff0054d3</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <IconStyle><scale>0.85</scale><color>ff0054d3</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
         '    <LabelStyle><scale>0.8</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-pozo-extra-csv">',
-        '    <IconStyle><scale>0.85</scale><color>ffb98029</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <IconStyle><scale>0.85</scale><color>ffb98029</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
         '    <LabelStyle><scale>0.8</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>'
     ]
@@ -1999,7 +2014,7 @@ def generar_kmz_dinamica_flujo(
             mid_pt = _extraer_punto_medio(geom)
             if geom_kml:
                 if mid_pt:
-                    geom_final = f"<MultiGeometry>{geom_kml}<Point><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
+                    geom_final = f"<MultiGeometry>{geom_kml}<Point><altitudeMode>clampToGround</altitudeMode><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
                 else:
                     geom_final = geom_kml
 
@@ -2066,7 +2081,7 @@ def generar_kmz_dinamica_flujo(
             kml.append('        <LabelStyle><scale>0</scale></LabelStyle>')
             kml.append('      </Style>')
             kml.append(f'      <description><![CDATA[{desc_flujo}]]></description>')
-            kml.append(f'      <Point><coordinates>{lo:.6f},{la:.6f},0</coordinates></Point>')
+            kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lo:.6f},{la:.6f},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -2100,11 +2115,11 @@ def generar_kmz_dinamica_flujo(
             kml.append('    <Placemark>')
             kml.append(f'      <name>{pz_nom} ({val:.1f} {unidad})</name>')
             kml.append('      <Style>')
-            kml.append(f'        <IconStyle><scale>0.85</scale><color>{kml_col}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+            kml.append(f'        <IconStyle><scale>0.85</scale><color>{kml_col}</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
             kml.append('        <LabelStyle><scale>0.75</scale><color>ffffffff</color></LabelStyle>')
             kml.append('      </Style>')
             kml.append(f'      <description><![CDATA[{desc_pz}]]></description>')
-            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -2123,7 +2138,7 @@ def generar_kmz_dinamica_flujo(
             kml.append('      <description><![CDATA[')
             kml.append(f'        <b>{nom_pt}</b><br>Fuente: {fuente_pt}<br>Tipo: {tipo_pt}<br>Coord: {lat_pt:.5f}, {lon_pt:.5f}')
             kml.append('      ]]></description>')
-            kml.append(f'      <Point><coordinates>{lon_pt},{lat_pt},0</coordinates></Point>')
+            kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon_pt},{lat_pt},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -2160,12 +2175,27 @@ def generar_kmz_evolucion(
     min_y, min_x = float(bounds[0][0]), float(bounds[0][1])
     max_y, max_x = float(bounds[1][0]), float(bounds[1][1])
 
+    centro_lon = (min_x + max_x) / 2.0
+    centro_lat = (min_y + max_y) / 2.0
+    dx_m = (max_x - min_x) * 111320.0 * math.cos(math.radians(centro_lat))
+    dy_m = (max_y - min_y) * 110574.0
+    range_evo_m = max(30000.0, max(dx_m, dy_m) * 1.5)
+
     kml = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<kml xmlns="http://www.opengis.net/kml/2.2">',
         '<Document>',
         f'  <name>Evolución Piezométrica Δh ({anio_t1} - {anio_t2}) - {clave_actual} {nombre_acuifero_safe}</name>',
         '  <open>1</open>',
+        '  <LookAt>',
+        f'    <longitude>{centro_lon:.6f}</longitude>',
+        f'    <latitude>{centro_lat:.6f}</latitude>',
+        '    <altitude>0</altitude>',
+        '    <heading>0</heading>',
+        '    <tilt>0</tilt>',
+        f'    <range>{range_evo_m:.0f}</range>',
+        '    <altitudeMode>clampToGround</altitudeMode>',
+        '  </LookAt>',
         '  <description><![CDATA[',
         '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
         f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_acuifero_safe}</h3>',
@@ -2240,7 +2270,7 @@ def generar_kmz_evolucion(
             mid_pt = _extraer_punto_medio(geom)
             if geom_kml:
                 if mid_pt:
-                    geom_final = f"<MultiGeometry>{geom_kml}<Point><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
+                    geom_final = f"<MultiGeometry>{geom_kml}<Point><altitudeMode>clampToGround</altitudeMode><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
                 else:
                     geom_final = geom_kml
 
@@ -2293,11 +2323,11 @@ def generar_kmz_evolucion(
             kml.append('    <Placemark>')
             kml.append(f'      <name>{pz_nom} ({dh:+.1f} m | {tasa:+.2f} m/a)</name>')
             kml.append('      <Style>')
-            kml.append(f'        <IconStyle><scale>0.85</scale><color>{kml_col}</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
+            kml.append(f'        <IconStyle><scale>0.85</scale><color>{kml_col}</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>')
             kml.append('        <LabelStyle><scale>0.75</scale><color>ffffffff</color></LabelStyle>')
             kml.append('      </Style>')
             kml.append(f'      <description><![CDATA[{desc_pz}]]></description>')
-            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -2335,12 +2365,32 @@ def generar_kmz_cobertura(
     pct_cub = metricas.get('pct_cubierta', 0.0)
     km2_pz = metricas.get('km2_por_pozo', 0.0)
 
+    lookat_lines = []
+    if delim_geom is not None and not delim_geom.is_empty:
+        c_lon = float(delim_geom.centroid.x)
+        c_lat = float(delim_geom.centroid.y)
+        minx_c, miny_c, maxx_c, maxy_c = delim_geom.bounds
+        dx_c = (maxx_c - minx_c) * 111320.0 * math.cos(math.radians(c_lat))
+        dy_c = (maxy_c - miny_c) * 110574.0
+        range_cob_m = max(30000.0, max(dx_c, dy_c) * 1.5)
+        lookat_lines = [
+            '  <LookAt>',
+            f'    <longitude>{c_lon:.6f}</longitude>',
+            f'    <latitude>{c_lat:.6f}</latitude>',
+            '    <altitude>0</altitude>',
+            '    <heading>0</heading>',
+            '    <tilt>0</tilt>',
+            f'    <range>{range_cob_m:.0f}</range>',
+            '    <altitudeMode>clampToGround</altitudeMode>',
+            '  </LookAt>'
+        ]
+
     kml = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<kml xmlns="http://www.opengis.net/kml/2.2">',
         '<Document>',
         f'  <name>Cobertura y Zonas Ciegas (R={radio_km:.1f} km) - {clave_actual} {nombre_acuifero_safe}</name>',
-        '  <open>1</open>',
+        '  <open>1</open>'] + lookat_lines + [
         '  <description><![CDATA[',
         '    <div style="font-family:Arial,sans-serif;font-size:12px;color:#1e293b;max-width:320px;">',
         f'      <h3 style="color:#691C32;margin:0 0 6px 0;border-bottom:2px solid #691C32;padding-bottom:4px;">Acuífero {clave_actual} - {nombre_acuifero_safe}</h3>',
@@ -2365,11 +2415,11 @@ def generar_kmz_cobertura(
         '    <PolyStyle><color>4d22aa22</color><fill>1</fill><outline>1</outline></PolyStyle>',
         '  </Style>',
         '  <Style id="style-pozo-exist">',
-        '    <IconStyle><scale>0.85</scale><color>ffd07000</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
+        '    <IconStyle><scale>0.85</scale><color>ffd07000</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle>',
         '    <LabelStyle><scale>0.75</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>',
         '  <Style id="style-pozo-prop">',
-        '    <IconStyle><scale>1.0</scale><color>ff0099ff</color><Icon><href>http://maps.google.com/mapfiles/kml/shapes/target.png</href></Icon></IconStyle>',
+        '    <IconStyle><scale>1.0</scale><color>ff0099ff</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/target.png</href></Icon></IconStyle>',
         '    <LabelStyle><scale>0.8</scale><color>ffffffff</color></LabelStyle>',
         '  </Style>'
     ]
@@ -2438,7 +2488,7 @@ def generar_kmz_cobertura(
             kml.append('      <description><![CDATA[')
             kml.append(f'        <b>Pozo de Monitoreo:</b> {pz_nom}<br>Radio de Cobertura: {radio_km:.1f} km<br>Coord: {lat:.5f}, {lon:.5f}')
             kml.append('      ]]></description>')
-            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
@@ -2468,7 +2518,7 @@ def generar_kmz_cobertura(
             kml.append(f'      <name>Sitio Sugerido {p_id}</name>')
             kml.append('      <styleUrl>#style-pozo-prop</styleUrl>')
             kml.append(f'      <description><![CDATA[{desc_prop}]]></description>')
-            kml.append(f'      <Point><coordinates>{lon},{lat},0</coordinates></Point>')
+            kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon},{lat},0</coordinates></Point>')
             kml.append('    </Placemark>')
         kml.append('  </Folder>')
 
