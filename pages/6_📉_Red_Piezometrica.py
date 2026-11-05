@@ -1515,30 +1515,151 @@ def _geom_a_kml(geom):
         return "".join(res)
     return ""
 
-def _extraer_punto_medio(geom):
-    """Extrae las coordenadas [lon, lat] del punto medio de una línea para rotular cotas en KML."""
+def _calcular_longitud_coords_km(coords):
+    """Calcula la longitud metrica aproximada en kilometros de una secuencia de coordenadas [[lon, lat], ...]."""
+    if not coords or len(coords) < 2:
+        return 0.0
+    lat_media = sum(c[1] for c in coords) / len(coords)
+    kx = 111.412 * math.cos(math.radians(lat_media))
+    ky = 111.133
+    total = 0.0
+    for i in range(len(coords) - 1):
+        dx = (coords[i+1][0] - coords[i][0]) * kx
+        dy = (coords[i+1][1] - coords[i][1]) * ky
+        total += math.hypot(dx, dy)
+    return total
+
+def _interpolar_punto_por_fraccion(coords, frac):
+    """Interpola un punto [lon, lat] a una fraccion normalizada (0.0 a 1.0) a lo largo de una linea."""
+    if not coords or len(coords) == 1:
+        return coords[0] if coords else None
+    if frac <= 0.0:
+        return coords[0]
+    if frac >= 1.0:
+        return coords[-1]
+
+    lat_media = sum(c[1] for c in coords) / len(coords)
+    kx = 111.412 * math.cos(math.radians(lat_media))
+    ky = 111.133
+
+    seg_dists = []
+    total_len = 0.0
+    for i in range(len(coords) - 1):
+        dx = (coords[i+1][0] - coords[i][0]) * kx
+        dy = (coords[i+1][1] - coords[i][1]) * ky
+        d = math.hypot(dx, dy)
+        seg_dists.append(d)
+        total_len += d
+
+    if total_len == 0.0:
+        return coords[len(coords) // 2]
+
+    target_d = frac * total_len
+    accum = 0.0
+    for i, d in enumerate(seg_dists):
+        if accum + d >= target_d:
+            seg_frac = (target_d - accum) / d if d > 0 else 0.0
+            p1 = coords[i]
+            p2 = coords[i+1]
+            lon = p1[0] + (p2[0] - p1[0]) * seg_frac
+            lat = p1[1] + (p2[1] - p1[1]) * seg_frac
+            return [round(lon, 6), round(lat, 6)]
+        accum += d
+    return coords[-1]
+
+def _extraer_puntos_rotulacion(geom, es_maestra=False):
+    """Extrae una lista de puntos [lon, lat] equidistantes a lo largo de una linea para rotular cotas en KML."""
     if geom is None:
-        return None
+        return []
+    coords_list = []
     try:
         if isinstance(geom, dict):
             gtype = geom.get("type", "")
-            coords = geom.get("coordinates", [])
-            if gtype == "LineString" and coords:
-                return coords[len(coords) // 2]
-            elif gtype == "MultiLineString" and coords:
-                longest = max(coords, key=lambda l: len(l)) if coords else []
-                return longest[len(longest) // 2] if longest else None
+            raw_coords = geom.get("coordinates", [])
+            if gtype == "LineString" and raw_coords:
+                coords_list = [raw_coords]
+            elif gtype == "MultiLineString" and raw_coords:
+                coords_list = [c for c in raw_coords if len(c) >= 2]
         elif hasattr(geom, "geom_type"):
             if geom.geom_type == "LineString" and not geom.is_empty:
-                pt = geom.interpolate(0.5, normalized=True)
-                return [pt.x, pt.y]
+                coords_list = [list(geom.coords)]
             elif geom.geom_type == "MultiLineString" and not geom.is_empty:
-                longest = max(geom.geoms, key=lambda g: g.length) if geom.geoms else None
-                if longest:
-                    pt = longest.interpolate(0.5, normalized=True)
-                    return [pt.x, pt.y]
+                coords_list = [list(g.coords) for g in geom.geoms if len(g.coords) >= 2]
     except Exception:
         pass
+
+    if not coords_list:
+        return []
+
+    puntos = []
+    for coords in coords_list:
+        if len(coords) < 2:
+            continue
+        km = _calcular_longitud_coords_km(coords)
+        if es_maestra:
+            if km < 3.0:
+                fracs = [0.5]
+            elif km < 12.0:
+                fracs = [0.30, 0.70]
+            elif km < 30.0:
+                fracs = [0.20, 0.50, 0.80]
+            else:
+                fracs = [0.15, 0.35, 0.55, 0.75, 0.90]
+        else:
+            if km < 6.0:
+                fracs = [0.5]
+            else:
+                fracs = [0.35, 0.65]
+
+        for fr in fracs:
+            pt = _interpolar_punto_por_fraccion(coords, fr)
+            if pt:
+                puntos.append(pt)
+
+    # Filtrar puntos que queden demasiado cerca (< 1.5 km) para evitar empalmes
+    puntos_filtrados = []
+    for pt in puntos:
+        demasiado_cerca = False
+        for p_guardado in puntos_filtrados:
+            dist = _calcular_longitud_coords_km([pt, p_guardado])
+            if dist < 1.5:
+                demasiado_cerca = True
+                break
+        if not demasiado_cerca:
+            puntos_filtrados.append(pt)
+
+    if not puntos_filtrados and coords_list:
+        longest = max(coords_list, key=len)
+        if longest:
+            puntos_filtrados = [longest[len(longest) // 2]]
+
+    return puntos_filtrados
+
+def _identificar_cotas_maestras(cotas_unicas):
+    """Identifica que cotas deben fungir como Curvas Maestras (Indice) de acuerdo a su escala geohidrologica."""
+    if not cotas_unicas:
+        return set()
+    if len(cotas_unicas) <= 3:
+        return set(cotas_unicas)
+
+    diffs = [round(cotas_unicas[i+1] - cotas_unicas[i], 2) for i in range(len(cotas_unicas)-1)]
+    diffs = [d for d in diffs if d > 1e-3]
+    step = min(diffs) if diffs else 5.0
+
+    target_step = step * 5.0
+    candidatos = [5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 500.0]
+    paso_maestra = min(candidatos, key=lambda x: abs(x - target_step))
+
+    maestras_set = {c for c in cotas_unicas if abs(c % paso_maestra) < 1e-3 or abs(paso_maestra - (c % paso_maestra)) < 1e-3}
+    if len(maestras_set) < max(1, len(cotas_unicas) // 6) or len(maestras_set) > len(cotas_unicas) * 0.5:
+        maestras_set = {c for i, c in enumerate(cotas_unicas) if i % 4 == 0 or i == len(cotas_unicas)-1}
+    return maestras_set
+
+def _extraer_punto_medio(geom):
+    """Extrae las coordenadas [lon, lat] del punto medio de una linea (mantenido para compatibilidad)."""
+    pts = _extraer_puntos_rotulacion(geom, es_maestra=False)
+    if pts:
+        return pts[0]
     return None
 
 def _parse_geojson_features(geojson_input):
@@ -1731,6 +1852,16 @@ def generar_kmz_dinamica_flujo(
         '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
         '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
         '  </Style>',
+        '  <Style id="style-iso-maestra">',
+        '    <LineStyle><color>ffffd000</color><width>3.0</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.92</scale><color>ffffffff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-intermedia">',
+        '    <LineStyle><color>b0e0d000</color><width>1.4</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.72</scale><color>ccffffff</color></LabelStyle>',
+        '  </Style>',
         '  <Style id="style-iso">',
         '    <LineStyle><color>ffe0d000</color><width>2.2</width></LineStyle>',
         '    <IconStyle><scale>0</scale></IconStyle>',
@@ -1779,31 +1910,88 @@ def generar_kmz_dinamica_flujo(
 
     feat_iso = _parse_geojson_features(geojson_iso)
     if feat_iso:
-        kml.append(f'  <Folder><name>3. Isopiezas Piezométricas ({len(feat_iso)} curvas)</name>')
-        for idx, feat in enumerate(feat_iso):
-            geom = feat.get("geometry", {})
-            props = feat.get("properties", {})
-            cota = props.get("COTA_M", "N/D")
-            geom_kml = _geom_a_kml(geom)
-            mid_pt = _extraer_punto_medio(geom)
-            if geom_kml:
-                if mid_pt:
-                    geom_final = f"<MultiGeometry>{geom_kml}<Point><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
-                else:
-                    geom_final = geom_kml
+        # Extraer cotas unicas para jerarquia cartografica (Maestras vs Intermedias)
+        cotas_unicas = sorted(list(set([
+            round(float(f.get("properties", {}).get("COTA_M", 0.0)), 2)
+            for f in feat_iso if f.get("properties") and "COTA_M" in f["properties"]
+        ])))
+        cotas_maestras = _identificar_cotas_maestras(cotas_unicas)
 
-                kml.append('    <Placemark>')
-                kml.append(f'      <name>{cota} {unidad}</name>')
-                kml.append('      <styleUrl>#style-iso</styleUrl>')
-                kml.append('      <description><![CDATA[')
-                kml.append(f'        <div style="font-family:Arial,sans-serif;font-size:11px;">')
-                kml.append(f'          <b>Isopieza Piezométrica</b><br>')
-                kml.append(f'          Cota: <b>{cota} {unidad}</b><br>')
-                kml.append(f'          Variable: {var_label}')
-                kml.append('        </div>')
-                kml.append('      ]]></description>')
-                kml.append(f'      {geom_final}')
-                kml.append('    </Placemark>')
+        feats_maestras = []
+        feats_intermedias = []
+        for feat in feat_iso:
+            props = feat.get("properties", {})
+            try:
+                cota_val = round(float(props.get("COTA_M", 0.0)), 2)
+            except Exception:
+                cota_val = None
+            if cota_val is not None and cota_val in cotas_maestras:
+                feats_maestras.append((feat, cota_val))
+            else:
+                feats_intermedias.append((feat, cota_val))
+
+        kml.append(f'  <Folder><name>3. Isopiezas Piezométricas ({len(feat_iso)} curvas)</name>')
+        kml.append('    <open>1</open>')
+
+        if feats_maestras:
+            kml.append(f'    <Folder><name>⭐ Curvas Maestras / Índice ({len(feats_maestras)} curvas)</name>')
+            for feat, cota_val in feats_maestras:
+                geom = feat.get("geometry", {})
+                props = feat.get("properties", {})
+                cota_txt = f"{cota_val:.1f}" if cota_val is not None else str(props.get("COTA_M", "N/D"))
+                if cota_val is not None and abs(cota_val - round(cota_val)) < 1e-3:
+                    cota_txt = f"{int(round(cota_val))}"
+
+                geom_kml = _geom_a_kml(geom)
+                puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=True)
+                if geom_kml:
+                    pts_kml = "".join(f"<Point><coordinates>{p[0]},{p[1]},0</coordinates></Point>" for p in puntos_rot)
+                    geom_final = f"<MultiGeometry>{geom_kml}{pts_kml}</MultiGeometry>" if pts_kml else geom_kml
+
+                    kml.append('      <Placemark>')
+                    kml.append(f'        <name>{cota_txt} {unidad}</name>')
+                    kml.append('        <styleUrl>#style-iso-maestra</styleUrl>')
+                    kml.append('        <description><![CDATA[')
+                    kml.append(f'          <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                    kml.append(f'            <b style="color:#007799;">⭐ Curva Maestra (Índice)</b><br>')
+                    kml.append(f'            Cota: <b>{cota_txt} {unidad}</b><br>')
+                    kml.append(f'            Variable: {var_label}<br>')
+                    kml.append(f'            Rótulos distribuidos: {len(puntos_rot)}')
+                    kml.append('          </div>')
+                    kml.append('        ]]></description>')
+                    kml.append(f'        {geom_final}')
+                    kml.append('      </Placemark>')
+            kml.append('    </Folder>')
+
+        if feats_intermedias:
+            kml.append(f'    <Folder><name>Curvas Intermedias ({len(feats_intermedias)} curvas)</name>')
+            for feat, cota_val in feats_intermedias:
+                geom = feat.get("geometry", {})
+                props = feat.get("properties", {})
+                cota_txt = f"{cota_val:.1f}" if cota_val is not None else str(props.get("COTA_M", "N/D"))
+                if cota_val is not None and abs(cota_val - round(cota_val)) < 1e-3:
+                    cota_txt = f"{int(round(cota_val))}"
+
+                geom_kml = _geom_a_kml(geom)
+                puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=False)
+                if geom_kml:
+                    pts_kml = "".join(f"<Point><coordinates>{p[0]},{p[1]},0</coordinates></Point>" for p in puntos_rot)
+                    geom_final = f"<MultiGeometry>{geom_kml}{pts_kml}</MultiGeometry>" if pts_kml else geom_kml
+
+                    kml.append('      <Placemark>')
+                    kml.append(f'        <name>{cota_txt} {unidad}</name>')
+                    kml.append('        <styleUrl>#style-iso-intermedia</styleUrl>')
+                    kml.append('        <description><![CDATA[')
+                    kml.append(f'          <div style="font-family:Arial,sans-serif;font-size:11px;">')
+                    kml.append(f'            <b>Curva Intermedia</b><br>')
+                    kml.append(f'            Cota: <b>{cota_txt} {unidad}</b><br>')
+                    kml.append(f'            Variable: {var_label}')
+                    kml.append('          </div>')
+                    kml.append('        ]]></description>')
+                    kml.append(f'        {geom_final}')
+                    kml.append('      </Placemark>')
+            kml.append('    </Folder>')
+
         kml.append('  </Folder>')
 
     feat_flujo = _parse_geojson_features(geojson_flujo)
@@ -1967,6 +2155,36 @@ def generar_kmz_evolucion(
         '    <LineStyle><color>ff321c69</color><width>2.5</width></LineStyle>',
         '    <PolyStyle><color>15321c69</color><fill>1</fill><outline>1</outline></PolyStyle>',
         '  </Style>',
+        '  <Style id="style-iso-abat-maestra">',
+        '    <LineStyle><color>ff0000b3</color><width>2.8</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.90</scale><color>ff8888ff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-abat-intermedia">',
+        '    <LineStyle><color>990000b3</color><width>1.4</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.72</scale><color>cc8888ff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-recup-maestra">',
+        '    <LineStyle><color>ffcc5500</color><width>2.8</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.90</scale><color>ffffff88</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-recup-intermedia">',
+        '    <LineStyle><color>99cc5500</color><width>1.4</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.72</scale><color>ccffff88</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-equil-maestra">',
+        '    <LineStyle><color>ff503e2c</color><width>2.8</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.90</scale><color>ffffffff</color></LabelStyle>',
+        '  </Style>',
+        '  <Style id="style-iso-equil-intermedia">',
+        '    <LineStyle><color>99503e2c</color><width>1.4</width></LineStyle>',
+        '    <IconStyle><scale>0</scale></IconStyle>',
+        '    <LabelStyle><scale>0.72</scale><color>ccffffff</color></LabelStyle>',
+        '  </Style>',
         '  <Style id="style-iso-abat">',
         '    <LineStyle><color>ff0000b3</color><width>2.2</width></LineStyle>',
         '    <IconStyle><scale>0</scale></IconStyle>',
@@ -2011,33 +2229,38 @@ def generar_kmz_evolucion(
 
     feat_iso = _parse_geojson_features(geojson_iso_bytes)
     if feat_iso:
+        deltas_unicos = sorted(list(set([
+            round(float(f.get("properties", {}).get("DELTA_H_M", 0.0)), 2)
+            for f in feat_iso if f.get("properties") and "DELTA_H_M" in f["properties"]
+        ])))
+        deltas_maestras = _identificar_cotas_maestras(deltas_unicos)
+
         kml.append(f'  <Folder><name>3. Isolíneas de Variación Δh ({len(feat_iso)} isolíneas)</name>')
         for idx, feat in enumerate(feat_iso):
             geom = feat.get("geometry", {})
             props = feat.get("properties", {})
             dh_val = float(props.get("DELTA_H_M", 0.0))
             tipo_iso = props.get("TIPO", "Abatimiento" if dh_val < 0 else "Recuperación")
+            es_maestra = round(dh_val, 2) in deltas_maestras
 
             if dh_val < -1e-4:
-                style_iso = "#style-iso-abat"
+                style_iso = "#style-iso-abat-maestra" if es_maestra else "#style-iso-abat-intermedia"
             elif dh_val > 1e-4:
-                style_iso = "#style-iso-recup"
+                style_iso = "#style-iso-recup-maestra" if es_maestra else "#style-iso-recup-intermedia"
             else:
-                style_iso = "#style-iso-equil"
+                style_iso = "#style-iso-equil-maestra" if es_maestra else "#style-iso-equil-intermedia"
 
             geom_kml = _geom_a_kml(geom)
-            mid_pt = _extraer_punto_medio(geom)
+            puntos_rot = _extraer_puntos_rotulacion(geom, es_maestra=es_maestra)
             if geom_kml:
-                if mid_pt:
-                    geom_final = f"<MultiGeometry>{geom_kml}<Point><coordinates>{mid_pt[0]},{mid_pt[1]},0</coordinates></Point></MultiGeometry>"
-                else:
-                    geom_final = geom_kml
+                pts_kml = "".join(f"<Point><coordinates>{p[0]},{p[1]},0</coordinates></Point>" for p in puntos_rot)
+                geom_final = f"<MultiGeometry>{geom_kml}{pts_kml}</MultiGeometry>" if pts_kml else geom_kml
 
                 kml.append('    <Placemark>')
                 kml.append(f'      <name>Δh = {dh_val:+.1f} m</name>')
                 kml.append(f'      <styleUrl>{style_iso}</styleUrl>')
                 kml.append('      <description><![CDATA[')
-                kml.append(f'        <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Comportamiento:</b> {tipo_iso}')
+                kml.append(f'        <b>Isolínea Diferencial Δh:</b> {dh_val:+.2f} m<br><b>Jerarquía:</b> {"⭐ Maestra (Índice)" if es_maestra else "Intermedia"}<br><b>Comportamiento:</b> {tipo_iso}')
                 kml.append('      ]]></description>')
                 kml.append(f'      {geom_final}')
                 kml.append('    </Placemark>')
