@@ -3085,12 +3085,26 @@ with st.container(border=True):
     col_i1, col_i2, col_i3, col_i4 = st.columns(4)
 
     total_pozos = len(pozos_disponibles)
-    anio_reciente = df_ac['Año'].max()
-    pozos_activos = df_ac[df_ac['Año'] >= (anio_reciente - 3)]['Pozo'].nunique()
-    porcentaje_activos = (pozos_activos / total_pozos) * 100 if total_pozos > 0 else 0
+    if not df_ac.empty and 'Año' in df_ac.columns and total_pozos > 0:
+        anio_reciente = df_ac['Año'].max()
+        if pd.notna(anio_reciente):
+            pozos_activos = df_ac[df_ac['Año'] >= (anio_reciente - 3)]['Pozo'].nunique() if 'Pozo' in df_ac.columns else 0
+            porcentaje_activos = (pozos_activos / total_pozos) * 100 if total_pozos > 0 else 0
+        else:
+            pozos_activos = 0
+            porcentaje_activos = 0
+    else:
+        anio_reciente = None
+        pozos_activos = 0
+        porcentaje_activos = 0
 
     col_i1.metric("Pozos Registrados", total_pozos)
-    col_i2.metric("Pozos Activos (≤ 3 años)", pozos_activos, f"{porcentaje_activos:.0f}% Operatividad", delta_color="normal" if porcentaje_activos > 70 else "inverse")
+    col_i2.metric(
+        "Pozos Activos (≤ 3 años)", 
+        pozos_activos, 
+        f"{porcentaje_activos:.0f}% Operatividad" if total_pozos > 0 else "Sin red oficial", 
+        delta_color="normal" if porcentaje_activos > 70 else ("inverse" if total_pozos > 0 else "off")
+    )
 
     if area_actual > 0 and pozos_activos > 0:
         densidad = area_actual / pozos_activos
@@ -3098,7 +3112,12 @@ with st.container(border=True):
     else:
         col_i3.metric("Densidad Espacial", "N/D", "Sin pozos activos")
 
-    col_i4.metric("Sin Datos Recientes", total_pozos - pozos_activos, "Pozos Desatendidos", delta_color="inverse")
+    col_i4.metric(
+        "Sin Datos Recientes", 
+        total_pozos - pozos_activos, 
+        "Pozos Desatendidos" if total_pozos > 0 else "Red no instalada", 
+        delta_color="inverse" if (total_pozos - pozos_activos) > 0 else "off"
+    )
 
 st.markdown("<div style='margin-top: 10px;'></div>", unsafe_allow_html=True)
 
