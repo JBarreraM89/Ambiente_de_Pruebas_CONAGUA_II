@@ -1930,6 +1930,7 @@ def generar_kmz_dinamica_flujo(
         kml.append('      <description><![CDATA[')
         kml.append(f'        <b>Modelo Geostadístico:</b> Kriging Ordinario<br><b>R²:</b> {r2_txt}<br><b>Rango de Ajuste:</b> {rango_txt}')
         kml.append('      ]]></description>')
+        kml.append('      <drawOrder>1</drawOrder>')
         kml.append('      <Icon><href>kriging_overlay.png</href></Icon>')
         kml.append('      <LatLonBox>')
         kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
@@ -1948,6 +1949,7 @@ def generar_kmz_dinamica_flujo(
             kml.append('      <description><![CDATA[')
             kml.append(f'        <b>Isopiezas con Cotas en Línea (HD):</b><br>Curvas de nivel piezométricas estilizadas con rótulos tipográficos alineados a la trayectoria e inserción en línea con halo protector (estilo carta topográfica oficial INEGI/USGS).')
             kml.append('      ]]></description>')
+            kml.append('      <drawOrder>2</drawOrder>')
             kml.append('      <Icon><href>isolineas_overlay.png</href></Icon>')
             kml.append('      <LatLonBox>')
             kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
@@ -2038,8 +2040,9 @@ def generar_kmz_dinamica_flujo(
 
             total_rot = len(rotulos_maestras) + len(rotulos_intermedias)
             if total_rot > 0:
+                vis_rot = '0' if img_isolineas_png else '1'
                 kml.append(f'    <Folder><name>🏷️ Rótulos de Cota en Pantalla ({total_rot} etiquetas)</name>')
-                kml.append('      <open>1</open>')
+                kml.append(f'      <visibility>{vis_rot}</visibility>')
                 for pt, c_txt in rotulos_maestras:
                     kml.append('      <Placemark>')
                     kml.append(f'        <name>{c_txt} {unidad}</name>')
@@ -2329,6 +2332,7 @@ def generar_kmz_evolucion(
         kml.append('      <description><![CDATA[')
         kml.append(f'        <b>Cálculo Diferencial:</b> Δh = Carga({anio_t2}) - Carga({anio_t1})<br>Ráster con escala cromática divergente (Rojo: Abatimiento | Azul: Recuperación)')
         kml.append('      ]]></description>')
+        kml.append('      <drawOrder>1</drawOrder>')
         kml.append('      <Icon><href>evolucion_overlay.png</href></Icon>')
         kml.append('      <LatLonBox>')
         kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
@@ -2347,6 +2351,7 @@ def generar_kmz_evolucion(
             kml.append('      <description><![CDATA[')
             kml.append('        <b>Isolíneas Diferenciales Δh en Alta Resolución:</b><br>Curvas de abatimiento (-) y recuperación (+) con rótulos tipográficos rotados en línea con halo protector (estilo publicación técnica).')
             kml.append('      ]]></description>')
+            kml.append('      <drawOrder>2</drawOrder>')
             kml.append('      <Icon><href>isolineas_evo_overlay.png</href></Icon>')
             kml.append('      <LatLonBox>')
             kml.append(f'        <north>{max_y:.6f}</north><south>{min_y:.6f}</south><east>{max_x:.6f}</east><west>{min_x:.6f}</west><rotation>0</rotation>')
@@ -2438,8 +2443,9 @@ def generar_kmz_evolucion(
                 kml.append('    </Folder>')
 
             if rotulos_dh:
+                vis_evo_rot = '0' if img_iso_png else '1'
                 kml.append(f'    <Folder><name>🏷️ Rótulos de Variación Δh ({len(rotulos_dh)} etiquetas)</name>')
-                kml.append('      <open>1</open>')
+                kml.append(f'      <visibility>{vis_evo_rot}</visibility>')
                 for pt, dh_txt, st_lbl in rotulos_dh:
                     kml.append('      <Placemark>')
                     kml.append(f'        <name>{dh_txt}</name>')
@@ -2699,7 +2705,12 @@ def render_imagen_kriging(X, Y, Z_masked, bounds):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     
-    fig = plt.figure(figsize=(10, 10), frameon=False)
+    lat_span = abs(bounds[1][0] - bounds[0][0])
+    lon_span = abs(bounds[1][1] - bounds[0][1])
+    base_w = 12.0
+    base_h = max(5.0, min(24.0, base_w * (lat_span / max(lon_span, 1e-5))))
+    
+    fig = plt.figure(figsize=(base_w, base_h), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
     ax.set_xlim(bounds[0][1], bounds[1][1])
@@ -2708,7 +2719,7 @@ def render_imagen_kriging(X, Y, Z_masked, bounds):
     ax.contourf(X, Y, Z_masked, levels=40, cmap='Blues')
     
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', transparent=True, pad_inches=0)
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=200)
     plt.close(fig)
     
     vmin = float(np.nanmin(Z_masked)) if not np.isnan(np.nanmin(Z_masked)) else 0.0
@@ -2719,8 +2730,14 @@ def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    import matplotlib.patheffects as patheffects
     
-    fig = plt.figure(figsize=(10, 10), frameon=False)
+    lat_span = abs(bounds[1][0] - bounds[0][0])
+    lon_span = abs(bounds[1][1] - bounds[0][1])
+    base_w = 12.0
+    base_h = max(5.0, min(24.0, base_w * (lat_span / max(lon_span, 1e-5))))
+    
+    fig = plt.figure(figsize=(base_w, base_h), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
     ax.set_xlim(bounds[0][1], bounds[1][1])
@@ -2734,41 +2751,87 @@ def render_imagen_isolineas(X, Y, Z_masked, bounds, intervalo_iso, var_nombre):
                         np.ceil(vmax / intervalo_iso) * intervalo_iso + intervalo_iso, 
                         intervalo_iso)
     if len(niveles) < 2: niveles = np.linspace(vmin, vmax, 5)
-        
-    import matplotlib.patheffects as patheffects
-    contours = ax.contour(X, Y, Z_masked, levels=niveles, colors='white', linestyles='dashed', linewidths=1.6, alpha=0.95)
+    
+    cotas_unicas = sorted(list(set([round(float(n), 2) for n in niveles])))
+    cotas_maestras = _identificar_cotas_maestras(cotas_unicas)
+    
+    niv_maestras = [n for n in niveles if round(float(n), 2) in cotas_maestras]
+    niv_inter = [n for n in niveles if round(float(n), 2) not in cotas_maestras]
+    
     fmt_c = '%1.0f' if all(abs(lvl - round(lvl)) < 1e-3 for lvl in niveles) else '%1.1f'
-    clbls = ax.clabel(contours, inline=True, fontsize=10.5, fmt=fmt_c, colors='#002B49')
-    for txt in clbls:
-        txt.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
+    
+    contours_list = []
+    
+    # 1. Curvas Intermedias (diseño cartográfico equilibrado con halo sutil)
+    if niv_inter:
+        cs_inter = ax.contour(X, Y, Z_masked, levels=niv_inter, colors='#0B4F6C', linestyles='solid', linewidths=1.2, alpha=0.85)
+        if hasattr(cs_inter, 'set_path_effects'):
+            cs_inter.set_path_effects([patheffects.Stroke(linewidth=2.2, foreground='white'), patheffects.Normal()])
+        elif hasattr(cs_inter, 'collections'):
+            for line in cs_inter.collections:
+                line.set_path_effects([patheffects.Stroke(linewidth=2.2, foreground='white'), patheffects.Normal()])
+        contours_list.append(cs_inter)
+        
+        # Si hay pocas curvas totales (<= 5), rotulamos también intermedias
+        if len(niveles) <= 5:
+            clbls_i = ax.clabel(cs_inter, inline=True, inline_spacing=10, fontsize=9.5, fmt=fmt_c, colors='#0B4F6C')
+            for txt in clbls_i:
+                txt.set_weight('bold')
+                txt.set_path_effects([patheffects.withStroke(linewidth=3.2, foreground='white')])
+                
+    # 2. Curvas Maestras (con rótulos tangenciales en línea y halo blanco de máxima legibilidad)
+    if niv_maestras:
+        cs_m = ax.contour(X, Y, Z_masked, levels=niv_maestras, colors='#002B49', linestyles='solid', linewidths=2.2, alpha=0.98)
+        if hasattr(cs_m, 'set_path_effects'):
+            cs_m.set_path_effects([patheffects.Stroke(linewidth=3.8, foreground='white'), patheffects.Normal()])
+        elif hasattr(cs_m, 'collections'):
+            for line in cs_m.collections:
+                line.set_path_effects([patheffects.Stroke(linewidth=3.8, foreground='white'), patheffects.Normal()])
+        contours_list.append(cs_m)
+        
+        clbls_m = ax.clabel(cs_m, inline=True, inline_spacing=14, fontsize=11.0, fmt=fmt_c, colors='#002B49')
+        for txt in clbls_m:
+            txt.set_weight('bold')
+            txt.set_path_effects([patheffects.withStroke(linewidth=3.8, foreground='white')])
+    elif not niv_inter:
+        cs_all = ax.contour(X, Y, Z_masked, levels=niveles, colors='#002B49', linestyles='solid', linewidths=1.8, alpha=0.95)
+        if hasattr(cs_all, 'set_path_effects'):
+            cs_all.set_path_effects([patheffects.Stroke(linewidth=3.0, foreground='white'), patheffects.Normal()])
+        contours_list.append(cs_all)
+        clbls_all = ax.clabel(cs_all, inline=True, inline_spacing=12, fontsize=10.5, fmt=fmt_c, colors='#002B49')
+        for txt in clbls_all:
+            txt.set_weight('bold')
+            txt.set_path_effects([patheffects.withStroke(linewidth=3.5, foreground='white')])
     
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=150)
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=200)
     plt.close(fig)
     
     features, line_geoms, cotas = [], [], []
-    try:
-        for level_val, segs in zip(contours.levels, contours.allsegs):
-            for seg in segs:
-                if len(seg) >= 2:
-                    coords = [[round(float(pt[0]), 6), round(float(pt[1]), 6)] for pt in seg]
-                    features.append({
-                        "type": "Feature",
-                        "geometry": {"type": "LineString", "coordinates": coords},
-                        "properties": {"COTA_M": round(float(level_val), 2), "VARIABLE": var_nombre}
-                    })
-                    if GEOPANDAS_INSTALADO:
-                        line_geoms.append(LineString(coords))
-                        cotas.append(round(float(level_val), 2))
-    except Exception:
-        pass
+    for cnt in contours_list:
+        try:
+            for level_val, segs in zip(cnt.levels, cnt.allsegs):
+                for seg in segs:
+                    if len(seg) >= 2:
+                        coords = [[round(float(pt[0]), 6), round(float(pt[1]), 6)] for pt in seg]
+                        features.append({
+                            "type": "Feature",
+                            "geometry": {"type": "LineString", "coordinates": coords},
+                            "properties": {"COTA_M": round(float(level_val), 2), "VARIABLE": var_nombre}
+                        })
+                        if GEOPANDAS_INSTALADO:
+                            line_geoms.append(LineString(coords))
+                            cotas.append(round(float(level_val), 2))
+        except Exception:
+            pass
 
     geojson_bytes = json.dumps({"type": "FeatureCollection", "features": features}, indent=2).encode('utf-8')
     shp_zip_bytes = None
     if GEOPANDAS_INSTALADO and line_geoms:
         df_iso = pd.DataFrame({"COTA_M": cotas, "VARIABLE": [var_nombre]*len(cotas)})
         gdf_iso = gpd.GeoDataFrame(df_iso, geometry=line_geoms, crs="EPSG:4326")
-        shp_zip_bytes = empaquetar_shapefile_zip(gdf_iso, f"isopiezas_{clave_actual}")
+        nom_shp = f"isopiezas_{var_nombre.replace(' ', '_').lower()}"
+        shp_zip_bytes = empaquetar_shapefile_zip(gdf_iso, nom_shp)
         
     return buf.getvalue(), geojson_bytes, shp_zip_bytes
 
@@ -2863,7 +2926,12 @@ def render_imagen_evolucion_divergente(X, Y, delta_Z_masked, bounds):
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
     
-    fig = plt.figure(figsize=(10, 10), frameon=False)
+    lat_span = abs(bounds[1][0] - bounds[0][0])
+    lon_span = abs(bounds[1][1] - bounds[0][1])
+    base_w = 12.0
+    base_h = max(5.0, min(24.0, base_w * (lat_span / max(lon_span, 1e-5))))
+    
+    fig = plt.figure(figsize=(base_w, base_h), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
     ax.set_xlim(bounds[0][1], bounds[1][1])
@@ -2898,7 +2966,12 @@ def render_imagen_isolineas_evolucion(X, Y, delta_Z_masked, bounds, intervalo_is
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     
-    fig = plt.figure(figsize=(10, 10), frameon=False)
+    lat_span = abs(bounds[1][0] - bounds[0][0])
+    lon_span = abs(bounds[1][1] - bounds[0][1])
+    base_w = 12.0
+    base_h = max(5.0, min(24.0, base_w * (lat_span / max(lon_span, 1e-5))))
+    
+    fig = plt.figure(figsize=(base_w, base_h), frameon=False)
     ax = fig.add_axes([0, 0, 1, 1])
     ax.axis('off')
     ax.set_xlim(bounds[0][1], bounds[1][1])
@@ -2928,25 +3001,34 @@ def render_imagen_isolineas_evolucion(X, Y, delta_Z_masked, bounds, intervalo_is
     contours_all = []
     if niveles_neg:
         c_neg = ax.contour(X, Y, delta_Z_masked, levels=niveles_neg, colors='#990000', linestyles='solid', linewidths=1.8, alpha=0.95)
-        cl_neg = ax.clabel(c_neg, inline=True, fontsize=10, fmt='%.1f m', colors='#660000')
+        if hasattr(c_neg, 'set_path_effects'):
+            c_neg.set_path_effects([patheffects.Stroke(linewidth=3.2, foreground='white'), patheffects.Normal()])
+        cl_neg = ax.clabel(c_neg, inline=True, inline_spacing=12, fontsize=10.5, fmt='%.1f m', colors='#660000')
         for t in cl_neg:
-            t.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
+            t.set_weight('bold')
+            t.set_path_effects([patheffects.withStroke(linewidth=3.5, foreground='white')])
         contours_all.append(c_neg)
     if niveles_cero:
-        c_cero = ax.contour(X, Y, delta_Z_masked, levels=niveles_cero, colors='#2C3E50', linestyles='solid', linewidths=2.2, alpha=0.95)
-        cl_cero = ax.clabel(c_cero, inline=True, fontsize=10.5, fmt='0.0 m (Equilibrio)', colors='#1A252F')
+        c_cero = ax.contour(X, Y, delta_Z_masked, levels=niveles_cero, colors='#1E293B', linestyles='solid', linewidths=2.4, alpha=0.98)
+        if hasattr(c_cero, 'set_path_effects'):
+            c_cero.set_path_effects([patheffects.Stroke(linewidth=3.8, foreground='white'), patheffects.Normal()])
+        cl_cero = ax.clabel(c_cero, inline=True, inline_spacing=14, fontsize=11.0, fmt='0.0 m (Equilibrio)', colors='#0F172A')
         for t in cl_cero:
-            t.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
+            t.set_weight('bold')
+            t.set_path_effects([patheffects.withStroke(linewidth=3.8, foreground='white')])
         contours_all.append(c_cero)
     if niveles_pos:
-        c_pos = ax.contour(X, Y, delta_Z_masked, levels=niveles_pos, colors='#0055AA', linestyles='dashed', linewidths=1.8, alpha=0.95)
-        cl_pos = ax.clabel(c_pos, inline=True, fontsize=10, fmt='+%.1f m', colors='#003366')
+        c_pos = ax.contour(X, Y, delta_Z_masked, levels=niveles_pos, colors='#0055AA', linestyles='solid', linewidths=1.8, alpha=0.95)
+        if hasattr(c_pos, 'set_path_effects'):
+            c_pos.set_path_effects([patheffects.Stroke(linewidth=3.2, foreground='white'), patheffects.Normal()])
+        cl_pos = ax.clabel(c_pos, inline=True, inline_spacing=12, fontsize=10.5, fmt='+%.1f m', colors='#003366')
         for t in cl_pos:
-            t.set_path_effects([patheffects.withStroke(linewidth=3, foreground='white')])
+            t.set_weight('bold')
+            t.set_path_effects([patheffects.withStroke(linewidth=3.5, foreground='white')])
         contours_all.append(c_pos)
         
     buf = io.BytesIO()
-    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=150)
+    plt.savefig(buf, format='png', transparent=True, pad_inches=0, dpi=200)
     plt.close(fig)
     
     features, line_geoms, cotas = [], [], []
