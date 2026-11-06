@@ -269,12 +269,14 @@ with st.sidebar:
         edo_sel = st.selectbox("1. Selecciona el Estado:", estados, index=idx_edo, key="sel_edo_hidro")
 
         df_sub = df_cat[df_cat['ESTADO'] == edo_sel]
-        acuiferos = sorted(df_sub['NOMBRE_ACUIFERO'].tolist())
+        col_nom = next((c for c in ['NOM_ACUI', 'ACUÍFERO', 'ACUIFERO', 'NOMBRE_ACUIFERO'] if c in df_sub.columns), df_sub.columns[0])
+        col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'cve_num', 'CLAVE'] if c in df_sub.columns), df_sub.columns[1])
+        acuiferos = sorted(df_sub[col_nom].dropna().astype(str).unique().tolist())
         ac_sel = st.selectbox("2. Acuífero Evaluado:", acuiferos, key="sel_ac_hidro")
 
-        match_ac = df_sub[df_sub['NOMBRE_ACUIFERO'] == ac_sel]
+        match_ac = df_sub[df_sub[col_nom] == ac_sel]
         if not match_ac.empty:
-            clave_sel = normalizar_clave(match_ac.iloc[0]['CLAVE'])
+            clave_sel = normalizar_clave(match_ac.iloc[0][col_cve])
             nombre_sel = ac_sel
 
     st.markdown("---")
