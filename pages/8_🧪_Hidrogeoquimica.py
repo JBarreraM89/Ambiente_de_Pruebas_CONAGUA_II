@@ -6,16 +6,16 @@ MÓDULO DE HIDROGEOQUÍMICA Y AUDITORÍA DE CALIDAD DEL AGUA SUBTERRÁNEA
 Comisión Nacional del Agua (CONAGUA) - Subdirección General Técnica
 Gerencia de Aguas Subterráneas / Gerencia de Calidad del Agua
 
-Características:
+Características Periciales:
   1. Ingesta universal: Excel (.xlsx, .xls), CSV y Muestras de Demostración oficiales.
   2. Descarga de Plantilla Oficial de Laboratorio (openpyxl) en un clic (Cero-Rerun).
-  3. Diagrama Trilineal de Piper con proyección ternaria y diamante de facies interactivo (OMM/UNESCO).
+  3. Diagrama Trilineal de Piper con rombo equilátero real y diamante de facies interactivo (OMM/UNESCO).
   4. Diagramas de Huella Iónica de Stiff multiescala y perfil semilogarítmico de Schöeller-Berkaloff.
   5. Auditoría de Balance Iónico (% CBE - Charge Balance Error).
   6. Evaluación de aptitud para riego: RAS (SAR), %Na, CSR, Wilcox y Riverside (USSL).
   7. Génesis hidrogeoquímica: Diagrama de Gibbs y Relaciones Iónicas Molares (Índice de Revelle).
   8. Semáforo pericial de cumplimiento de la NOM-127-SSA1-2021 (Agua para Consumo Humano).
-  9. Geovisor SIG interactivo MapLibre GL 3.6.2 con polígono oficial y simbología temática sin marcas de agua.
+  9. Geovisor SIG interactivo MapLibre GL 3.6.2 con polígono oficial CONAGUA, Workbench Dock y HUD.
  10. Centro de exportación pericial: Paquete KMZ (Google Earth), Shapefile ESRI (.zip), Excel Multidisciplinario y GeoJSON.
 ===============================================================================
 """
@@ -31,14 +31,13 @@ import math
 import html
 import io
 import streamlit.components.v1 as components
-from shapely.geometry import Point, Polygon
+from shapely.geometry import Point, Polygon, mapping
 import geopandas as gpd
 
 # Componentes del Core y Estilos
 from utils.styles import inyectar_css_oficial, banner_institucional
 from core.data_loader import (
-    cargar_catalogo, obtener_datos_maestros_compartidos,
-    normalizar_clave
+    cargar_catalogo, cargar_datos_maestros, normalizar_clave
 )
 from core.hidrogeoquimica import (
     generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
@@ -58,16 +57,66 @@ st.set_page_config(layout="wide", page_title="Hidrogeoquímica y Calidad", page_
 inyectar_css_oficial()
 banner_institucional()
 
+# Inyección de estilos específicos para el módulo hidrogeoquímico
+st.markdown("""
+<style>
+/* Botones de Exportación Pericial Oficial */
+.card-export-pericial {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 18px 20px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    height: 100%;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+.card-export-pericial:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(105, 28, 50, 0.12);
+    border-color: #DDC9A3;
+}
+a.btn-export-pericial, 
+a.btn-export-pericial:link, 
+a.btn-export-pericial:visited, 
+a.btn-export-pericial:hover, 
+a.btn-export-pericial:active {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 11px 16px !important;
+    background: linear-gradient(135deg, #691C32 0%, #88102B 100%) !important;
+    color: #ffffff !important;
+    text-decoration: none !important;
+    border-radius: 7px !important;
+    font-weight: 600 !important;
+    font-size: 13px !important;
+    text-align: center !important;
+    box-shadow: 0 3px 6px rgba(105, 28, 50, 0.25) !important;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    border: 1px solid rgba(255, 255, 255, 0.15) !important;
+    cursor: pointer !important;
+}
+a.btn-export-pericial:hover {
+    background: linear-gradient(135deg, #88102B 0%, #9f2241 100%) !important;
+    color: #ffffff !important;
+    box-shadow: 0 6px 14px rgba(105, 28, 50, 0.35) !important;
+    transform: translateY(-1px) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 def generar_enlace_descarga(data, filename, mime, label, icon="📥"):
     """Genera un botón de descarga en Base64 estilizado con Cero-Rerun."""
     b64 = base64.b64encode(data).decode()
     return f"""
-    <a href="data:{mime};base64,{b64}" download="{filename}" 
-       style="display: block; width: 100%; box-sizing: border-box; padding: 10px 14px; 
-              background: #691C32; color: #ffffff !important; text-decoration: none !important; 
-              border-radius: 6px; font-weight: 600; font-size: 13px; text-align: center;
-              box-shadow: 0 2px 4px rgba(0,0,0,0.15); transition: background 0.2s, transform 0.1s;">
-       {icon} {label}
+    <a href="data:{mime};base64,{b64}" download="{filename}" class="btn-export-pericial">
+       <span>{icon}</span> <span>{label}</span>
     </a>
     """
 
@@ -262,7 +311,7 @@ with st.sidebar:
     st.markdown("<p style='font-size:12px; color:#475569;'>Auditoría de calidad del agua, clasificación de facies y evaluación agronómica / normativa.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # 1. Selector de Acuífero Oficial
+    # 1. Selector de Acuífero Oficial con Auto-detección Inteligente
     df_cat = cargar_catalogo()
     clave_sel = None
     nombre_sel = None
@@ -276,7 +325,15 @@ with st.sidebar:
         col_nom = next((c for c in ['NOM_ACUI', 'ACUÍFERO', 'ACUIFERO', 'NOMBRE_ACUIFERO'] if c in df_sub.columns), df_sub.columns[0])
         col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'cve_num', 'CLAVE'] if c in df_sub.columns), df_sub.columns[1])
         acuiferos = sorted(df_sub[col_nom].dropna().astype(str).unique().tolist())
-        ac_sel = st.selectbox("2. Acuífero Evaluado:", acuiferos, key="sel_ac_hidro")
+
+        # Seleccionar por defecto PEROTE-ZALAYETA si está disponible (coincide con Jalacingo / Altotonga)
+        idx_ac = 0
+        for i_ac, nom_ac_i in enumerate(acuiferos):
+            if "PEROTE" in nom_ac_i.upper():
+                idx_ac = i_ac
+                break
+
+        ac_sel = st.selectbox("2. Acuífero Evaluado:", acuiferos, index=idx_ac, key="sel_ac_hidro")
 
         match_ac = df_sub[df_sub[col_nom] == ac_sel]
         if not match_ac.empty:
@@ -342,20 +399,28 @@ df_normalizado = mapear_dataframe_hidroquimico(df_crudo) if not df_crudo.empty e
 df_procesado = procesar_muestras_hidroquimicas(df_normalizado) if not df_normalizado.empty else pd.DataFrame()
 resumen_nom127, df_auditoria = auditar_norma_127(df_procesado) if not df_procesado.empty else ({}, pd.DataFrame())
 
-# Obtener polígono oficial del acuífero si existe
+# Obtener polígono oficial del acuífero (robusto, serialización limpia vía mapping sin Timestamp)
 poligono_geojson = None
+bounds_poligono = None
 try:
     if clave_sel:
-        maestros = obtener_datos_maestros_compartidos()
-        gdf_ac = maestros.get('poligonos_acuiferos')
+        gdf_ac = cargar_datos_maestros()
         if gdf_ac is not None and not gdf_ac.empty:
-            c_cve_col = next((c for c in ['CLV_ACUI', 'CLAVE', 'CLAVE_SIGM'] if c in gdf_ac.columns), None)
-            if c_cve_col:
-                sub_geom = gdf_ac[gdf_ac[c_cve_col].apply(normalizar_clave) == clave_sel]
-                if not sub_geom.empty:
-                    poligono_geojson = json.loads(sub_geom.iloc[0:1].to_json())['features'][0]
+            cve_str = str(clave_sel).strip().zfill(4)
+            col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'CLAVE'] if c in gdf_ac.columns), gdf_ac.columns[0])
+            sub_geom = gdf_ac[gdf_ac[col_cve].astype(str).str.zfill(4) == cve_str]
+            if not sub_geom.empty:
+                geom_dict = mapping(sub_geom.iloc[0].geometry)
+                nom_ac_pol = str(sub_geom.iloc[0].get('NOM_ACUI', nombre_sel or 'Acuífero Oficial'))
+                poligono_geojson = {
+                    "type": "Feature",
+                    "geometry": geom_dict,
+                    "properties": {"nombre": nom_ac_pol, "clave": cve_str}
+                }
+                bounds_poligono = sub_geom.total_bounds.tolist()
 except Exception:
     poligono_geojson = None
+    bounds_poligono = None
 
 # =============================================================================
 # 🏢 6. ENCABEZADO Y TARJETAS KPI
@@ -400,7 +465,7 @@ with st.container(border=True):
     pct_conf = (n_conf / n_tot * 100.0) if n_tot > 0 else 0.0
 
     k1.metric("Muestras Evaluadas", f"{n_tot} fuentes", f"{df_procesado['Tipo_Fuente'].nunique() if 'Tipo_Fuente' in df_procesado.columns else 1} tipos de captación")
-    k2.metric("Balance Iónico Promedio", cbe_txt, "Calidad Analítica Conforme" if cbe_med <= 5.0 else ("Aceptable" if cbe_med <= 10.0 else "Revisar Análisis"), delta_color="normal" if cbe_med <= 5.0 else "inverse")
+    k2.metric("Balance Iónico Promedio", cbe_txt, "Calidad Conforme" if cbe_med <= 5.0 else ("Aceptable" if cbe_med <= 10.0 else "Revisar Análisis"), delta_color="normal" if cbe_med <= 5.0 else "inverse")
     k3.metric("Facies Dominante", facies_dom, f"{pct_facies:.0f}% del total")
     k4.metric("Conformidad NOM-127", f"{pct_conf:.1f}%", f"{n_conf} de {n_tot} muestras conformes", delta_color="normal" if pct_conf >= 70.0 else "inverse")
 
@@ -424,17 +489,52 @@ tab_piper, tab_stiff, tab_riego, tab_gibbs, tab_nom, tab_geo, tab_export = st.ta
 # -----------------------------------------------------------------------------
 with tab_piper:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px;">
             <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMA TRILINEAL DE PIPER - CLASIFICACIÓN DE FAMILIAS HIDROGEOQUÍMICAS</span><br>
             <span style="font-size: 11.5px; color: #475569;">
                 Representación simultánea de cationes (Ca²⁺, Mg²⁺, Na⁺+K⁺) y aniones (HCO₃⁻+CO₃²⁻, SO₄²⁻, Cl⁻) en porcentaje de miliequivalentes por litro (meq/L).
-                El diamante central proyecta la evolución natural del agua subterránea desde facies bicarbonatadas cálcicas (recarga joven de manantiales de montaña) hasta cloruradas sódicas (evolucionadas o salinas).
+                El diamante central equilátero proyecta la evolución natural del agua subterránea desde facies bicarbonatadas cálcicas hasta cloruradas sódicas.
             </span>
         </div>
     """, unsafe_allow_html=True)
 
-    fig_piper = generar_diagrama_piper(df_procesado)
-    st.plotly_chart(fig_piper, use_container_width=True)
+    col_p_plot, col_p_info = st.columns([7.5, 4.5], gap="large")
+
+    with col_p_plot:
+        fig_piper = generar_diagrama_piper(df_procesado)
+        st.plotly_chart(fig_piper, use_container_width=True)
+
+    with col_p_info:
+        with st.container(border=True):
+            st.markdown("<h4 style='color:#691C32; margin:0 0 8px 0; font-size:14px;'>🔬 Interpretación de Facies y Génesis</h4>", unsafe_allow_html=True)
+            
+            # Distribución de facies
+            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Familias Identificadas en el Muestreo:</p>", unsafe_allow_html=True)
+            for fac_nom, c_cnt in facies_counts.items():
+                pct_val = (c_cnt / n_tot) * 100.0
+                if "Bicarbonatada Cálcica" in fac_nom: badge_col = "#0284c7"
+                elif "Bicarbonatada Sódica" in fac_nom: badge_col = "#7c3aed"
+                elif "Clorurada Sódica" in fac_nom: badge_col = "#dc2626"
+                elif "Sulfatada" in fac_nom: badge_col = "#d97706"
+                else: badge_col = "#059669"
+
+                st.markdown(f"""
+                <div style='display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#f8fafc; border-left:3px solid {badge_col}; border-radius:4px; margin-bottom:6px; font-size:11.5px;'>
+                    <span><b>{fac_nom}</b></span>
+                    <span style='background:{badge_col}; color:white; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:bold;'>{c_cnt} fuentes ({pct_val:.0f}%)</span>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Guía de Cuadrantes del Diamante Central:</p>", unsafe_allow_html=True)
+            st.markdown("""
+            <div style='font-size:11px; color:#475569; line-height:1.5;'>
+                • <b style='color:#166534;'>Sur (Bicarbonatada Cálcica):</b> Aguas jóvenes de recarga reciente en zonas de montaña/infiltración. Baja mineralización.<br>
+                • <b style='color:#6b21a8;'>Oeste (Bicarbonatada Sódica):</b> Aguas sujetas a intercambio catiónico natural (ablandamiento en arcillas).<br>
+                • <b style='color:#92400e;'>Este (Sulfatada Cálcica):</b> Disolución de formaciones yesíferas/anhidrita o contaminación antrópica.<br>
+                • <b style='color:#991b1b;'>Norte (Clorurada Sódica):</b> Aguas evolucionadas, de largo tiempo de residencia, salinas o intrusión marina.
+            </div>
+            """, unsafe_allow_html=True)
 
     with st.expander("📋 Tabla Detallada de Parámetros Trilineales, Balance Iónico e Índice de Revelle", expanded=False):
         cols_piper_tab = [
@@ -475,14 +575,14 @@ with tab_stiff:
     opciones_muestras = ["Todas las Muestras"] + df_procesado['Muestra'].astype(str).tolist()
     sel_stiff_m = st.selectbox("Seleccionar Muestra para Vista Focalizada:", opciones_muestras, index=0, key="sel_stiff_focus")
 
-    col_st1, col_st2 = st.columns([1.3, 1.0], gap="medium")
+    col_st1, col_st2 = st.columns([1.25, 1.0], gap="large")
     with col_st1:
-        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px;'>1. Polígonos de Huella Iónica de Stiff (meq/L)</p>", unsafe_allow_html=True)
+        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>1. Polígonos de Huella Iónica de Stiff (meq/L)</p>", unsafe_allow_html=True)
         fig_stiff = generar_diagrama_stiff(df_procesado, sel_stiff_m)
         st.plotly_chart(fig_stiff, use_container_width=True)
 
     with col_st2:
-        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px;'>2. Perfil Semilogarítmico de Schöeller-Berkaloff</p>", unsafe_allow_html=True)
+        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>2. Perfil Semilogarítmico de Schöeller-Berkaloff</p>", unsafe_allow_html=True)
         fig_schoeller = generar_diagrama_schoeller(df_procesado)
         st.plotly_chart(fig_schoeller, use_container_width=True)
 
@@ -499,7 +599,7 @@ with tab_riego:
         </div>
     """, unsafe_allow_html=True)
 
-    r_col1, r_col2 = st.columns(2, gap="medium")
+    r_col1, r_col2 = st.columns(2, gap="large")
     with r_col1:
         fig_wilcox = generar_diagrama_wilcox(df_procesado)
         st.plotly_chart(fig_wilcox, use_container_width=True)
@@ -669,7 +769,7 @@ with tab_geo:
                 if "Piper" in col_criterio:
                     if "Bicarbonatada Cálcica" in facies: color_pt = "#0284c7"
                     elif "Bicarbonatada Sódica" in facies: color_pt = "#7c3aed"
-                    elif "Clorurada Sódica" in facies: color_pt = "#ea580c"
+                    elif "Clorurada Sódica" in facies: color_pt = "#dc2626"
                     elif "Sulfatada" in facies: color_pt = "#d97706"
                     else: color_pt = "#059669"
                 else:
@@ -678,17 +778,18 @@ with tab_geo:
                     else: color_pt = "#16a34a"
 
                 popup_html = f"""
-                <div style='font-family: Arial, sans-serif; font-size: 11.5px; line-height: 1.4; color: #1e293b; min-width: 240px;'>
-                  <div style='background: #691C32; color: white; padding: 4px 8px; font-weight: bold; border-radius: 3px 3px 0 0;'>
+                <div style='font-family: Arial, sans-serif; font-size: 11.5px; line-height: 1.4; color: #1e293b; min-width: 250px;'>
+                  <div style='background: #691C32; color: white; padding: 6px 10px; font-weight: bold; border-radius: 4px 4px 0 0;'>
                     🧪 {id_m} ({r.get('Tipo_Fuente', 'Fuente')})
                   </div>
-                  <div style='padding: 6px; border: 1px solid #cbd5e1; border-top: none; background: white;'>
+                  <div style='padding: 8px 10px; border: 1px solid #cbd5e1; border-top: none; background: white; border-radius: 0 0 4px 4px;'>
                     <b>Facies:</b> {facies}<br>
                     <b>Dictamen NOM-127:</b> {estatus}<br>
                     <b>SDT:</b> {r.get('SDT_mg_L', 0):,.1f} mg/L | <b>CE:</b> {r.get('CE_uS_cm', 0):,.0f} µS/cm<br>
                     <b>Balance CBE:</b> {r.get('CBE_pct', 0):+.2f}%<br>
-                    <b>Revelle:</b> {r.get('Indice_Revelle', 0):.2f}<br>
-                    <b>Fuera de Norma:</b> <span style='color:#dc2626;'>{exc}</span>
+                    <b>Índice Revelle:</b> {r.get('Indice_Revelle', 0):.2f}<br>
+                    <hr style='margin: 4px 0;'>
+                    <b>Fuera de Norma:</b> <span style='color:#dc2626; font-weight:600;'>{exc}</span>
                   </div>
                 </div>
                 """
@@ -710,6 +811,25 @@ with tab_geo:
 
             geojson_muestras_str = json.dumps({"type": "FeatureCollection", "features": features_pts})
             geojson_poly_str = json.dumps(poligono_geojson) if poligono_geojson else "null"
+            bounds_poly_str = json.dumps(bounds_poligono) if bounds_poligono else "null"
+
+            # Construir items de la leyenda según criterio
+            if "Piper" in col_criterio:
+                legend_items = """
+                <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Facies Hidrogeoquímicas:</div>
+                <div><i style='background:#0284c7;'></i> Bicarbonatada Cálcica</div>
+                <div><i style='background:#7c3aed;'></i> Bicarbonatada Sódica</div>
+                <div><i style='background:#dc2626;'></i> Clorurada Sódica</div>
+                <div><i style='background:#d97706;'></i> Sulfatada Cálcica</div>
+                <div><i style='background:#059669;'></i> Mixta / Otra</div>
+                """
+            else:
+                legend_items = """
+                <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Dictamen NOM-127:</div>
+                <div><i style='background:#16a34a;'></i> Conforme (Apta)</div>
+                <div><i style='background:#d97706;'></i> Alerta Preventiva</div>
+                <div><i style='background:#dc2626;'></i> No Conforme (Rebasa)</div>
+                """
 
             html_maplibre = f"""
             <!DOCTYPE html>
@@ -721,26 +841,118 @@ with tab_geo:
                 <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
                 <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
                 <style>
-                    body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }}
+                    body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
                     #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; border-radius: 8px; }}
-                    .map-ctrl-panel {{
-                        position: absolute; top: 10px; right: 10px; z-index: 10;
-                        background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(4px);
-                        border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 12px;
-                        box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 11.5px;
+
+                    .btn-open-dock-circle {{
+                        position: absolute; top: 12px; left: 12px; z-index: 1000;
+                        background: #691C32; color: #ffffff; width: 38px; height: 38px;
+                        border-radius: 50%; border: 1.5px solid #DDC9A3;
+                        box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+                        font-size: 19px; font-weight: bold; cursor: pointer;
+                        display: flex; align-items: center; justify-content: center;
+                        transition: all 0.2s ease;
                     }}
-                    .maplibregl-popup-content {{
-                        padding: 0 !important; border-radius: 5px !important; box-shadow: 0 4px 12px rgba(0,0,0,0.2) !important;
+                    .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.08); }}
+
+                    .workbench-dock {{
+                        position: absolute; top: 12px; left: 12px; z-index: 2000;
+                        background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                        width: 285px; border-radius: 10px; overflow: hidden;
+                        box-shadow: 0 6px 22px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
+                        border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+                        font-size: 11.5px; color: #1E293B;
+                    }}
+                    .dock-header {{ 
+                        background: #691C32; color: white; padding: 9px 12px; 
+                        font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
+                    }}
+                    .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
+                    .dock-section {{ margin-bottom: 12px; }}
+                    .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
+                    .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+
+                    .hud-elevation {{
+                        position: absolute; top: 12px; right: 55px; z-index: 1000;
+                        background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
+                        color: #1e293b; padding: 7px 14px; border-radius: 8px;
+                        border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                        font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
+                    }}
+                    .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+
+                    .legend-panel {{
+                        position: absolute; bottom: 25px; left: 12px; z-index: 1000;
+                        background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
+                        padding: 10px 14px; border-radius: 8px;
+                        box-shadow: 0 4px 14px rgba(0,0,0,0.16); font-size: 11px; line-height: 1.6;
+                        border: 1px solid #E2E8F0; border-top: 3px solid #691C32; max-width: 280px;
+                    }}
+                    .legend-panel i {{
+                        width: 12px; height: 12px; display: inline-block; border-radius: 50%;
+                        margin-right: 6px; vertical-align: middle; border: 1px solid #fff;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                    }}
+
+                    .gis-badge-popup .maplibregl-popup-content {{
+                        background: rgba(255, 255, 255, 0.96) !important;
+                        backdrop-filter: blur(8px) !important;
+                        border: 1px solid #CBD5E1 !important;
+                        border-top: 3px solid #691C32 !important;
+                        border-radius: 6px !important;
+                        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.20) !important;
+                        padding: 0 !important;
+                        overflow: hidden !important;
+                    }}
+                    .gis-badge-popup .maplibregl-popup-tip {{
+                        border-top-color: rgba(255, 255, 255, 0.96) !important;
+                    }}
+                    .gis-badge-popup .maplibregl-popup-close-button {{
+                        color: #ffffff !important;
+                        font-size: 15px !important;
+                        top: 4px !important; right: 6px !important;
+                        padding: 2px 4px !important;
                     }}
                 </style>
             </head>
             <body>
                 <div id="map"></div>
-                <div class="map-ctrl-panel">
-                    <b>Capas Base:</b><br>
-                    <label><input type="radio" name="basemap" value="esri" checked onchange="cambiarBasemap(this.value)"> Satelital ESRI</label><br>
-                    <label><input type="radio" name="basemap" value="carto" onchange="cambiarBasemap(this.value)"> Carto Claro (Libre)</label><br>
-                    <label><input type="radio" name="basemap" value="osm" onchange="cambiarBasemap(this.value)"> OpenStreetMap</label>
+
+                <div class="btn-open-dock-circle" onclick="toggleDock()" title="Capas y Controles SIG">☰</div>
+
+                <div id="dock-panel" class="workbench-dock" style="display: none;">
+                    <div class="dock-header">
+                        <span>🛠️ Capas y Control SIG</span>
+                        <span style="cursor:pointer; font-size:16px;" onclick="toggleDock()">✕</span>
+                    </div>
+                    <div class="dock-body">
+                        <div class="dock-section">
+                            <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">1. Capa Base Cartográfica</div>
+                            <label><input type="radio" name="basemap" value="esri" checked onchange="cambiarBasemap(this.value)"> 🛰️ Satelital ESRI Maxar</label>
+                            <label><input type="radio" name="basemap" value="carto" onchange="cambiarBasemap(this.value)"> 🗺️ Carto Claro (Vector)</label>
+                            <label><input type="radio" name="basemap" value="topo" onchange="cambiarBasemap(this.value)"> ⛰️ Topografía y Relieve</label>
+                            <label><input type="radio" name="basemap" value="osm" onchange="cambiarBasemap(this.value)"> 🌐 OpenStreetMap</label>
+                        </div>
+                        <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
+                            <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">2. Capas Temáticas</div>
+                            <label><input type="checkbox" id="chk-poligono" checked onchange="toggleLayer('layer-poligono-fill'); toggleLayer('layer-poligono-line');"> 🏛️ Polígono Oficial Acuífero</label>
+                            <label><input type="checkbox" id="chk-muestras" checked onchange="toggleLayer('layer-muestras-circle');"> 🧪 Fuentes de Monitoreo</label>
+                        </div>
+                        <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
+                            <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px; text-transform:uppercase;">3. Opacidad del Polígono</div>
+                            <input type="range" class="slider-ctrl" min="0" max="100" value="20" oninput="ajustarOpacidadPoligono(this.value)">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="hud-elevation" id="hud-coord">
+                    <div><b>Lon:</b> <span id="hud-lon">{c_lon_cen:.4f}</span>°</div>
+                    <div><b>Lat:</b> <span id="hud-lat">{c_lat_cen:.4f}</span>°</div>
+                    <div><b>Zoom:</b> <span id="hud-zoom">11.0</span></div>
+                </div>
+
+                <div class="legend-panel">
+                    {legend_items}
                 </div>
 
                 <script>
@@ -764,10 +976,22 @@ with tab_geo:
                                     type: 'raster',
                                     tiles: ['https://basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}.png'],
                                     tileSize: 256,
-                                    attribution: '© OpenStreetMap contributors, © CARTO'
+                                    attribution: '© CARTO, OpenStreetMap'
                                 }}
                             }},
                             layers: [{{ id: 'base-layer', type: 'raster', source: 'carto-light', minzoom: 0, maxzoom: 19 }}]
+                        }},
+                        topo: {{
+                            version: 8,
+                            sources: {{
+                                'topo-layer': {{
+                                    type: 'raster',
+                                    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'],
+                                    tileSize: 256,
+                                    attribution: '© Esri Topo'
+                                }}
+                            }},
+                            layers: [{{ id: 'base-layer', type: 'raster', source: 'topo-layer', minzoom: 0, maxzoom: 19 }}]
                         }},
                         osm: {{
                             version: 8,
@@ -790,14 +1014,40 @@ with tab_geo:
                         zoom: 11
                     }});
 
-                    map.addControl(new maplibregl.NavigationControl(), 'top-left');
-                    map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-left');
+                    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+                    map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
 
                     const geojsonMuestras = {geojson_muestras_str};
                     const geojsonPoligono = {geojson_poly_str};
+                    const boundsPoligono = {bounds_poly_str};
+
+                    function toggleDock() {{
+                        const dock = document.getElementById('dock-panel');
+                        dock.style.display = (dock.style.display === 'none' || dock.style.display === '') ? 'block' : 'none';
+                    }}
+
+                    function toggleLayer(layerId) {{
+                        if (map.getLayer(layerId)) {{
+                            const vis = map.getLayoutProperty(layerId, 'visibility');
+                            map.setLayoutProperty(layerId, 'visibility', vis === 'none' ? 'visible' : 'none');
+                        }}
+                    }}
+
+                    function ajustarOpacidadPoligono(val) {{
+                        const op = parseFloat(val) / 100.0;
+                        if (map.getLayer('layer-poligono-fill')) {{
+                            map.setPaintProperty('layer-poligono-fill', 'fill-opacity', op);
+                        }}
+                    }}
+
+                    map.on('mousemove', (e) => {{
+                        document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4);
+                        document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4);
+                        document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
+                    }});
 
                     function cargarCapasDatos() {{
-                        // Polígono Oficial
+                        // 1. Polígono Oficial del Acuífero
                         if (geojsonPoligono && geojsonPoligono.geometry) {{
                             if (!map.getSource('src-poligono')) {{
                                 map.addSource('src-poligono', {{ type: 'geojson', data: geojsonPoligono }});
@@ -805,18 +1055,18 @@ with tab_geo:
                                     id: 'layer-poligono-fill',
                                     type: 'fill',
                                     source: 'src-poligono',
-                                    paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.12 }}
+                                    paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.20 }}
                                 }});
                                 map.addLayer({{
                                     id: 'layer-poligono-line',
                                     type: 'line',
                                     source: 'src-poligono',
-                                    paint: {{ 'line-color': '#691C32', 'line-width': 2.5 }}
+                                    paint: {{ 'line-color': '#691C32', 'line-width': 2.8 }}
                                 }});
                             }}
                         }}
 
-                        // Puntos de Muestras
+                        // 2. Fuentes de Muestreo Hidrogeoquímico
                         if (!map.getSource('src-muestras')) {{
                             map.addSource('src-muestras', {{ type: 'geojson', data: geojsonMuestras }});
                             map.addLayer({{
@@ -826,10 +1076,18 @@ with tab_geo:
                                 paint: {{
                                     'circle-radius': 9,
                                     'circle-color': ['get', 'color'],
-                                    'circle-stroke-width': 2,
+                                    'circle-stroke-width': 2.2,
                                     'circle-stroke-color': '#ffffff'
                                 }}
                             }});
+                        }}
+
+                        // Encuadre automático (fitBounds)
+                        if (boundsPoligono && boundsPoligono.length === 4) {{
+                            map.fitBounds([
+                                [boundsPoligono[0], boundsPoligono[1]],
+                                [boundsPoligono[2], boundsPoligono[3]]
+                            ], {{ padding: 45, maxZoom: 13.5 }});
                         }}
                     }}
 
@@ -837,7 +1095,7 @@ with tab_geo:
 
                     map.on('click', 'layer-muestras-circle', (e) => {{
                         const f = e.features[0];
-                        new maplibregl.Popup()
+                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
                             .setLngLat(f.geometry.coordinates)
                             .setHTML(f.properties.popup)
                             .addTo(map);
@@ -854,9 +1112,9 @@ with tab_geo:
             </body>
             </html>
             """
-            components.html(html_maplibre, height=580)
+            components.html(html_maplibre, height=680)
         else:
-            # Alternativa en Plotly con OpenStreetMap (100% libre, sin apiKey)
+            # Alternativa en Plotly con OpenStreetMap
             color_col = 'Facies_Piper' if "Piper" in col_criterio else 'Estatus_NOM127'
             fig_map = px.scatter_mapbox(
                 df_geo_pts,
@@ -872,7 +1130,7 @@ with tab_geo:
                 title=f"<b>Distribución Espacial de Muestras - {col_criterio}</b>"
             )
             fig_map.update_traces(marker=dict(size=12, opacity=0.9))
-            fig_map.update_layout(height=550, margin=dict(t=40, b=10, l=10, r=10))
+            fig_map.update_layout(height=580, margin=dict(t=40, b=10, l=10, r=10))
             st.plotly_chart(fig_map, use_container_width=True)
 
 # -----------------------------------------------------------------------------
@@ -880,7 +1138,7 @@ with tab_geo:
 # -----------------------------------------------------------------------------
 with tab_export:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px;">
             <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">CENTRO DE EXPORTACIÓN Y REPORTES PERICIALES (CERO-RERUN)</span><br>
             <span style="font-size: 11.5px; color: #475569;">
                 Descarga de bases de datos completas procesadas con balances iónicos, clasificaciones agronómicas y dictamen de calidad para Google Earth (Móvil/Desktop) y SIG.
@@ -893,58 +1151,88 @@ with tab_export:
 
     # 1. Google Earth KMZ
     with c_exp1:
-        with st.container(border=True):
-            st.markdown("<h4 style='color:#691C32; margin:0 0 6px 0; font-size:15px;'>🌍 Paquete KMZ (Google Earth)</h4>", unsafe_allow_html=True)
-            st.markdown("<p style='font-size:12px; color:#475569; margin-bottom:12px;'>Incluye puntos 3D fijados al terreno, polígono del acuífero y carpetas por Facies y NOM-127 con fichas de laboratorio.</p>", unsafe_allow_html=True)
-            bytes_kmz = generar_kmz_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
-            btn_kmz = generar_enlace_descarga(
-                bytes_kmz, f"auditoria_hidroquimica_{clave_sel or 'acuifero'}.kmz",
-                "application/vnd.google-earth.kmz", "Descargar Paquete KMZ (.kmz)", icon="🌍"
-            )
-            st.markdown(btn_kmz, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="card-export-pericial">
+            <div>
+                <h4 style="color:#691C32; margin:0 0 6px 0; font-size:15px;">🌍 Paquete KMZ (Google Earth)</h4>
+                <p style="font-size:12px; color:#475569; margin-bottom:14px; line-height:1.45;">
+                    Incluye puntos 3D fijados al terreno, polígono perimetral del acuífero oficial y carpetas jerárquicas organizadas por Facies y por Dictamen NOM-127 con fichas completas de laboratorio. Totalmente compatible con la app móvil de Google Earth.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        bytes_kmz = generar_kmz_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
+        btn_kmz = generar_enlace_descarga(
+            bytes_kmz, f"auditoria_hidroquimica_{clave_sel or 'acuifero'}.kmz",
+            "application/vnd.google-earth.kmz", "Descargar Paquete KMZ (.kmz)", icon="🌍"
+        )
+        st.markdown(btn_kmz, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # 2. Shapefile ESRI (.zip)
     with c_exp2:
-        with st.container(border=True):
-            st.markdown("<h4 style='color:#691C32; margin:0 0 6px 0; font-size:15px;'>🗺️ Shapefile ESRI (.zip)</h4>", unsafe_allow_html=True)
-            st.markdown("<p style='font-size:12px; color:#475569; margin-bottom:12px;'>Capa vectorial completa (.shp, .shx, .dbf, .prj) en EPSG:4326 lista para ArcGIS, QGIS y análisis espacial.</p>", unsafe_allow_html=True)
-            bytes_shp = generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria, f"hidroquimica_{clave_sel or 'acuifero'}")
-            btn_shp = generar_enlace_descarga(
-                bytes_shp, f"shapefile_hidroquimica_{clave_sel or 'acuifero'}.zip",
-                "application/zip", "Descargar Shapefile ZIP (.zip)", icon="🗺️"
-            )
-            st.markdown(btn_shp, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="card-export-pericial">
+            <div>
+                <h4 style="color:#691C32; margin:0 0 6px 0; font-size:15px;">🗺️ Shapefile ESRI (.zip)</h4>
+                <p style="font-size:12px; color:#475569; margin-bottom:14px; line-height:1.45;">
+                    Capa vectorial geográfica completa con sus cuatro archivos obligatorios (.shp, .shx, .dbf, .prj) en proyección WGS84 (EPSG:4326), lista para su integración directa en QGIS, ArcGIS Pro y análisis geoespacial.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        bytes_shp = generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria, f"hidroquimica_{clave_sel or 'acuifero'}")
+        btn_shp = generar_enlace_descarga(
+            bytes_shp, f"shapefile_hidroquimica_{clave_sel or 'acuifero'}.zip",
+            "application/zip", "Descargar Shapefile ZIP (.zip)", icon="🗺️"
+        )
+        st.markdown(btn_shp, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
 
     # 3. Libro Pericial Excel (.xlsx)
     with c_exp3:
-        with st.container(border=True):
-            st.markdown("<h4 style='color:#691C32; margin:0 0 6px 0; font-size:15px;'>📊 Libro Técnico Excel (.xlsx)</h4>", unsafe_allow_html=True)
-            st.markdown("<p style='font-size:12px; color:#475569; margin-bottom:12px;'>Estructurado en 5 hojas analíticas: Concentraciones mg/L, meq/L, Riego Agrícola, Geoquímica y Dictamen NOM-127.</p>", unsafe_allow_html=True)
-            bytes_excel_res = generar_reporte_excel_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial")
-            btn_excel = generar_enlace_descarga(
-                bytes_excel_res, f"Informe_Pericial_Hidroquimico_{clave_sel or 'Acuifero'}.xlsx",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "Descargar Libro Excel (.xlsx)", icon="📊"
-            )
-            st.markdown(btn_excel, unsafe_allow_html=True)
+        st.markdown("""
+        <div class="card-export-pericial">
+            <div>
+                <h4 style="color:#691C32; margin:0 0 6px 0; font-size:15px;">📊 Libro Técnico Excel (.xlsx)</h4>
+                <p style="font-size:12px; color:#475569; margin-bottom:14px; line-height:1.45;">
+                    Cuaderno estructurado en 5 hojas técnicas especializadas: Concentraciones en mg/L, Miliequivalentes y Porcentajes, Evaluación de Riego Agrícola, Relaciones Geoquímicas y Dictamen Oficial de la NOM-127-SSA1-2021.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        bytes_excel_res = generar_reporte_excel_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial")
+        btn_excel = generar_enlace_descarga(
+            bytes_excel_res, f"Informe_Pericial_Hidroquimico_{clave_sel or 'Acuifero'}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Descargar Libro Excel (.xlsx)", icon="📊"
+        )
+        st.markdown(btn_excel, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # 4. Capa GeoJSON
     with c_exp4:
-        with st.container(border=True):
-            st.markdown("<h4 style='color:#691C32; margin:0 0 6px 0; font-size:15px;'>🌐 Capa GeoJSON (.geojson)</h4>", unsafe_allow_html=True)
-            st.markdown("<p style='font-size:12px; color:#475569; margin-bottom:12px;'>Estándar web abierto con geometrías y propiedades completas para visores web, Leaflet y Python GeoPandas.</p>", unsafe_allow_html=True)
-            if 'Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns:
-                df_valid_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
-                if not df_valid_geo.empty:
-                    pts_geom = [Point(xy) for xy in zip(df_valid_geo['Longitud'], df_valid_geo['Latitud'])]
-                    gdf_pts = gpd.GeoDataFrame(df_valid_geo, geometry=pts_geom, crs="EPSG:4326")
-                    bytes_geojson = gdf_pts.to_json().encode('utf-8')
-                else:
-                    bytes_geojson = b"{}"
+        st.markdown("""
+        <div class="card-export-pericial">
+            <div>
+                <h4 style="color:#691C32; margin:0 0 6px 0; font-size:15px;">🌐 Capa GeoJSON (.geojson)</h4>
+                <p style="font-size:12px; color:#475569; margin-bottom:14px; line-height:1.45;">
+                    Estándar web abierto compatible con MapLibre GL, Leaflet, Mapbox y GeoPandas. Incluye geometrías georreferenciadas y el diccionario completo de propiedades fisicoquímicas y diagnósticos para APIs y tableros.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        if 'Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns:
+            df_valid_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
+            if not df_valid_geo.empty:
+                pts_geom = [Point(xy) for xy in zip(df_valid_geo['Longitud'], df_valid_geo['Latitud'])]
+                gdf_pts = gpd.GeoDataFrame(df_valid_geo, geometry=pts_geom, crs="EPSG:4326")
+                bytes_geojson = gdf_pts.to_json().encode('utf-8')
             else:
                 bytes_geojson = b"{}"
-            btn_geojson = generar_enlace_descarga(
-                bytes_geojson, f"muestras_hidroquimicas_{clave_sel or 'acuifero'}.geojson",
-                "application/geo+json", "Descargar GeoJSON (.geojson)", icon="🌐"
-            )
-            st.markdown(btn_geojson, unsafe_allow_html=True)
+        else:
+            bytes_geojson = b"{}"
+        btn_geojson = generar_enlace_descarga(
+            bytes_geojson, f"muestras_hidroquimicas_{clave_sel or 'acuifero'}.geojson",
+            "application/geo+json", "Descargar GeoJSON (.geojson)", icon="🌐"
+        )
+        st.markdown(btn_geojson, unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)

@@ -483,88 +483,152 @@ def auditar_norma_127(df_muestras):
 # =============================================================================
 def generar_diagrama_piper(df_procesado):
     """
-    Construye un Diagrama de Piper interactivo con Plotly:
-      - Triángulo de Cationes (Ca - Mg - Na+K) a la izquierda.
-      - Triángulo de Aniones (HCO3 - SO4 - Cl) a la derecha (Estándar Internacional).
-      - Diamante Central de Facies Hidrogeoquímicas con proyección geométrica rigurosa.
+    Construye un Diagrama Trilineal de Piper de alta definición (OMM / UNESCO):
+      - Triángulo de Cationes (izquierda) con rejilla ternaria completa cada 20%.
+      - Triángulo de Aniones (derecha) con rejilla ternaria completa cada 20%.
+      - Diamante Central (rombo equilátero real) con los 4 campos hidrogeoquímicos sombreados.
+      - Ticks numéricos exteriores limpios (20, 40, 60, 80) y etiquetas de vértices.
+      - Puntos de muestras de alta visibilidad con halo de contraste y líneas trilineales.
     """
     fig = go.Figure()
 
-    # Geometría y escala de Piper
     h_tri = math.sqrt(3) / 2.0  # 0.866025
-    x_gap = 0.5  # Espacio entre triángulos y diamante
+    x_gap = 0.45
     x_cat_orig = 0.0
-    x_an_orig = 1.0 + x_gap  # 1.5
+    x_an_orig = 1.0 + x_gap  # 1.45
 
-    # 1. Líneas guía y bordes del Triángulo de Cationes
+    # Vértices del Diamante Central (Rombo Equilátero de lados L=1.0)
+    # Altura vertical del rombo = 2 * h_tri = 1.73205
+    x_diam_bot, y_diam_bot = 1.225, h_tri
+    x_diam_left, y_diam_left = 0.725, 2.0 * h_tri
+    x_diam_right, y_diam_right = 1.725, 2.0 * h_tri
+    x_diam_top, y_diam_top = 1.225, 3.0 * h_tri
+    x_center, y_center = 1.225, 2.0 * h_tri
+
+    # Puntos medios de las aristas del Diamante
+    x_m_bl, y_m_bl = (x_diam_bot + x_diam_left) / 2.0, 1.5 * h_tri
+    x_m_br, y_m_br = (x_diam_bot + x_diam_right) / 2.0, 1.5 * h_tri
+    x_m_tl, y_m_tl = (x_diam_left + x_diam_top) / 2.0, 2.5 * h_tri
+    x_m_tr, y_m_tr = (x_diam_right + x_diam_top) / 2.0, 2.5 * h_tri
+
+    # 1. Sombreado de los 4 Cuadrantes del Diamante Central
+    # Cuadrante Sur: Bicarbonatada Cálcica/Magnésica (Recarga de Montaña)
+    fig.add_trace(go.Scatter(
+        x=[x_diam_bot, x_m_bl, x_center, x_m_br, x_diam_bot],
+        y=[y_diam_bot, y_m_bl, y_center, y_m_br, y_diam_bot],
+        fill='toself', fillcolor='rgba(2, 132, 199, 0.08)', line=dict(width=0),
+        hoverinfo='skip', showlegend=False
+    ))
+    # Cuadrante Norte: Clorurada Sódica (Salina Marina / Profunda)
+    fig.add_trace(go.Scatter(
+        x=[x_center, x_m_tl, x_diam_top, x_m_tr, x_center],
+        y=[y_center, y_m_tl, y_diam_top, y_m_tr, y_center],
+        fill='toself', fillcolor='rgba(220, 38, 38, 0.08)', line=dict(width=0),
+        hoverinfo='skip', showlegend=False
+    ))
+    # Cuadrante Oeste: Bicarbonatada Sódica (Intercambio Catiónico / Ablandamiento)
+    fig.add_trace(go.Scatter(
+        x=[x_m_bl, x_diam_left, x_m_tl, x_center, x_m_bl],
+        y=[y_m_bl, y_diam_left, y_m_tl, y_center, y_m_bl],
+        fill='toself', fillcolor='rgba(124, 58, 237, 0.08)', line=dict(width=0),
+        hoverinfo='skip', showlegend=False
+    ))
+    # Cuadrante Este: Sulfatada / Clorurada Cálcica (Disolución de Yeso)
+    fig.add_trace(go.Scatter(
+        x=[x_m_br, x_center, x_m_tr, x_diam_right, x_m_br],
+        y=[y_m_br, y_center, y_m_tr, y_diam_right, y_m_br],
+        fill='toself', fillcolor='rgba(217, 119, 6, 0.08)', line=dict(width=0),
+        hoverinfo='skip', showlegend=False
+    ))
+
+    # 2. Rejilla Ternaria Completa en Triángulo de Cationes (cada 20%)
+    for pct in [0.2, 0.4, 0.6, 0.8]:
+        # Horizontales (Mg constante)
+        y_h = pct * h_tri
+        x1_h = x_cat_orig + pct * 0.5
+        x2_h = x_cat_orig + 1.0 - pct * 0.5
+        fig.add_trace(go.Scatter(x=[x1_h, x2_h], y=[y_h, y_h], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+        # A 60° (Na+K constante)
+        fig.add_trace(go.Scatter(x=[x_cat_orig + pct, x_cat_orig + 0.5 + 0.5 * pct], y=[0.0, h_tri * (1.0 - pct)], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+        # A 120° (Ca constante)
+        fig.add_trace(go.Scatter(x=[x_cat_orig + 1.0 - pct, x_cat_orig + 0.5 - 0.5 * pct], y=[0.0, h_tri * (1.0 - pct)], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+
+    # 3. Rejilla Ternaria Completa en Triángulo de Aniones (cada 20%)
+    for pct in [0.2, 0.4, 0.6, 0.8]:
+        # Horizontales (SO4 constante)
+        y_h = pct * h_tri
+        x1_h = x_an_orig + pct * 0.5
+        x2_h = x_an_orig + 1.0 - pct * 0.5
+        fig.add_trace(go.Scatter(x=[x1_h, x2_h], y=[y_h, y_h], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+        # A 60° (Cl constante)
+        fig.add_trace(go.Scatter(x=[x_an_orig + pct, x_an_orig + 0.5 + 0.5 * pct], y=[0.0, h_tri * (1.0 - pct)], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+        # A 120° (HCO3 constante)
+        fig.add_trace(go.Scatter(x=[x_an_orig + 1.0 - pct, x_an_orig + 0.5 - 0.5 * pct], y=[0.0, h_tri * (1.0 - pct)], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+
+    # 4. Rejilla Interna en Diamante Central (cada 20%)
+    for pct in [0.2, 0.4, 0.6, 0.8]:
+        # Paralelas a arista inferior-izquierda (hacia superior-derecha)
+        x1_d = x_diam_bot + pct * (x_diam_right - x_diam_bot)
+        y1_d = y_diam_bot + pct * (y_diam_right - y_diam_bot)
+        x2_d = x_diam_left + pct * (x_diam_top - x_diam_left)
+        y2_d = y_diam_left + pct * (y_diam_top - y_diam_left)
+        fig.add_trace(go.Scatter(x=[x1_d, x2_d], y=[y1_d, y2_d], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+        # Paralelas a arista inferior-derecha (hacia superior-izquierda)
+        x3_d = x_diam_bot + pct * (x_diam_left - x_diam_bot)
+        y3_d = y_diam_bot + pct * (y_diam_left - y_diam_bot)
+        x4_d = x_diam_right + pct * (x_diam_top - x_diam_right)
+        y4_d = y_diam_right + pct * (y_diam_top - y_diam_right)
+        fig.add_trace(go.Scatter(x=[x3_d, x4_d], y=[y3_d, y4_d], mode='lines', line=dict(color='#e2e8f0', width=0.8), hoverinfo='skip', showlegend=False))
+
+    # 5. Bordes Perimetrales Estructurales
+    # Triángulo Cationes
     fig.add_trace(go.Scatter(
         x=[x_cat_orig, x_cat_orig + 1.0, x_cat_orig + 0.5, x_cat_orig],
         y=[0.0, 0.0, h_tri, 0.0],
-        mode='lines',
-        line=dict(color='#334155', width=1.8),
-        hoverinfo='skip',
-        showlegend=False
+        mode='lines', line=dict(color='#1e293b', width=2.2), hoverinfo='skip', showlegend=False
     ))
-    for pct in [0.2, 0.4, 0.6, 0.8]:
-        y_t = pct * h_tri
-        x1_t = x_cat_orig + pct * 0.5
-        x2_t = x_cat_orig + 1.0 - pct * 0.5
-        fig.add_trace(go.Scatter(x=[x1_t, x2_t], y=[y_t, y_t], mode='lines', line=dict(color='#cbd5e1', width=0.8, dash='dot'), hoverinfo='skip', showlegend=False))
-
-    # 2. Líneas guía y bordes del Triángulo de Aniones
+    # Triángulo Aniones
     fig.add_trace(go.Scatter(
         x=[x_an_orig, x_an_orig + 1.0, x_an_orig + 0.5, x_an_orig],
         y=[0.0, 0.0, h_tri, 0.0],
-        mode='lines',
-        line=dict(color='#334155', width=1.8),
-        hoverinfo='skip',
-        showlegend=False
+        mode='lines', line=dict(color='#1e293b', width=2.2), hoverinfo='skip', showlegend=False
     ))
-    for pct in [0.2, 0.4, 0.6, 0.8]:
-        y_t = pct * h_tri
-        x1_t = x_an_orig + pct * 0.5
-        x2_t = x_an_orig + 1.0 - pct * 0.5
-        fig.add_trace(go.Scatter(x=[x1_t, x2_t], y=[y_t, y_t], mode='lines', line=dict(color='#cbd5e1', width=0.8, dash='dot'), hoverinfo='skip', showlegend=False))
-
-    # 3. Diamante Central
-    x_diam_bot, y_diam_bot = 1.25, h_tri
-    x_diam_left, y_diam_left = 0.75, h_tri * 1.5
-    x_diam_right, y_diam_right = 1.75, h_tri * 1.5
-    x_diam_top, y_diam_top = 1.25, h_tri * 2.0
-
+    # Diamante Perímetro
     fig.add_trace(go.Scatter(
         x=[x_diam_bot, x_diam_right, x_diam_top, x_diam_left, x_diam_bot],
         y=[y_diam_bot, y_diam_right, y_diam_top, y_diam_left, y_diam_bot],
-        mode='lines',
-        line=dict(color='#1e293b', width=2.0),
-        hoverinfo='skip',
-        showlegend=False
+        mode='lines', line=dict(color='#1e293b', width=2.4), hoverinfo='skip', showlegend=False
     ))
-    # Ejes medios punteados del Diamante
-    fig.add_trace(go.Scatter(x=[x_diam_left, x_diam_right], y=[y_diam_left, y_diam_right], mode='lines', line=dict(color='#94a3b8', width=1.0, dash='dash'), hoverinfo='skip', showlegend=False))
-    fig.add_trace(go.Scatter(x=[x_diam_bot, x_diam_top], y=[y_diam_bot, y_diam_top], mode='lines', line=dict(color='#94a3b8', width=1.0, dash='dash'), hoverinfo='skip', showlegend=False))
+    # Líneas divisorias medias del Diamante (50%)
+    fig.add_trace(go.Scatter(x=[x_diam_left, x_diam_right], y=[y_diam_left, y_diam_right], mode='lines', line=dict(color='#64748b', width=1.1, dash='dash'), hoverinfo='skip', showlegend=False))
+    fig.add_trace(go.Scatter(x=[x_diam_bot, x_diam_top], y=[y_diam_bot, y_diam_top], mode='lines', line=dict(color='#64748b', width=1.1, dash='dash'), hoverinfo='skip', showlegend=False))
 
-    # Rotulación de Esquinas y Facies
+    # 6. Rotulación Pericial y Ticks Numéricos
     anotaciones = [
-        # Cationes (Triángulo Izquierdo)
-        dict(x=x_cat_orig - 0.04, y=-0.04, text='<b>Ca²⁺</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
-        dict(x=x_cat_orig + 1.04, y=-0.04, text='<b>Na⁺ + K⁺</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
-        dict(x=x_cat_orig + 0.5, y=h_tri + 0.05, text='<b>Mg²⁺</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
-        dict(x=x_cat_orig + 0.5, y=-0.08, text='<b>CATIONES (% meq/L)</b>', showarrow=False, font=dict(color='#691C32', size=11.5)),
-        # Aniones (Triángulo Derecho - Estándar Internacional Piper)
-        dict(x=x_an_orig - 0.04, y=-0.04, text='<b>HCO₃⁻ + CO₃²⁻</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
-        dict(x=x_an_orig + 1.04, y=-0.04, text='<b>Cl⁻</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
-        dict(x=x_an_orig + 0.5, y=h_tri + 0.05, text='<b>SO₄²⁻</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
-        dict(x=x_an_orig + 0.5, y=-0.08, text='<b>ANIONES (% meq/L)</b>', showarrow=False, font=dict(color='#691C32', size=11.5)),
-        # Diamante Facies
-        dict(x=x_diam_bot, y=y_diam_bot - 0.05, text='<b>Bicarbonatada Cálcica / Magnésica (Recarga)</b>', showarrow=False, font=dict(color='#166534', size=10)),
-        dict(x=x_diam_top, y=y_diam_top + 0.05, text='<b>Clorurada Sódica (Salina Marina / Profunda)</b>', showarrow=False, font=dict(color='#991b1b', size=10)),
-        dict(x=x_diam_left - 0.05, y=y_diam_left, text='<b>Bicarbonatada Sódica</b>', showarrow=False, font=dict(color='#475569', size=9.5), textangle=-45),
-        dict(x=x_diam_right + 0.05, y=y_diam_right, text='<b>Sulfatada / Clorurada Cálcica</b>', showarrow=False, font=dict(color='#475569', size=9.5), textangle=45),
+        # Vértices Cationes
+        dict(x=x_cat_orig - 0.05, y=-0.05, text="<b>Ca²⁺</b>", showarrow=False, font=dict(color="#0f172a", size=13)),
+        dict(x=x_cat_orig + 1.05, y=-0.05, text="<b>Na⁺+K⁺</b>", showarrow=False, font=dict(color="#0f172a", size=13)),
+        dict(x=x_cat_orig + 0.5, y=h_tri + 0.06, text="<b>Mg²⁺</b>", showarrow=False, font=dict(color="#0f172a", size=13)),
+        dict(x=x_cat_orig + 0.5, y=-0.11, text="<b>CATIONES (% meq/L)</b> →", showarrow=False, font=dict(color="#691C32", size=11.5)),
+        # Vértices Aniones
+        dict(x=x_an_orig - 0.05, y=-0.05, text="<b>HCO₃⁻+CO₃²⁻</b>", showarrow=False, font=dict(color="#0f172a", size=13)),
+        dict(x=x_an_orig + 1.05, y=-0.05, text="<b>Cl⁻</b>", showarrow=False, font=dict(color="#0f172a", size=13)),
+        dict(x=x_an_orig + 0.5, y=h_tri + 0.06, text="<b>SO₄²⁻</b>", showarrow=False, font=dict(color="#0f172a", size=13)),
+        dict(x=x_an_orig + 0.5, y=-0.11, text="← <b>ANIONES (% meq/L)</b>", showarrow=False, font=dict(color="#691C32", size=11.5)),
+        # Rotulación de Cuadrantes del Diamante
+        dict(x=x_diam_bot, y=y_diam_bot - 0.06, text="<b>Bicarbonatada Cálcica</b><br><span style='font-size:9.5px;color:#166534;'>Aguas de Recarga Fresca</span>", showarrow=False, font=dict(color="#166534", size=11)),
+        dict(x=x_diam_top, y=y_diam_top + 0.07, text="<b>Clorurada Sódica</b><br><span style='font-size:9.5px;color:#991b1b;'>Salina / Marina Profunda</span>", showarrow=False, font=dict(color="#991b1b", size=11)),
+        dict(x=x_diam_left - 0.08, y=y_diam_left, text="<b>Bicarbonatada Sódica</b><br><span style='font-size:9px;color:#6b21a8;'>Intercambio Catiónico</span>", showarrow=False, font=dict(color="#6b21a8", size=10), textangle=-45),
+        dict(x=x_diam_right + 0.08, y=y_diam_right, text="<b>Sulfatada Cálcica</b><br><span style='font-size:9px;color:#92400e;'>Disolución de Yeso</span>", showarrow=False, font=dict(color="#92400e", size=10), textangle=45),
     ]
 
-    # 4. Proyección de Muestras
-    colores_paleta = px.colors.qualitative.Dark24
+    # Ticks numéricos discretos en bordes
+    for pct, txt in [(0.2, "20"), (0.4, "40"), (0.6, "60"), (0.8, "80")]:
+        anotaciones.append(dict(x=x_cat_orig + pct, y=-0.03, text=txt, showarrow=False, font=dict(color="#64748b", size=8.5)))
+        anotaciones.append(dict(x=x_an_orig + pct, y=-0.03, text=txt, showarrow=False, font=dict(color="#64748b", size=8.5)))
+
+    # 7. Proyección Trilineal de Muestras
+    colores_paleta = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
@@ -574,89 +638,85 @@ def generar_diagrama_piper(df_procesado):
         ca = float(r.get('pct_Ca', 0.0))
         mg = float(r.get('pct_Mg', 0.0))
         na_k = float(r.get('pct_Na_K', 0.0))
-
         cl = float(r.get('pct_Cl', 0.0))
         so4 = float(r.get('pct_SO4', 0.0))
         hco3 = float(r.get('pct_HCO3_CO3', 0.0))
 
-        # Triángulo Cationes:
+        # Cationes
         xc = x_cat_orig + (na_k + 0.5 * mg) / 100.0
         yc = (mg / 100.0) * h_tri
-
-        # Triángulo Aniones (Estándar Piper):
-        # HCO3 (izq 0%), Cl (der 100%), SO4 (arriba 100%)
+        # Aniones (Estándar OMM: HCO3 a la izquierda, Cl a la derecha)
         xa = x_an_orig + (cl + 0.5 * so4) / 100.0
         ya = (so4 / 100.0) * h_tri
 
-        # Diamante Central:
+        # Diamante Central Proyección Exacta
         u_cat = na_k / 100.0
         v_an = (cl + so4) / 100.0
-
         xd = x_diam_bot + 0.5 * (v_an - u_cat)
-        yd = y_diam_bot + 0.5 * h_tri * (v_an + u_cat)
+        yd = y_diam_bot + h_tri * (v_an + u_cat)
 
         hover_txt = f"""
-        <b>Muestra:</b> {id_m}<br>
+        <b>🧪 Muestra:</b> {id_m}<br>
         <b>Facies:</b> {facies}<br>
-        <b>CBE:</b> {r.get('CBE_pct', 0.0):+.2f}%<br>
-        <b>Cationes:</b> Ca={ca:.1f}%, Mg={mg:.1f}%, Na+K={na_k:.1f}%<br>
-        <b>Aniones:</b> HCO₃={hco3:.1f}%, SO₄={so4:.1f}%, Cl={cl:.1f}%
+        <b>Error Balance CBE:</b> {r.get('CBE_pct', 0.0):+.2f}% ({r.get('CBE_Calidad', '')})<br>
+        <b>SDT:</b> {r.get('SDT_mg_L', 0):,.1f} mg/L | <b>CE:</b> {r.get('CE_uS_cm', 0):,.0f} µS/cm<br>
+        <hr style='margin:4px 0;'>
+        <b>Cationes:</b> Ca²⁺={ca:.1f}%, Mg²⁺={mg:.1f}%, Na⁺+K⁺={na_k:.1f}%<br>
+        <b>Aniones:</b> HCO₃⁻={hco3:.1f}%, SO₄²⁻={so4:.1f}%, Cl⁻={cl:.1f}%
         """
 
         # Punto Cationes
         fig.add_trace(go.Scatter(
             x=[xc], y=[yc], mode='markers',
-            marker=dict(size=9, color=color_pt, line=dict(width=1, color='#0f172a')),
+            marker=dict(size=10, color=color_pt, line=dict(width=1.5, color='#0f172a')),
             name=id_m, hovertext=hover_txt, hoverinfo='text',
             legendgroup=id_m, showlegend=False
         ))
-
         # Punto Aniones
         fig.add_trace(go.Scatter(
             x=[xa], y=[ya], mode='markers',
-            marker=dict(size=9, color=color_pt, line=dict(width=1, color='#0f172a')),
+            marker=dict(size=10, color=color_pt, line=dict(width=1.5, color='#0f172a')),
             hovertext=hover_txt, hoverinfo='text',
             legendgroup=id_m, showlegend=False
         ))
-
-        # Punto Diamante
+        # Punto Diamante (con símbolo de diamante)
         fig.add_trace(go.Scatter(
             x=[xd], y=[yd], mode='markers',
-            marker=dict(size=10, color=color_pt, symbol='diamond', line=dict(width=1.2, color='#0f172a')),
+            marker=dict(size=12, color=color_pt, symbol='diamond', line=dict(width=1.5, color='#0f172a')),
             name=f"{id_m} ({facies})",
             hovertext=hover_txt, hoverinfo='text',
             legendgroup=id_m, showlegend=True
         ))
-
-        # Líneas de proyección punteadas conectando triángulos al diamante
+        # Líneas trilineales de conexión
         fig.add_trace(go.Scatter(
             x=[xc, xd, xa], y=[yc, yd, ya], mode='lines',
-            line=dict(color=color_pt, width=0.8, dash='dot'),
+            line=dict(color=color_pt, width=1.1, dash='dot'),
             hoverinfo='skip', legendgroup=id_m, showlegend=False
         ))
 
     fig.update_layout(
-        title='<b>Diagrama Trilineal de Piper - Clasificación de Facies Hidrogeoquímicas</b>',
+        title=dict(text="<b>Diagrama Trilineal de Piper (OMM / UNESCO)</b>", font=dict(size=16, color="#1e293b"), x=0.5),
         annotations=anotaciones,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.15, 2.75]),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.15, 1.95], scaleanchor='x', scaleratio=1),
-        height=660,
-        plot_bgcolor='rgba(255,255,255,1)',
-        paper_bgcolor='rgba(255,255,255,1)',
-        margin=dict(t=50, b=40, l=20, r=220),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.25, 2.70]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.22, 3.0 * h_tri + 0.22], scaleanchor="x", scaleratio=1),
+        height=720,
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        margin=dict(t=50, b=40, l=30, r=30),
         legend=dict(
-            orientation='v',
-            yanchor='top',
-            y=0.98,
-            xanchor='left',
-            x=1.02,
-            font=dict(size=10),
-            bgcolor='rgba(255,255,255,0.92)',
-            bordercolor='#cbd5e1',
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5,
+            font=dict(size=10.5),
+            bgcolor="rgba(255,255,255,0.92)",
+            bordercolor="#cbd5e1",
             borderwidth=1
         )
     )
     return fig
+
 
 # =============================================================================
 # 6. DIAGRAMAS DE STIFF MULTIMUESTRA
@@ -676,12 +736,10 @@ def hex_or_rgb_to_rgba(c, alpha=0.45):
 
 def generar_diagrama_stiff(df_procesado, muestra_sel=None):
     """
-    Construye diagramas poligonales de Stiff para una o varias muestras.
-    Iones en meq/L:
-      Fila 1: Na+K (izq) vs Cl (der)
-      Fila 2: Ca (izq) vs HCO3+CO3 (der)
-      Fila 3: Mg (izq) vs SO4 (der)
-      Fila 4: Fe (izq) vs NO3 (der)
+    Construye diagramas poligonales de Stiff limpios sin solapamiento:
+      - 2 columnas por fila para evitar compresión horizontal de títulos.
+      - Títulos limpios y concisos con facies en subtítulo.
+      - Vértice 4 con NO3 en el lado aniónico para rigor hidrogeoquímico.
     """
     df_plot = df_procesado.copy()
     if muestra_sel and muestra_sel != "Todas las Muestras":
@@ -691,15 +749,18 @@ def generar_diagrama_stiff(df_procesado, muestra_sel=None):
     if n_muestras == 0:
         return go.Figure()
 
-    # Si hay múltiples muestras, armar una cuadrícula con subplots
     from plotly.subplots import make_subplots
-    cols_grid = min(3, n_muestras)
+    cols_grid = min(2, n_muestras)
     rows_grid = math.ceil(n_muestras / cols_grid)
 
     titulos_sub = [f"<b>{r.get('Muestra')}</b> ({r.get('Facies_Piper', '')})" for _, r in df_plot.iterrows()]
-    fig = make_subplots(rows=rows_grid, cols=cols_grid, subplot_titles=titulos_sub, vertical_spacing=0.15, horizontal_spacing=0.1)
+    fig = make_subplots(
+        rows=rows_grid, cols=cols_grid,
+        subplot_titles=titulos_sub,
+        vertical_spacing=0.22,
+        horizontal_spacing=0.18
+    )
 
-    # Determinar escala máxima en meq/L para eje simétrico
     max_meq = max([
         df_plot['Ca_meq_L'].max(), df_plot['Mg_meq_L'].max(),
         (df_plot['Na_meq_L'] + df_plot['K_meq_L']).max(),
@@ -710,8 +771,7 @@ def generar_diagrama_stiff(df_procesado, muestra_sel=None):
 
     y_labels = ["Fe / NO₃", "Mg / SO₄", "Ca / HCO₃", "Na+K / Cl"]
     y_pos = [1, 2, 3, 4]
-
-    colores = px.colors.qualitative.Bold
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 
     for idx, (_, r) in enumerate(df_plot.iterrows()):
         row_i = (idx // cols_grid) + 1
@@ -727,19 +787,17 @@ def generar_diagrama_stiff(df_procesado, muestra_sel=None):
         so4 = float(r.get('SO4_meq_L', 0))
         no3 = float(r.get('NO3_meq_L', 0))
 
-        # Coordenadas del polígono cerrado (izq negativos, der positivos)
-        xs = [-na_k, -ca, -mg, -fe, fe, so4, hco3, cl, -na_k]
+        # Polígono cerrado conectando Cationes (izq) y Aniones (der)
+        xs = [-na_k, -ca, -mg, -fe, no3, so4, hco3, cl, -na_k]
         ys = [4, 3, 2, 1, 1, 2, 3, 4, 4]
-
         color_fill = colores[idx % len(colores)]
 
-        # Polígono de Stiff
         fig.add_trace(go.Scatter(
             x=xs, y=ys, fill='toself',
-            fillcolor=hex_or_rgb_to_rgba(color_fill, 0.45),
-            line=dict(color=color_fill, width=2.0),
+            fillcolor=hex_or_rgb_to_rgba(color_fill, 0.38),
+            line=dict(color=color_fill, width=2.2),
             mode='lines+markers',
-            marker=dict(size=5, color=color_fill),
+            marker=dict(size=6, color=color_fill),
             hoverinfo='text',
             hovertext=[
                 f"Na+K: {na_k:.2f} meq/L", f"Ca: {ca:.2f} meq/L", f"Mg: {mg:.2f} meq/L", f"Fe: {fe:.2f} meq/L",
@@ -749,34 +807,32 @@ def generar_diagrama_stiff(df_procesado, muestra_sel=None):
             showlegend=False
         ), row=row_i, col=col_i)
 
-        # Eje cero vertical central
-        fig.add_vline(x=0, line=dict(color="#64748b", width=1.2, dash="dash"), row=row_i, col=col_i)
-
-        fig.update_xaxes(range=[-escala_x, escala_x], title="Cationes (meq/L) ← 0 → Aniones (meq/L)" if row_i == rows_grid else "", row=row_i, col=col_i)
+        fig.add_vline(x=0, line=dict(color="#64748b", width=1.4, dash="dash"), row=row_i, col=col_i)
+        fig.update_xaxes(range=[-escala_x, escala_x], title="Cationes ← 0 → Aniones (meq/L)" if row_i == rows_grid else "", row=row_i, col=col_i)
         fig.update_yaxes(tickvals=y_pos, ticktext=y_labels, row=row_i, col=col_i)
 
-    alt_total = max(350, rows_grid * 240)
+    alt_total = max(380, rows_grid * 270)
     fig.update_layout(
-        title="<b>Diagramas de Huella Iónica de Stiff (meq/L)</b>",
+        title=dict(text="<b>Diagramas Poligonales de Stiff (meq/L)</b>", font=dict(size=15, color="#1e293b")),
         height=alt_total,
         plot_bgcolor='#f8fafc',
         paper_bgcolor='white',
-        margin=dict(t=60, b=40, l=40, r=40)
+        margin=dict(t=70, b=40, l=40, r=40)
     )
     return fig
+
 
 # =============================================================================
 # 7. DIAGRAMA DE SCHÖELLER-BERKALOFF
 # =============================================================================
 def generar_diagrama_schoeller(df_procesado):
     """
-    Gráfico semilogarítmico para trazar líneas de evolución hidrogeoquímica.
-    Eje X: Ca, Mg, Na+K, Cl, SO4, HCO3
-    Eje Y: Concentración en meq/L (escala log10).
+    Gráfico semilogarítmico con la secuencia hidrogeoquímica de Chebotarev
+    y leyenda superior totalmente separada de los ejes.
     """
     fig = go.Figure()
     iones_x = ["Ca²⁺", "Mg²⁺", "Na⁺+K⁺", "HCO₃⁻", "SO₄²⁻", "Cl⁻"]
-    colores = px.colors.qualitative.Dark24
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
@@ -791,61 +847,56 @@ def generar_diagrama_schoeller(df_procesado):
             max(0.001, float(r.get('Cl_meq_L', 0.001)))
         ]
 
-        hover_txt = f"<b>{id_m}</b><br>" + "<br>".join([f"{ion}: {v:.2f} meq/L" for ion, v in zip(iones_x, vals_y)])
+        hover_txt = f"<b>🧪 {id_m}</b><br>" + "<br>".join([f"{ion}: {v:.2f} meq/L" for ion, v in zip(iones_x, vals_y)])
 
         fig.add_trace(go.Scatter(
             x=iones_x, y=vals_y,
             mode='lines+markers',
             name=id_m,
-            line=dict(color=color_linea, width=2.0),
-            marker=dict(size=7, color=color_linea),
+            line=dict(color=color_linea, width=2.2),
+            marker=dict(size=8, color=color_linea),
             hovertext=hover_txt,
             hoverinfo='text'
         ))
 
     fig.update_layout(
-        title="<b>Diagrama Semilogarítmico de Schöeller-Berkaloff</b>",
-        xaxis=dict(title="Iones Mayores", showgrid=True, gridcolor='#e2e8f0'),
-        yaxis=dict(title="Concentración (meq/L)", type="log", showgrid=True, gridcolor='#e2e8f0'),
-        height=500,
+        title=dict(text="<b>Perfil Semilogarítmico de Schöeller-Berkaloff</b>", font=dict(size=15, color="#1e293b")),
+        xaxis=dict(title="Secuencia Geoquímica (Chebotarev)", showgrid=True, gridcolor='#e2e8f0'),
+        yaxis=dict(title="Concentración Iónica (meq/L)", type="log", showgrid=True, gridcolor='#e2e8f0'),
+        height=520,
         plot_bgcolor='white',
         paper_bgcolor='white',
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5)
+        margin=dict(t=65, b=60, l=55, r=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5, font=dict(size=10.5))
     )
     return fig
+
 
 # =============================================================================
 # 8. DIAGRAMAS AGRÍCOLAS (WILCOX Y USSL RIVERSIDE)
 # =============================================================================
 def generar_diagrama_wilcox(df_procesado):
     """
-    Diagrama de Wilcox: Conductividad Eléctrica (µS/cm) vs. % Sodio Soluble (%Na).
-    Clasifica la aptitud del agua para riego en 5 categorías.
+    Diagrama de Wilcox con leyenda superior y zonas rotuladas sin solapamiento.
     """
     fig = go.Figure()
 
-    # Polígonos de zonas de Wilcox
-    # Excelente (< 250 µS/cm y < 20% Na)
-    # Buena (250 - 750 µS/cm y 20 - 40% Na)
-    # Permisible (750 - 2000 µS/cm y 40 - 60% Na)
-    # Dudosa (2000 - 3000 µS/cm y 60 - 80% Na)
-    # Inadecuada (> 3000 µS/cm o > 80% Na)
-
-    # Curvas límite de Wilcox (parábolas estándar de Wilcox)
     ce_grid = np.linspace(50, 4000, 200)
-    # Límite Excelente / Bueno
     y_exc = np.clip(100 - (ce_grid / 40.0), 20, 100)
-    # Límite Bueno / Permisible
     y_bue = np.clip(100 - (ce_grid / 25.0), 10, 80)
-    # Límite Permisible / Dudoso
     y_per = np.clip(100 - (ce_grid / 18.0), 5, 60)
 
-    fig.add_trace(go.Scatter(x=ce_grid, y=y_exc, mode='lines', line=dict(color='#16a34a', width=1.5, dash='dash'), name='Límite Excelente/Bueno', hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=ce_grid, y=y_bue, mode='lines', line=dict(color='#2563eb', width=1.5, dash='dash'), name='Límite Bueno/Permisible', hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=ce_grid, y=y_per, mode='lines', line=dict(color='#d97706', width=1.5, dash='dash'), name='Límite Permisible/Dudoso', hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=ce_grid, y=y_exc, mode='lines', line=dict(color='#16a34a', width=1.4, dash='dash'), name='Límite Excelente/Bueno', hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=ce_grid, y=y_bue, mode='lines', line=dict(color='#2563eb', width=1.4, dash='dash'), name='Límite Bueno/Permisible', hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=ce_grid, y=y_per, mode='lines', line=dict(color='#d97706', width=1.4, dash='dash'), name='Límite Permisible/Dudoso', hoverinfo='skip'))
 
-    # Puntos de Muestras
-    colores = px.colors.qualitative.Dark24
+    # Anotaciones de zonas agronómicas
+    fig.add_annotation(x=300, y=85, text="<b>Excelente</b>", showarrow=False, font=dict(color="#16a34a", size=10.5))
+    fig.add_annotation(x=900, y=55, text="<b>Bueno</b>", showarrow=False, font=dict(color="#2563eb", size=10.5))
+    fig.add_annotation(x=1700, y=32, text="<b>Permisible</b>", showarrow=False, font=dict(color="#d97706", size=10.5))
+    fig.add_annotation(x=2800, y=18, text="<b>Dudoso / Inadecuado</b>", showarrow=False, font=dict(color="#dc2626", size=10.5))
+
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         ce = float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65))
@@ -853,22 +904,23 @@ def generar_diagrama_wilcox(df_procesado):
         ras = float(r.get('RAS', 0.0))
         color_pt = colores[idx % len(colores)]
 
-        hover_txt = f"<b>{id_m}</b><br>CE: {ce:.0f} µS/cm<br>%Na: {pct_na:.1f}%<br>RAS: {ras:.2f}"
+        hover_txt = f"<b>🌾 {id_m}</b><br>CE: {ce:,.0f} µS/cm<br>%Na Soluble: {pct_na:.1f}%<br>RAS: {ras:.2f}"
 
         fig.add_trace(go.Scatter(
             x=[ce], y=[pct_na], mode='markers',
-            marker=dict(size=10, color=color_pt, line=dict(width=1, color='#0f172a')),
+            marker=dict(size=11, color=color_pt, line=dict(width=1.5, color='#0f172a')),
             name=id_m, hovertext=hover_txt, hoverinfo='text'
         ))
 
     fig.update_layout(
-        title="<b>Diagrama de Wilcox - Aptitud de Agua Subterránea para Riego Agrícola</b>",
+        title=dict(text="<b>Diagrama de Wilcox - Aptitud para Riego</b>", font=dict(size=14, color="#1e293b")),
         xaxis=dict(title="Conductividad Eléctrica (µS/cm a 25 °C)", range=[0, 4200], showgrid=True, gridcolor='#e2e8f0'),
         yaxis=dict(title="Sodio Soluble (% Na)", range=[0, 100], showgrid=True, gridcolor='#e2e8f0'),
-        height=500,
+        height=520,
         plot_bgcolor='#fafafa',
         paper_bgcolor='white',
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5)
+        margin=dict(t=65, b=60, l=55, r=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5, font=dict(size=9.5))
     )
     return fig
 
@@ -878,80 +930,71 @@ def generar_diagrama_riverside(df_procesado):
     """
     fig = go.Figure()
 
-    # Zonas de Salinidad en X (CE en escala log)
-    # C1: < 250, C2: 250 - 750, C3: 750 - 2250, C4: > 2250
-    # Líneas divisorias de salinidad
     for ce_lim, label in [(250, "C1: Baja"), (750, "C2: Media"), (2250, "C3: Alta")]:
         fig.add_vline(x=ce_lim, line=dict(color="#cbd5e1", width=1.5, dash="dash"), annotation_text=label, annotation_position="top")
 
-    # Curvas de Sodio en Y (RAS en función de CE según curvas estándar de Richards, 1954):
-    # S1 límite: RAS = 1.88e-5 * CE + 10.0 (aprox)
     ce_arr = np.linspace(100, 5000, 100)
     ras_s1 = 10.0 - 0.001 * ce_arr
     ras_s2 = 18.0 - 0.0015 * ce_arr
     ras_s3 = 26.0 - 0.002 * ce_arr
 
-    fig.add_trace(go.Scatter(x=ce_arr, y=ras_s1, mode='lines', line=dict(color='#16a34a', width=1.2, dash='dot'), name='Límite S1/S2 (Bajo/Medio)', hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=ce_arr, y=ras_s2, mode='lines', line=dict(color='#d97706', width=1.2, dash='dot'), name='Límite S2/S3 (Medio/Alto)', hoverinfo='skip'))
-    fig.add_trace(go.Scatter(x=ce_arr, y=ras_s3, mode='lines', line=dict(color='#dc2626', width=1.2, dash='dot'), name='Límite S3/S4 (Alto/Muy Alto)', hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=ce_arr, y=ras_s1, mode='lines', line=dict(color='#16a34a', width=1.2, dash='dot'), name='Límite S1/S2', hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=ce_arr, y=ras_s2, mode='lines', line=dict(color='#d97706', width=1.2, dash='dot'), name='Límite S2/S3', hoverinfo='skip'))
+    fig.add_trace(go.Scatter(x=ce_arr, y=ras_s3, mode='lines', line=dict(color='#dc2626', width=1.2, dash='dot'), name='Límite S3/S4', hoverinfo='skip'))
 
-    colores = px.colors.qualitative.Dark24
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         ce = float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65))
         ras = float(r.get('RAS', 0.0))
         color_pt = colores[idx % len(colores)]
 
-        hover_txt = f"<b>{id_m}</b><br>CE: {ce:.0f} µS/cm<br>RAS: {ras:.2f}<br>Clasif: {r.get('Clasif_RAS', '')}"
+        hover_txt = f"<b>🌾 {id_m}</b><br>CE: {ce:,.0f} µS/cm<br>RAS: {ras:.2f}<br>Diagnóstico: {r.get('Clasif_RAS', '')}"
 
         fig.add_trace(go.Scatter(
             x=[ce], y=[ras], mode='markers',
-            marker=dict(size=10, color=color_pt, line=dict(width=1, color='#0f172a')),
+            marker=dict(size=11, color=color_pt, line=dict(width=1.5, color='#0f172a')),
             name=id_m, hovertext=hover_txt, hoverinfo='text'
         ))
 
     fig.update_layout(
-        title="<b>Diagrama de Riverside (USSL) - Clasificación Salinidad (C) vs. Sodio (S)</b>",
-        xaxis=dict(title="Conductividad Eléctrica (µS/cm)", type="log", range=[2, 4], showgrid=True, gridcolor='#e2e8f0'),
+        title=dict(text="<b>Diagrama de Riverside (USSL) - Salinidad vs. Sodio</b>", font=dict(size=14, color="#1e293b")),
+        xaxis=dict(title="Conductividad Eléctrica (µS/cm, escala log)", type="log", range=[2, 4], showgrid=True, gridcolor='#e2e8f0'),
         yaxis=dict(title="Relación de Adsorción de Sodio (RAS / SAR)", range=[0, 32], showgrid=True, gridcolor='#e2e8f0'),
-        height=500,
+        height=520,
         plot_bgcolor='white',
         paper_bgcolor='white',
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5)
+        margin=dict(t=65, b=60, l=55, r=25),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5, font=dict(size=9.5))
     )
     return fig
+
 
 # =============================================================================
 # 9. DIAGRAMA DE GIBBS (MECANISMOS GEOQUÍMICOS)
 # =============================================================================
 def generar_diagrama_gibbs(df_procesado):
     """
-    Diagrama de Gibbs:
-      Panel 1: Cationes [(Na+K)/(Na+K+Ca)] vs SDT (mg/L)
-      Panel 2: Aniones [Cl/(Cl+HCO3)] vs SDT (mg/L)
-      Identifica: Precipitación, Interacción Agua-Roca (Meteorización), Evaporación.
+    Diagrama de Gibbs: Cationes y Aniones vs SDT (mg/L).
     """
     from plotly.subplots import make_subplots
-    fig = make_subplots(rows=1, cols=2, subplot_titles=["<b>Gibbs Cationes: (Na+K)/(Na+K+Ca)</b>", "<b>Gibbs Aniones: Cl/(Cl+HCO₃)</b>"])
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=["<b>Cationes: (Na⁺+K⁺)/(Na⁺+K⁺+Ca²⁺)</b>", "<b>Aniones: Cl⁻/(Cl⁻+HCO₃⁻)</b>"],
+        horizontal_spacing=0.12
+    )
 
-    # Zonas de Gibbs estándar (forma de boomerang / bota)
-    sdt_vals = np.logspace(1, 4, 100)
-
-    # Cajas referenciales de Gibbs
     for col_i in [1, 2]:
-        # Zona Precipitación (SDT bajo 10-50, relación alta)
-        fig.add_shape(type="rect", x0=0.5, y0=10, x1=1.0, y1=80, fillcolor="rgba(59, 130, 246, 0.15)", line=dict(width=0), row=1, col=col_i)
+        fig.add_shape(type="rect", x0=0.5, y0=10, x1=1.0, y1=80, fillcolor="rgba(59, 130, 246, 0.12)", line=dict(width=0), row=1, col=col_i)
         fig.add_annotation(x=0.75, y=30, text="Dominancia de<br>Precipitación (Lluvia)", showarrow=False, font=dict(size=9.5, color="#1d4ed8"), row=1, col=col_i)
 
-        # Zona Interacción Agua-Roca (SDT 100-1000, relación baja/media)
-        fig.add_shape(type="rect", x0=0.05, y0=100, x1=0.55, y1=1000, fillcolor="rgba(34, 197, 94, 0.15)", line=dict(width=0), row=1, col=col_i)
+        fig.add_shape(type="rect", x0=0.05, y0=100, x1=0.55, y1=1000, fillcolor="rgba(34, 197, 94, 0.12)", line=dict(width=0), row=1, col=col_i)
         fig.add_annotation(x=0.30, y=350, text="Dominancia de<br>Interacción Agua-Roca", showarrow=False, font=dict(size=9.5, color="#15803d"), row=1, col=col_i)
 
-        # Zona Evaporación (SDT > 1000, relación alta)
-        fig.add_shape(type="rect", x0=0.55, y0=1000, x1=1.0, y1=10000, fillcolor="rgba(239, 68, 68, 0.15)", line=dict(width=0), row=1, col=col_i)
+        fig.add_shape(type="rect", x0=0.55, y0=1000, x1=1.0, y1=10000, fillcolor="rgba(239, 68, 68, 0.12)", line=dict(width=0), row=1, col=col_i)
         fig.add_annotation(x=0.78, y=3500, text="Dominancia de<br>Evaporación / Salinidad", showarrow=False, font=dict(size=9.5, color="#b91c1c"), row=1, col=col_i)
 
-    colores = px.colors.qualitative.Dark24
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         sdt = float(r.get('SDT_mg_L', 100.0) if pd.notna(r.get('SDT_mg_L')) else 100.0)
@@ -963,16 +1006,16 @@ def generar_diagrama_gibbs(df_procesado):
         if pd.notna(g_cat):
             fig.add_trace(go.Scatter(
                 x=[g_cat], y=[sdt], mode='markers',
-                marker=dict(size=9, color=color_pt, line=dict(width=1, color='#0f172a')),
-                name=id_m, hovertext=f"<b>{id_m}</b><br>Gibbs Cat: {g_cat:.2f}<br>SDT: {sdt:,.0f} mg/L", hoverinfo='text',
+                marker=dict(size=10, color=color_pt, line=dict(width=1.5, color='#0f172a')),
+                name=id_m, hovertext=f"<b>🧪 {id_m}</b><br>Gibbs Cat: {g_cat:.2f}<br>SDT: {sdt:,.0f} mg/L", hoverinfo='text',
                 legendgroup=id_m, showlegend=True
             ), row=1, col=1)
 
         if pd.notna(g_an):
             fig.add_trace(go.Scatter(
                 x=[g_an], y=[sdt], mode='markers',
-                marker=dict(size=9, color=color_pt, line=dict(width=1, color='#0f172a')),
-                hovertext=f"<b>{id_m}</b><br>Gibbs An: {g_an:.2f}<br>SDT: {sdt:,.0f} mg/L", hoverinfo='text',
+                marker=dict(size=10, color=color_pt, line=dict(width=1.5, color='#0f172a')),
+                hovertext=f"<b>🧪 {id_m}</b><br>Gibbs An: {g_an:.2f}<br>SDT: {sdt:,.0f} mg/L", hoverinfo='text',
                 legendgroup=id_m, showlegend=False
             ), row=1, col=2)
 
@@ -982,14 +1025,14 @@ def generar_diagrama_gibbs(df_procesado):
     fig.update_yaxes(type="log", range=[1, 4], row=1, col=2)
 
     fig.update_layout(
-        title="<b>Diagramas de Gibbs - Identificación del Proceso Hidrogeoquímico Rector</b>",
-        height=520,
+        title=dict(text="<b>Diagramas de Gibbs - Identificación del Proceso Hidrogeoquímico Rector</b>", font=dict(size=15, color="#1e293b")),
+        height=540,
         plot_bgcolor='white',
         paper_bgcolor='white',
-        legend=dict(orientation="h", yanchor="bottom", y=-0.22, xanchor="center", x=0.5)
+        margin=dict(t=65, b=60, l=55, r=30),
+        legend=dict(orientation="h", yanchor="bottom", y=1.04, xanchor="center", x=0.5, font=dict(size=10))
     )
     return fig
-
 # =============================================================================
 # 10. GENERADOR DE PLANTILLA EXCEL OFICIAL (.XLSX)
 # =============================================================================
