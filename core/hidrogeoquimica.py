@@ -20,6 +20,10 @@ Funcionalidades:
 """
 
 import math
+import zipfile
+import tempfile
+import os
+import html
 import io
 import json
 import re
@@ -346,6 +350,26 @@ def procesar_muestras_hidroquimicas(df_muestras):
     denom_gibbs_an = df['Cl_meq_L'] + df['HCO3_meq_L']
     df['Gibbs_Aniones'] = np.where(denom_gibbs_an > 0, df['Cl_meq_L'] / denom_gibbs_an, np.nan)
 
+    # 8. Relaciones Molares / Iónicas e Indicadores Geoquímicos (en meq/meq)
+    df['rNa_rCl'] = np.where(df['Cl_meq_L'] > 0, df['Na_meq_L'] / df['Cl_meq_L'], np.nan)
+    df['rCa_rSO4'] = np.where(df['SO4_meq_L'] > 0, df['Ca_meq_L'] / df['SO4_meq_L'], np.nan)
+    hco3_tot = df['HCO3_meq_L'] + df['CO3_meq_L']
+    df['rCaMg_rHCO3'] = np.where(hco3_tot > 0, (df['Ca_meq_L'] + df['Mg_meq_L']) / hco3_tot, np.nan)
+    df['rMg_rCa'] = np.where(df['Ca_meq_L'] > 0, df['Mg_meq_L'] / df['Ca_meq_L'], np.nan)
+
+    # Índice de Revelle (Cl / HCO3): trazador sensible de salinización e intrusión marina
+    df['Indice_Revelle'] = np.where(hco3_tot > 0, df['Cl_meq_L'] / hco3_tot, np.nan)
+    def clasif_revelle(val):
+        if pd.isna(val): return 'N/D'
+        if val < 1.0: return 'Agua Continental Dulce (Sin afectación)'
+        elif val <= 2.8: return 'Ligera Salinización'
+        elif val <= 6.6: return 'Afectación Salina Moderada'
+        else: return 'Fuerte Intrusión Marina / Salinidad Crítica'
+    df['Clasif_Revelle'] = df['Indice_Revelle'].apply(clasif_revelle)
+
+    # Dureza Total Calculada como CaCO3 (mg/L)
+    df['Dureza_Calculada_mg_L'] = (df['Ca_meq_L'] + df['Mg_meq_L']) * 50.04
+
     # Si no hay SDT medido pero hay CE, estimar SDT aprox = CE * 0.65
     if 'SDT_mg_L' not in df.columns or df['SDT_mg_L'].isna().all():
         if 'CE_uS_cm' in df.columns:
@@ -461,13 +485,12 @@ def generar_diagrama_piper(df_procesado):
     """
     Construye un Diagrama de Piper interactivo con Plotly:
       - Triángulo de Cationes (Ca - Mg - Na+K) a la izquierda.
-      - Triángulo de Aniones (Cl - SO4 - HCO3+CO3) a la derecha.
-      - Diamante Central de Facies Hidrogeoquímicas.
+      - Triángulo de Aniones (HCO3 - SO4 - Cl) a la derecha (Estándar Internacional).
+      - Diamante Central de Facies Hidrogeoquímicas con proyección geométrica rigurosa.
     """
     fig = go.Figure()
 
     # Geometría y escala de Piper
-    # Triángulo Cationes: Origen (0, 0), Base 1.0, Altura sqrt(3)/2 ~ 0.866
     h_tri = math.sqrt(3) / 2.0  # 0.866025
     x_gap = 0.5  # Espacio entre triángulos y diamante
     x_cat_orig = 0.0
@@ -482,9 +505,7 @@ def generar_diagrama_piper(df_procesado):
         hoverinfo='skip',
         showlegend=False
     ))
-    # Ticks internos triángulos (20%, 40%, 60%, 80%)
     for pct in [0.2, 0.4, 0.6, 0.8]:
-        # Cationes: líneas paralelas a la base
         y_t = pct * h_tri
         x1_t = x_cat_orig + pct * 0.5
         x2_t = x_cat_orig + 1.0 - pct * 0.5
@@ -506,11 +527,6 @@ def generar_diagrama_piper(df_procesado):
         fig.add_trace(go.Scatter(x=[x1_t, x2_t], y=[y_t, y_t], mode='lines', line=dict(color='#cbd5e1', width=0.8, dash='dot'), hoverinfo='skip', showlegend=False))
 
     # 3. Diamante Central
-    # Vértices del Diamante:
-    # Abajo: ((x_cat_orig + 1) + x_an_orig) / 2 = (1.0 + 1.5)/2 = 1.25, y = h_tri
-    # Izquierda: x_cat_orig + 0.75 = 0.75, y = h_tri * 1.5
-    # Derecha: x_an_orig + 0.25 = 1.75, y = h_tri * 1.5
-    # Arriba: 1.25, y = h_tri * 2.0
     x_diam_bot, y_diam_bot = 1.25, h_tri
     x_diam_left, y_diam_left = 0.75, h_tri * 1.5
     x_diam_right, y_diam_right = 1.75, h_tri * 1.5
@@ -530,28 +546,24 @@ def generar_diagrama_piper(df_procesado):
 
     # Rotulación de Esquinas y Facies
     anotaciones = [
-        # Cationes
-        dict(x=x_cat_orig - 0.04, y=-0.04, text="<b>Ca²⁺</b> (100%)", showarrow=False, font=dict(color="#1e293b", size=11)),
-        dict(x=x_cat_orig + 1.04, y=-0.04, text="<b>Na⁺ + K⁺</b> (100%)", showarrow=False, font=dict(color="#1e293b", size=11)),
-        dict(x=x_cat_orig + 0.5, y=h_tri + 0.05, text="<b>Mg²⁺</b> (100%)", showarrow=False, font=dict(color="#1e293b", size=11)),
-        dict(x=x_cat_orig + 0.5, y=-0.08, text="<b>CATIONES (% meq/L)</b>", showarrow=False, font=dict(color="#691C32", size=11.5)),
-        # Aniones
-        dict(x=x_an_orig - 0.04, y=-0.04, text="<b>Cl⁻</b> (100%)", showarrow=False, font=dict(color="#1e293b", size=11)),
-        dict(x=x_an_orig + 1.04, y=-0.04, text="<b>HCO₃⁻ + CO₃²⁻</b> (100%)", showarrow=False, font=dict(color="#1e293b", size=11)),
-        dict(x=x_an_orig + 0.5, y=h_tri + 0.05, text="<b>SO₄²⁻</b> (100%)", showarrow=False, font=dict(color="#1e293b", size=11)),
-        dict(x=x_an_orig + 0.5, y=-0.08, text="<b>ANIONES (% meq/L)</b>", showarrow=False, font=dict(color="#691C32", size=11.5)),
+        # Cationes (Triángulo Izquierdo)
+        dict(x=x_cat_orig - 0.04, y=-0.04, text='<b>Ca²⁺</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
+        dict(x=x_cat_orig + 1.04, y=-0.04, text='<b>Na⁺ + K⁺</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
+        dict(x=x_cat_orig + 0.5, y=h_tri + 0.05, text='<b>Mg²⁺</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
+        dict(x=x_cat_orig + 0.5, y=-0.08, text='<b>CATIONES (% meq/L)</b>', showarrow=False, font=dict(color='#691C32', size=11.5)),
+        # Aniones (Triángulo Derecho - Estándar Internacional Piper)
+        dict(x=x_an_orig - 0.04, y=-0.04, text='<b>HCO₃⁻ + CO₃²⁻</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
+        dict(x=x_an_orig + 1.04, y=-0.04, text='<b>Cl⁻</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
+        dict(x=x_an_orig + 0.5, y=h_tri + 0.05, text='<b>SO₄²⁻</b> (100%)', showarrow=False, font=dict(color='#1e293b', size=11)),
+        dict(x=x_an_orig + 0.5, y=-0.08, text='<b>ANIONES (% meq/L)</b>', showarrow=False, font=dict(color='#691C32', size=11.5)),
         # Diamante Facies
-        dict(x=x_diam_top, y=y_diam_top + 0.05, text="<b>Sulfatada / Clorurada Cálcica</b>", showarrow=False, font=dict(color="#475569", size=9.5)),
-        dict(x=x_diam_bot, y=y_diam_bot - 0.05, text="<b>Bicarbonatada Cálcica (Recarga)</b>", showarrow=False, font=dict(color="#475569", size=9.5)),
-        dict(x=x_diam_left - 0.04, y=y_diam_left, text="<b>Bicarbonatada Sódica</b>", showarrow=False, font=dict(color="#475569", size=9), textangle=-45),
-        dict(x=x_diam_right + 0.04, y=y_diam_right, text="<b>Clorurada Sódica (Salina)</b>", showarrow=False, font=dict(color="#475569", size=9), textangle=45),
+        dict(x=x_diam_bot, y=y_diam_bot - 0.05, text='<b>Bicarbonatada Cálcica / Magnésica (Recarga)</b>', showarrow=False, font=dict(color='#166534', size=10)),
+        dict(x=x_diam_top, y=y_diam_top + 0.05, text='<b>Clorurada Sódica (Salina Marina / Profunda)</b>', showarrow=False, font=dict(color='#991b1b', size=10)),
+        dict(x=x_diam_left - 0.05, y=y_diam_left, text='<b>Bicarbonatada Sódica</b>', showarrow=False, font=dict(color='#475569', size=9.5), textangle=-45),
+        dict(x=x_diam_right + 0.05, y=y_diam_right, text='<b>Sulfatada / Clorurada Cálcica</b>', showarrow=False, font=dict(color='#475569', size=9.5), textangle=45),
     ]
 
     # 4. Proyección de Muestras
-    # Coordenadas de Cationes
-    # x_c = x_cat_orig + 1.0 - (Ca + 0.5*Mg) / 100 ... standard:
-    # x_c = x_cat_orig + ( (Na+K) + 0.5*Mg ) / 100
-    # y_c = h_tri * (Mg / 100)
     colores_paleta = px.colors.qualitative.Dark24
 
     for idx, r in df_procesado.iterrows():
@@ -568,22 +580,20 @@ def generar_diagrama_piper(df_procesado):
         hco3 = float(r.get('pct_HCO3_CO3', 0.0))
 
         # Triángulo Cationes:
-        # Base: Ca a la izquierda (0%), Na+K a la derecha (100%)
-        # Vértice superior: Mg (100%)
         xc = x_cat_orig + (na_k + 0.5 * mg) / 100.0
         yc = (mg / 100.0) * h_tri
 
-        # Triángulo Aniones:
-        # Base: Cl a la izquierda (100%), HCO3 a la derecha (0%) -> Cloruro a la izq, HCO3 a la der
-        xa = x_an_orig + (hco3 + 0.5 * so4) / 100.0
+        # Triángulo Aniones (Estándar Piper):
+        # HCO3 (izq 0%), Cl (der 100%), SO4 (arriba 100%)
+        xa = x_an_orig + (cl + 0.5 * so4) / 100.0
         ya = (so4 / 100.0) * h_tri
 
         # Diamante Central:
-        # Intersección de líneas proyectadas a 60°
-        # x_diam = 0.5 * (2.0 + (xa - x_an_orig) - (xc - x_cat_orig) + x_gap)
-        # Fórmula directa normalizada:
-        xd = x_diam_bot + 0.5 * ((xa - x_an_orig) - (xc - x_cat_orig))
-        yd = y_diam_bot + ((xa - x_an_orig) + (xc - x_cat_orig)) * (h_tri / 2.0)
+        u_cat = na_k / 100.0
+        v_an = (cl + so4) / 100.0
+
+        xd = x_diam_bot + 0.5 * (v_an - u_cat)
+        yd = y_diam_bot + 0.5 * h_tri * (v_an + u_cat)
 
         hover_txt = f"""
         <b>Muestra:</b> {id_m}<br>
@@ -626,15 +636,25 @@ def generar_diagrama_piper(df_procesado):
         ))
 
     fig.update_layout(
-        title="<b>Diagrama Trilineal de Piper - Clasificación de Facies Hidrogeoquímicas</b>",
+        title='<b>Diagrama Trilineal de Piper - Clasificación de Facies Hidrogeoquímicas</b>',
         annotations=anotaciones,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.15, 2.65]),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.15, 1.95], scaleanchor="x", scaleratio=1),
-        height=650,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.15, 2.75]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, range=[-0.15, 1.95], scaleanchor='x', scaleratio=1),
+        height=660,
         plot_bgcolor='rgba(255,255,255,1)',
         paper_bgcolor='rgba(255,255,255,1)',
-        margin=dict(t=50, b=40, l=20, r=20),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.18, xanchor="center", x=0.5, font=dict(size=10.5))
+        margin=dict(t=50, b=40, l=20, r=220),
+        legend=dict(
+            orientation='v',
+            yanchor='top',
+            y=0.98,
+            xanchor='left',
+            x=1.02,
+            font=dict(size=10),
+            bgcolor='rgba(255,255,255,0.92)',
+            bordercolor='#cbd5e1',
+            borderwidth=1
+        )
     )
     return fig
 
@@ -755,7 +775,7 @@ def generar_diagrama_schoeller(df_procesado):
     Eje Y: Concentración en meq/L (escala log10).
     """
     fig = go.Figure()
-    iones_x = ["Ca²⁺", "Mg²⁺", "Na⁺+K⁺", "Cl⁻", "SO₄²⁻", "HCO₃⁻"]
+    iones_x = ["Ca²⁺", "Mg²⁺", "Na⁺+K⁺", "HCO₃⁻", "SO₄²⁻", "Cl⁻"]
     colores = px.colors.qualitative.Dark24
 
     for idx, r in df_procesado.iterrows():
@@ -766,9 +786,9 @@ def generar_diagrama_schoeller(df_procesado):
             max(0.001, float(r.get('Ca_meq_L', 0.001))),
             max(0.001, float(r.get('Mg_meq_L', 0.001))),
             max(0.001, float(r.get('Na_meq_L', 0) + r.get('K_meq_L', 0))),
-            max(0.001, float(r.get('Cl_meq_L', 0.001))),
+            max(0.001, float(r.get('HCO3_meq_L', 0.001) + r.get('CO3_meq_L', 0))),
             max(0.001, float(r.get('SO4_meq_L', 0.001))),
-            max(0.001, float(r.get('HCO3_meq_L', 0.001) + r.get('CO3_meq_L', 0)))
+            max(0.001, float(r.get('Cl_meq_L', 0.001)))
         ]
 
         hover_txt = f"<b>{id_m}</b><br>" + "<br>".join([f"{ion}: {v:.2f} meq/L" for ion, v in zip(iones_x, vals_y)])
@@ -1112,3 +1132,287 @@ def generar_plantilla_excel_hidroquimica():
         df_guia.to_excel(writer, sheet_name='Guia_Parametros_NOM127', index=False)
 
     return output.getvalue()
+
+
+# =============================================================================
+# 11. EXPORTACIÓN PERICIAL: KMZ, SHAPEFILE Y LIBRO EXCEL
+# =============================================================================
+def generar_kmz_hidrogeoquimico(df_procesado, df_auditoria=None, clave_ac="Acuifero", nom_ac="Acuífero Oficial", geojson_delim=None):
+    """
+    Genera un archivo KMZ completo para Google Earth Móvil y Desktop:
+      - LookAt automático centrado en el acuífero.
+      - Puntos 3D con clamping al terreno y simbología doble (Facies y NOM-127).
+      - Popups interactivos con tabla HTML de análisis de laboratorio.
+      - Polígono perimetral del acuífero oficial (si se suministra).
+    """
+    if df_procesado is None or df_procesado.empty:
+        return b""
+
+    df_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
+    if df_geo.empty:
+        return b""
+
+    c_lat = float(df_geo['Latitud'].mean())
+    c_lon = float(df_geo['Longitud'].mean())
+
+    lat_min, lat_max = df_geo['Latitud'].min(), df_geo['Latitud'].max()
+    lon_min, lon_max = df_geo['Longitud'].min(), df_geo['Longitud'].max()
+    diag_km = math.sqrt((lat_max - lat_min)**2 + (lon_max - lon_min)**2) * 111.0
+    alt_range = max(14000, int(diag_km * 2500))
+
+    if 'Estatus_NOM127' not in df_geo.columns and df_auditoria is not None and not df_auditoria.empty:
+        df_geo = df_geo.merge(df_auditoria[['Muestra', 'Estatus_NOM127', 'Parametros_Excedidos', 'Parametros_Alerta']], on='Muestra', how='left')
+
+    kml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        f'  <name>Auditoría Hidrogeoquímica - {html.escape(str(nom_ac))} ({clave_ac})</name>',
+        '  <open>1</open>',
+        '  <LookAt>',
+        f'    <longitude>{c_lon:.6f}</longitude>',
+        f'    <latitude>{c_lat:.6f}</latitude>',
+        '    <altitude>0</altitude>',
+        '    <heading>0</heading>',
+        '    <tilt>20</tilt>',
+        f'    <range>{alt_range}</range>',
+        '    <altitudeMode>clampToGround</altitudeMode>',
+        '  </LookAt>',
+        '  <Style id="est-conf"><IconStyle><scale>0.9</scale><color>ff34a853</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>',
+        '  <Style id="est-alert"><IconStyle><scale>0.9</scale><color>ff00a5ff</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>',
+        '  <Style id="est-noconf"><IconStyle><scale>1.0</scale><color>ff2222b0</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>',
+        '  <Style id="est-bic-ca"><IconStyle><scale>0.9</scale><color>ffd35400</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>',
+        '  <Style id="est-clor-na"><IconStyle><scale>0.9</scale><color>ff1665d9</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>',
+        '  <Style id="est-fac-gral"><IconStyle><scale>0.85</scale><color>ff7e3af2</color><Icon><href>https://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon></IconStyle></Style>'
+    ]
+
+    # Polígono oficial
+    if geojson_delim and 'geometry' in geojson_delim:
+        geom = geojson_delim['geometry']
+        kml.append('  <Folder><name>1. Límite Oficial del Acuífero</name>')
+        kml.append('    <Placemark>')
+        kml.append(f'      <name>Polígono Oficial ({clave_ac})</name>')
+        kml.append('      <Style><LineStyle><color>ff321c69</color><width>2.5</width></LineStyle><PolyStyle><color>22321c69</color><fill>1</fill><outline>1</outline></PolyStyle></Style>')
+        if geom['type'] == 'Polygon':
+            coords_str = " ".join([f"{c[0]},{c[1]},0" for c in geom['coordinates'][0]])
+            kml.append(f'      <Polygon><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>{coords_str}</coordinates></LinearRing></outerBoundaryIs></Polygon>')
+        elif geom['type'] == 'MultiPolygon':
+            kml.append('      <MultiGeometry>')
+            for poly in geom['coordinates']:
+                coords_str = " ".join([f"{c[0]},{c[1]},0" for c in poly[0]])
+                kml.append(f'        <Polygon><altitudeMode>clampToGround</altitudeMode><outerBoundaryIs><LinearRing><coordinates>{coords_str}</coordinates></LinearRing></outerBoundaryIs></Polygon>')
+            kml.append('      </MultiGeometry>')
+        kml.append('    </Placemark>')
+        kml.append('  </Folder>')
+
+    # Carpeta Facies
+    kml.append('  <Folder><name>2. Muestras por Facies Hidroquímica (Piper)</name>')
+    for _, r in df_geo.iterrows():
+        id_m = html.escape(str(r.get('Muestra', 'Muestra')))
+        facies = str(r.get('Facies_Piper', 'N/D'))
+        lat = float(r['Latitud'])
+        lon = float(r['Longitud'])
+        s_id = "#est-bic-ca" if "Bicarbonatada Cálcica" in facies else ("#est-clor-na" if "Clorurada Sódica" in facies else "#est-fac-gral")
+
+        desc = f"""<![CDATA[
+        <div style="font-family: Arial, sans-serif; font-size: 12px; color: #1e293b; max-width: 320px;">
+          <div style="background: #691C32; color: white; padding: 6px 10px; font-weight: bold; border-radius: 4px 4px 0 0;">
+            🧪 {id_m} ({r.get('Tipo_Fuente', 'Captación')})
+          </div>
+          <div style="padding: 8px; border: 1px solid #cbd5e1; border-top: none; background: #ffffff;">
+            <b>Facies Piper:</b> <span style="color:#691C32; font-weight:bold;">{facies}</span><br>
+            <b>Balance Iónico (CBE):</b> {r.get('CBE_pct', 0.0):+.2f}% ({r.get('CBE_Calidad', '')})<br>
+            <b>SDT:</b> {r.get('SDT_mg_L', 0):,.1f} mg/L | <b>CE:</b> {r.get('CE_uS_cm', 0):,.0f} µS/cm<br>
+            <b>Dureza Total:</b> {r.get('Dureza_mg_L', 0):,.1f} mg/L CaCO₃<br>
+            <hr style="border:0; border-top:1px dashed #cbd5e1; margin:6px 0;">
+            <b>Cationes (mg/L):</b> Ca={r.get('Ca_mg_L', 0):.1f}, Mg={r.get('Mg_mg_L', 0):.1f}, Na={r.get('Na_mg_L', 0):.1f}, K={r.get('K_mg_L', 0):.1f}<br>
+            <b>Aniones (mg/L):</b> HCO₃={r.get('HCO3_mg_L', 0):.1f}, Cl={r.get('Cl_mg_L', 0):.1f}, SO₄={r.get('SO4_mg_L', 0):.1f}<br>
+            <hr style="border:0; border-top:1px dashed #cbd5e1; margin:6px 0;">
+            <b>Riego:</b> RAS={r.get('RAS', 0):.2f} ({r.get('Clasif_RAS', '')}) | CSR={r.get('CSR', 0):+.2f} meq/L
+          </div>
+        </div>
+        ]]>"""
+
+        kml.append('    <Placemark>')
+        kml.append(f'      <name>{id_m} - {html.escape(facies)}</name>')
+        kml.append(f'      <styleUrl>{s_id}</styleUrl>')
+        kml.append(f'      <description>{desc}</description>')
+        kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon:.6f},{lat:.6f},0</coordinates></Point>')
+        kml.append('    </Placemark>')
+    kml.append('  </Folder>')
+
+    # Carpeta NOM-127
+    kml.append('  <Folder><name>3. Semáforo Normativo NOM-127-SSA1-2021</name>')
+    for _, r in df_geo.iterrows():
+        id_m = html.escape(str(r.get('Muestra', 'Muestra')))
+        estatus = str(r.get('Estatus_NOM127', 'N/D'))
+        exc = str(r.get('Parametros_Excedidos', 'Ninguno'))
+        lat = float(r['Latitud'])
+        lon = float(r['Longitud'])
+
+        if "No Conforme" in estatus:
+            s_id = "#est-noconf"
+            color_badge = "#991b1b"
+        elif "Alerta" in estatus:
+            s_id = "#est-alert"
+            color_badge = "#b45309"
+        else:
+            s_id = "#est-conf"
+            color_badge = "#166534"
+
+        desc = f"""<![CDATA[
+        <div style="font-family: Arial, sans-serif; font-size: 12px; color: #1e293b; max-width: 320px;">
+          <div style="background: {color_badge}; color: white; padding: 6px 10px; font-weight: bold; border-radius: 4px 4px 0 0;">
+            🚨 {id_m} - Dictamen NOM-127-SSA1-2021
+          </div>
+          <div style="padding: 8px; border: 1px solid #cbd5e1; border-top: none; background: #ffffff;">
+            <b>Dictamen Sanitario:</b> <span style="color:{color_badge}; font-weight:bold;">{estatus}</span><br>
+            <b>Parámetros Fuera de Norma:</b> <span style="color:#b91c1c;">{exc}</span><br>
+            <hr style="border:0; border-top:1px dashed #cbd5e1; margin:6px 0;">
+            <b>Arsénico:</b> {r.get('As_mg_L', 0):.4f} mg/L (LMP 0.010)<br>
+            <b>Fluoruros:</b> {r.get('F_mg_L', 0):.2f} mg/L (LMP 1.5)<br>
+            <b>Hierro:</b> {r.get('Fe_mg_L', 0):.3f} mg/L (LMP 0.300)<br>
+            <b>E. coli:</b> {r.get('E_Coli', 0)} NMP/100 mL (LMP 0)<br>
+          </div>
+        </div>
+        ]]>"""
+
+        kml.append('    <Placemark>')
+        kml.append(f'      <name>{id_m} - {html.escape(estatus)}</name>')
+        kml.append(f'      <styleUrl>{s_id}</styleUrl>')
+        kml.append(f'      <description>{desc}</description>')
+        kml.append(f'      <Point><altitudeMode>clampToGround</altitudeMode><coordinates>{lon:.6f},{lat:.6f},0</coordinates></Point>')
+        kml.append('    </Placemark>')
+    kml.append('  </Folder>')
+
+    kml.append('</Document>')
+    kml.append('</kml>')
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('doc.kml', "\n".join(kml).encode('utf-8'))
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria=None, nombre_base="muestras_hidroquimicas"):
+    """
+    Genera un archivo Shapefile (.zip) con geometría puntual y tabla de atributos completa.
+    """
+    import tempfile
+    import zipfile
+    import os
+    import shutil
+    import geopandas as gpd
+    from shapely.geometry import Point
+
+    if df_procesado is None or df_procesado.empty:
+        return b""
+
+    df_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
+    if df_geo.empty:
+        return b""
+
+    if df_auditoria is not None and not df_auditoria.empty and 'Estatus_NOM127' not in df_geo.columns:
+        df_geo = df_geo.merge(df_auditoria[['Muestra', 'Estatus_NOM127', 'Parametros_Excedidos']], on='Muestra', how='left')
+
+    rename_dbf = {
+        'Muestra': 'MUESTRA',
+        'Tipo_Fuente': 'TIPO_FUEN',
+        'Fecha': 'FECHA',
+        'Latitud': 'LATITUD',
+        'Longitud': 'LONGITUD',
+        'Elevacion': 'ELEV_MSNM',
+        'pH': 'PH',
+        'CE_uS_cm': 'CE_US_CM',
+        'SDT_mg_L': 'SDT_MG_L',
+        'Dureza_mg_L': 'DUREZA_MG',
+        'Ca_mg_L': 'CA_MG_L',
+        'Mg_mg_L': 'MG_MG_L',
+        'Na_mg_L': 'NA_MG_L',
+        'K_mg_L': 'K_MG_L',
+        'HCO3_mg_L': 'HCO3_MG_L',
+        'CO3_mg_L': 'CO3_MG_L',
+        'Cl_mg_L': 'CL_MG_L',
+        'SO4_mg_L': 'SO4_MG_L',
+        'NO3_mg_L': 'NO3_MG_L',
+        'F_mg_L': 'F_MG_L',
+        'As_mg_L': 'AS_MG_L',
+        'Pb_mg_L': 'PB_MG_L',
+        'Fe_mg_L': 'FE_MG_L',
+        'Mn_mg_L': 'MN_MG_L',
+        'Zn_mg_L': 'ZN_MG_L',
+        'E_Coli': 'E_COLI',
+        'Suma_Cationes_meq': 'SUM_CAT_ME',
+        'Suma_Aniones_meq': 'SUM_ANI_ME',
+        'CBE_pct': 'CBE_PCT',
+        'CBE_Calidad': 'CBE_CALID',
+        'Facies_Piper': 'FACIES_PIP',
+        'RAS': 'RAS_SAR',
+        'Clasif_RAS': 'CLASIF_RAS',
+        'Pct_Na_Riego': 'PCT_NA_RIE',
+        'CSR': 'CSR_MEQ_L',
+        'Clasif_CSR': 'CLASIF_CSR',
+        'Gibbs_Cationes': 'GIBBS_CAT',
+        'Gibbs_Aniones': 'GIBBS_ANI',
+        'rNa_rCl': 'R_NA_CL',
+        'rCa_rSO4': 'R_CA_SO4',
+        'Indice_Revelle': 'IND_REVELL',
+        'Clasif_Revelle': 'CLAS_REVEL',
+        'Estatus_NOM127': 'NOM127_EST',
+        'Parametros_Excedidos': 'NOM127_EXC'
+    }
+
+    cols_to_keep = [c for c in df_geo.columns if c in rename_dbf]
+    df_dbf = df_geo[cols_to_keep].copy().rename(columns=rename_dbf)
+
+    for col in df_dbf.select_dtypes(include='object').columns:
+        df_dbf[col] = df_dbf[col].astype(str).str.slice(0, 250)
+
+    geometrias = [Point(xy) for xy in zip(df_geo['Longitud'], df_geo['Latitud'])]
+    gdf = gpd.GeoDataFrame(df_dbf, geometry=geometrias, crs="EPSG:4326")
+
+    temp_dir = tempfile.mkdtemp()
+    shp_base = os.path.join(temp_dir, f"{nombre_base}")
+    shp_file = f"{shp_base}.shp"
+    gdf.to_file(shp_file, driver='ESRI Shapefile', encoding='utf-8')
+
+    buf_zip = io.BytesIO()
+    with zipfile.ZipFile(buf_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for fname in os.listdir(temp_dir):
+            full_p = os.path.join(temp_dir, fname)
+            zf.write(full_p, arcname=fname)
+
+    buf_zip.seek(0)
+    try:
+        shutil.rmtree(temp_dir)
+    except Exception:
+        pass
+    return buf_zip.getvalue()
+
+
+def generar_reporte_excel_hidrogeoquimico(df_procesado, df_auditoria=None, clave_ac="Acuifero", nom_ac="Acuífero Oficial"):
+    """
+    Genera un libro técnico Excel (.xlsx) estructurado en 5 hojas analíticas.
+    """
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as writer:
+        if df_auditoria is not None and not df_auditoria.empty:
+            df_auditoria.to_excel(writer, sheet_name='Auditoria_NOM127', index=False)
+        df_procesado.to_excel(writer, sheet_name='Resultados_Completos', index=False)
+
+        cols_meq = ['Muestra', 'Tipo_Fuente', 'Facies_Piper', 'CBE_pct', 'CBE_Calidad',
+                    'Ca_meq_L', 'Mg_meq_L', 'Na_meq_L', 'K_meq_L', 'Suma_Cationes_meq',
+                    'HCO3_meq_L', 'CO3_meq_L', 'Cl_meq_L', 'SO4_meq_L', 'NO3_meq_L', 'Suma_Aniones_meq']
+        c_meq_pres = [c for c in cols_meq if c in df_procesado.columns]
+        df_procesado[c_meq_pres].to_excel(writer, sheet_name='Concentraciones_meq_L', index=False)
+
+        cols_riego = ['Muestra', 'Tipo_Fuente', 'CE_uS_cm', 'SDT_mg_L', 'RAS', 'Clasif_RAS', 'Pct_Na_Riego', 'CSR', 'Clasif_CSR']
+        c_r_pres = [c for c in cols_riego if c in df_procesado.columns]
+        df_procesado[c_r_pres].to_excel(writer, sheet_name='Aptitud_Riego_Agricola', index=False)
+
+        cols_geoq = ['Muestra', 'Tipo_Fuente', 'rNa_rCl', 'rCa_rSO4', 'rCaMg_rHCO3', 'rMg_rCa', 'Indice_Revelle', 'Clasif_Revelle', 'Gibbs_Cationes', 'Gibbs_Aniones']
+        c_g_pres = [c for c in cols_geoq if c in df_procesado.columns]
+        df_procesado[c_g_pres].to_excel(writer, sheet_name='Geoquimica_Relaciones', index=False)
+
+    return out.getvalue()
