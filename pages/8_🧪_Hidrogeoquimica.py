@@ -20,6 +20,7 @@ Características Periciales:
 ===============================================================================
 """
 
+import time
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -34,7 +35,7 @@ import streamlit.components.v1 as components
 from shapely.geometry import Point, Polygon, mapping
 import geopandas as gpd
 
-# Componentes del Core y Estilos
+
 from utils.styles import inyectar_css_oficial, banner_institucional
 from core.data_loader import (
     cargar_catalogo, cargar_datos_maestros, normalizar_clave
@@ -515,7 +516,7 @@ with tab_piper:
     with col_p_plot:
         if "D3.js" in motor_piper:
             html_piper_d3 = generar_diagrama_piper_d3(df_procesado)
-            components.html(html_piper_d3, height=800)
+            st.iframe(html_piper_d3, height=800)
         else:
             fig_piper = generar_diagrama_piper(df_procesado)
             st.plotly_chart(fig_piper, use_container_width=True)
@@ -598,12 +599,12 @@ with tab_stiff:
         n_m = 1 if (sel_stiff_m and sel_stiff_m != "Todas las Muestras") else len(df_procesado)
         n_filas = math.ceil(n_m / 2.0)
         h_stiff = max(360, n_filas * 270 + 80)
-        components.html(html_stiff, height=h_stiff, scrolling=True)
+        st.iframe(html_stiff, height=h_stiff)
 
     with col_st2:
         st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>2. Perfil Semilogarítmico de Schöeller-Berkaloff - Vectorial D3.js / SVG</p>", unsafe_allow_html=True)
         html_schoeller = generar_diagrama_schoeller_d3(df_procesado)
-        components.html(html_schoeller, height=540)
+        st.iframe(html_schoeller, height=540)
 
 # -----------------------------------------------------------------------------
 # TAB 3: APTITUD PARA RIEGO AGRÍCOLA
@@ -621,11 +622,11 @@ with tab_riego:
     r_col1, r_col2 = st.columns(2, gap="large")
     with r_col1:
         html_wilcox = generar_diagrama_wilcox_d3(df_procesado)
-        components.html(html_wilcox, height=520)
+        st.iframe(html_wilcox, height=520)
 
     with r_col2:
         html_riverside = generar_diagrama_riverside_d3(df_procesado)
-        components.html(html_riverside, height=520)
+        st.iframe(html_riverside, height=520)
 
     with st.container(border=True):
         st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:6px;'>📋 Tabla de Diagnóstico Agronómico por Pozo / Fuente</p>", unsafe_allow_html=True)
@@ -656,7 +657,7 @@ with tab_gibbs:
     """, unsafe_allow_html=True)
 
     html_gibbs = generar_diagrama_gibbs_d3(df_procesado)
-    components.html(html_gibbs, height=540)
+    st.iframe(html_gibbs, height=540)
 
     with st.expander("🔍 Auditoría de Relaciones Iónicas Molares e Índice de Revelle", expanded=True):
         st.markdown("""
@@ -1131,7 +1132,7 @@ with tab_geo:
             </body>
             </html>
             """
-            components.html(html_maplibre, height=680)
+            st.iframe(html_maplibre, height=680)
         else:
             # Alternativa en Plotly con OpenStreetMap
             color_col = 'Facies_Piper' if "Piper" in col_criterio else 'Estatus_NOM127'
