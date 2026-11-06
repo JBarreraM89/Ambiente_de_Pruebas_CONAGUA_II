@@ -40,7 +40,7 @@ from core.data_loader import (
     cargar_catalogo, cargar_datos_maestros, normalizar_clave
 )
 from core.hidrogeoquimica import (
-    generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
+    generar_plantilla_excel_hidroquimica, generar_diagrama_piper_d3, mapear_dataframe_hidroquimico,
     procesar_muestras_hidroquimicas, auditar_norma_127,
     generar_diagrama_piper, generar_diagrama_stiff,
     generar_diagrama_schoeller, generar_diagrama_wilcox,
@@ -498,11 +498,24 @@ with tab_piper:
         </div>
     """, unsafe_allow_html=True)
 
+    col_mot1, col_mot2 = st.columns([1.8, 1.0])
+    with col_mot1:
+        motor_piper = st.radio(
+            "Motor Gráfico del Diagrama de Piper:",
+            ["⚡ Vectorial D3.js / SVG (Publicación Científica - Ultra-Rápido)", "📊 Plotly Clásico"],
+            horizontal=True,
+            key="radio_motor_piper"
+        )
+
     col_p_plot, col_p_info = st.columns([7.5, 4.5], gap="large")
 
     with col_p_plot:
-        fig_piper = generar_diagrama_piper(df_procesado)
-        st.plotly_chart(fig_piper, use_container_width=True)
+        if "D3.js" in motor_piper:
+            html_piper_d3 = generar_diagrama_piper_d3(df_procesado)
+            components.html(html_piper_d3, height=800)
+        else:
+            fig_piper = generar_diagrama_piper(df_procesado)
+            st.plotly_chart(fig_piper, use_container_width=True)
 
     with col_p_info:
         with st.container(border=True):
