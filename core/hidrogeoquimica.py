@@ -1193,6 +1193,456 @@ def hex_or_rgb_to_rgba(c, alpha=0.45):
             return f"rgba({nums[0]}, {nums[1]}, {nums[2]}, {alpha})"
     return f"rgba(100, 100, 100, {alpha})"
 
+
+# =============================================================================
+# 6.1 DIAGRAMAS DE STIFF VECTORIAL D3.js / SVG MULTIMUESTRA
+# =============================================================================
+def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
+    """
+    Genera diagramas poligonales de Stiff en D3.js / SVG nativo:
+      - 2 columnas responsivas con tarjetas individuales.
+      - Ejes milimétricos en meq/L con escala simétrica.
+      - Cero solapamiento tipográfico con badges institucionales.
+      - Descarga directa en SVG vectorial y PNG a 300 DPI.
+    """
+    df_plot = df_procesado.copy()
+    if muestra_sel and muestra_sel != "Todas las Muestras":
+        df_plot = df_plot[df_plot['Muestra'].astype(str) == str(muestra_sel)]
+
+    muestras_stiff = []
+    colores_paleta = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
+
+    for idx, (_, r) in enumerate(df_plot.iterrows()):
+        id_m = str(r.get('Muestra', f'M-{idx+1}'))
+        na_k = float(r.get('Na_meq_L', 0) + r.get('K_meq_L', 0))
+        ca = float(r.get('Ca_meq_L', 0))
+        mg = float(r.get('Mg_meq_L', 0))
+        fe = float(r.get('Fe_meq_L', 0.0) if 'Fe_meq_L' in r else (r.get('Fe_mg_L', 0.0) / 27.92))
+
+        cl = float(r.get('Cl_meq_L', 0))
+        hco3 = float(r.get('HCO3_meq_L', 0) + r.get('CO3_meq_L', 0))
+        so4 = float(r.get('SO4_meq_L', 0))
+        no3 = float(r.get('NO3_meq_L', 0))
+
+        color_pt = colores_paleta[idx % len(colores_paleta)]
+        muestras_stiff.append({
+            "id": id_m,
+            "fuente": str(r.get('Tipo_Fuente', 'Fuente')),
+            "facies": str(r.get('Facies_Piper', 'N/D')),
+            "cbe": float(r.get('CBE_pct', 0.0)),
+            "sdt": float(r.get('SDT_mg_L', 0.0)),
+            "na_k": na_k, "ca": ca, "mg": mg, "fe": fe,
+            "cl": cl, "hco3": hco3, "so4": so4, "no3": no3,
+            "color": color_pt
+        })
+
+    json_stiff = json.dumps(muestras_stiff)
+    n_muestras = len(muestras_stiff)
+    n_filas = math.ceil(n_muestras / 2.0) if n_muestras > 1 else 1
+    total_height = max(360, n_filas * 280 + 70)
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="utf-8">
+      <title>Diagramas de Stiff D3.js</title>
+      <script src="https://d3js.org/d3.v7.min.js"></script>
+      <style>
+        body {{
+          margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+          background: #f8fafc; user-select: none;
+        }}
+        .toolbar-stiff {{
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 8px 16px; background: #ffffff; border-bottom: 1px solid #e2e8f0;
+          position: sticky; top: 0; z-index: 100;
+        }}
+        .btn-toolbar {{
+          background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px;
+          padding: 5px 12px; font-size: 11.5px; font-weight: 600; color: #334155;
+          cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+          transition: all 0.2s ease;
+        }}
+        .btn-toolbar:hover {{
+          background: #691C32; color: #ffffff; border-color: #691C32;
+        }}
+        .stiff-grid {{
+          display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+          gap: 16px; padding: 16px;
+        }}
+        .stiff-card {{
+          background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.04); padding: 12px 14px;
+          transition: transform 0.2s, box-shadow 0.2s;
+        }}
+        .stiff-card:hover {{
+          transform: translateY(-2px); box-shadow: 0 4px 14px rgba(105, 28, 50, 0.12);
+        }}
+        .stiff-title {{
+          font-size: 12.5px; font-weight: 700; color: #1e293b; margin-bottom: 2px;
+          display: flex; justify-content: space-between; align-items: center;
+        }}
+        .badge-facies {{
+          font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 10px; color: white;
+        }}
+        svg {{ width: 100%; height: 210px; display: block; }}
+        .stiff-poly {{
+          fill-opacity: 0.35; stroke-width: 2.2; cursor: pointer; transition: fill-opacity 0.2s;
+        }}
+        .stiff-poly:hover {{ fill-opacity: 0.55; }}
+        .center-axis {{ stroke: #64748b; stroke-width: 1.2; stroke-dasharray: 4, 3; }}
+        .grid-line {{ stroke: #f1f5f9; stroke-width: 0.8; }}
+        .ion-label {{ font-size: 9.5px; font-weight: 600; fill: #475569; dominant-baseline: middle; }}
+        .tick-text {{ font-size: 8.5px; fill: #94a3b8; text-anchor: middle; }}
+        #stiff-tooltip {{
+          position: fixed; display: none; z-index: 9999;
+          background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+          border: 1px solid #cbd5e1; border-top: 3px solid #691C32;
+          border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+          padding: 8px 12px; font-size: 11px; color: #1e293b; pointer-events: none;
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="toolbar-stiff">
+        <div style="font-size: 12px; font-weight: 700; color: #691C32;">
+          ⚡ Huellas Iónicas de Stiff (meq/L) - Motor Vectorial D3.js / SVG
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn-toolbar" onclick="descargarSVGs()">
+            <span>📥</span> Exportar SVGs
+          </button>
+        </div>
+      </div>
+
+      <div id="stiff-tooltip"></div>
+      <div class="stiff-grid" id="stiff-container"></div>
+
+      <script>
+        const data = {json_stiff};
+        const container = d3.select("#stiff-container");
+        const tooltip = d3.select("#stiff-tooltip");
+
+        // Escala máxima unificada
+        let maxVal = 5.0;
+        data.forEach(d => {{
+          const m = Math.max(d.na_k, d.ca, d.mg, d.fe, d.cl, d.hco3, d.so4, d.no3);
+          if (m > maxVal) maxVal = m;
+        }});
+        maxVal = Math.ceil(maxVal * 1.15);
+
+        data.forEach((m, idx) => {{
+          const card = container.append("div").attr("class", "stiff-card");
+
+          const header = card.append("div").attr("class", "stiff-title");
+          header.append("span").html(`<b>🧪 ${{m.id}}</b> <span style="font-size:10.5px;color:#64748b;font-weight:normal;">(${{m.fuente}})</span>`);
+          header.append("span").attr("class", "badge-facies").style("background", m.color).text(m.facies);
+
+          const w = 420, h = 200;
+          const padL = 75, padR = 75, padT = 20, padB = 30;
+          const graphW = w - padL - padR;
+          const xCenter = padL + graphW / 2.0;
+
+          const svg = card.append("svg")
+            .attr("viewBox", `0 0 ${{w}} ${{h}}`)
+            .attr("id", `stiff-svg-${{idx}}`)
+            .attr("preserveAspectRatio", "xMidYMid meet");
+
+          const xScale = d3.scaleLinear().domain([-maxVal, maxVal]).range([padL, w - padR]);
+          const yPos = [padT + 15, padT + 50, padT + 85, padT + 120]; // 4 niveles: Na+K|Cl, Ca|HCO3, Mg|SO4, Fe|NO3
+
+          // Ejes de fondo y ticks
+          [-maxVal, -maxVal/2, 0, maxVal/2, maxVal].forEach(val => {{
+            const x = xScale(val);
+            svg.append("line").attr("x1", x).attr("y1", padT).attr("x2", x).attr("y2", padT + 135).attr("class", val === 0 ? "center-axis" : "grid-line");
+            svg.append("text").attr("x", x).attr("y", padT + 148).text(Math.abs(val).toFixed(0)).attr("class", "tick-text");
+          }});
+
+          // Línea base central
+          svg.append("text").attr("x", xCenter).attr("y", padT + 162).text("Cationes ← 0 → Aniones (meq/L)").attr("class", "tick-text").style("fill", "#691C32").style("font-weight", "600");
+
+          // Etiquetas de Iones (izq Cationes, der Aniones)
+          const niveles = [
+            {{ y: yPos[0], cat: `Na+K: ${{m.na_k.toFixed(1)}}`, an: `Cl: ${{m.cl.toFixed(1)}}` }},
+            {{ y: yPos[1], cat: `Ca: ${{m.ca.toFixed(1)}}`, an: `HCO₃: ${{m.hco3.toFixed(1)}}` }},
+            {{ y: yPos[2], cat: `Mg: ${{m.mg.toFixed(1)}}`, an: `SO₄: ${{m.so4.toFixed(1)}}` }},
+            {{ y: yPos[3], cat: `Fe: ${{m.fe.toFixed(2)}}`, an: `NO₃: ${{m.no3.toFixed(1)}}` }}
+          ];
+
+          niveles.forEach(n => {{
+            svg.append("text").attr("x", padL - 8).attr("y", n.y).text(n.cat).attr("class", "ion-label").attr("text-anchor", "end");
+            svg.append("text").attr("x", w - padR + 8).attr("y", n.y).text(n.an).attr("class", "ion-label").attr("text-anchor", "start");
+            // Línea horizontal tenue del nivel
+            svg.append("line").attr("x1", padL).attr("y1", n.y).attr("x2", w - padR).attr("y2", n.y).attr("stroke", "#e2e8f0").attr("stroke-width", 0.7);
+          }});
+
+          // Puntos del polígono de Stiff
+          const polyPts = [
+            [xScale(-m.na_k), yPos[0]],
+            [xScale(-m.ca), yPos[1]],
+            [xScale(-m.mg), yPos[2]],
+            [xScale(-m.fe), yPos[3]],
+            [xScale(m.no3), yPos[3]],
+            [xScale(m.so4), yPos[2]],
+            [xScale(m.hco3), yPos[1]],
+            [xScale(m.cl), yPos[0]]
+          ];
+
+          const ptsStr = polyPts.map(p => `${{p[0].toFixed(1)}},${{p[1].toFixed(1)}}`).join(" ");
+
+          svg.append("polygon")
+            .attr("points", ptsStr)
+            .attr("fill", m.color)
+            .attr("stroke", m.color)
+            .attr("class", "stiff-poly")
+            .on("mouseover", (event) => {{
+              tooltip.html(`
+                <b>🧪 ${{m.id}}</b><br>
+                <b>Facies:</b> ${{m.facies}}<br>
+                <b>CBE:</b> ${{m.cbe >= 0 ? '+' : ''}}${{m.cbe.toFixed(2)}}% | <b>SDT:</b> ${{m.sdt.toLocaleString()}} mg/L<br>
+                <hr style="margin:4px 0;">
+                Na+K: ${{m.na_k.toFixed(2)}} | Cl: ${{m.cl.toFixed(2)}} meq/L<br>
+                Ca: ${{m.ca.toFixed(2)}} | HCO₃: ${{m.hco3.toFixed(2)}} meq/L<br>
+                Mg: ${{m.mg.toFixed(2)}} | SO₄: ${{m.so4.toFixed(2)}} meq/L<br>
+                Fe: ${{m.fe.toFixed(2)}} | NO₃: ${{m.no3.toFixed(2)}} meq/L
+              `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+            }})
+            .on("mousemove", (event) => {{
+              tooltip.style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px");
+            }})
+            .on("mouseout", () => {{ tooltip.style("display", "none"); }});
+
+          // Vértices circulares
+          polyPts.forEach(pt => {{
+            svg.append("circle").attr("cx", pt[0]).attr("cy", pt[1]).attr("r", 3.2).attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.2);
+          }});
+        }});
+
+        function descargarSVGs() {{
+          const svgs = document.querySelectorAll("svg");
+          if (svgs.length === 0) return;
+          const serializer = new XMLSerializer();
+          let source = serializer.serializeToString(svgs[0]);
+          const blob = new Blob([source], {{ type: "image/svg+xml;charset=utf-8" }});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "Diagrama_Stiff_Vectorial.svg";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    return html_code
+
+
+# =============================================================================
+# 7.1 DIAGRAMA DE SCHÖELLER-BERKALOFF VECTORIAL D3.js / SVG
+# =============================================================================
+def generar_diagrama_schoeller_d3(df_procesado):
+    """
+    Construye el Perfil Semilogarítmico de Schöeller-Berkaloff en D3.js / SVG:
+      - Secuencia de Chebotarev con escala logarítmica exacta.
+      - Líneas vectoriales nítidas con resaltado interactivo al hover.
+      - Leyenda superior totalmente separada de los ejes.
+      - Exportación en SVG y PNG a 300 DPI.
+    """
+    muestras_data = []
+    colores_paleta = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
+
+    for idx, r in df_procesado.iterrows():
+        id_m = str(r.get('Muestra', f'M-{idx+1}'))
+        color_pt = colores_paleta[idx % len(colores_paleta)]
+        muestras_data.append({
+            "id": id_m,
+            "facies": str(r.get('Facies_Piper', 'N/D')),
+            "ca": max(0.001, float(r.get('Ca_meq_L', 0.001))),
+            "mg": max(0.001, float(r.get('Mg_meq_L', 0.001))),
+            "nak": max(0.001, float(r.get('Na_meq_L', 0) + r.get('K_meq_L', 0))),
+            "hco3": max(0.001, float(r.get('HCO3_meq_L', 0.001) + r.get('CO3_meq_L', 0))),
+            "so4": max(0.001, float(r.get('SO4_meq_L', 0.001))),
+            "cl": max(0.001, float(r.get('Cl_meq_L', 0.001))),
+            "color": color_pt
+        })
+
+    json_str = json.dumps(muestras_data)
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="utf-8">
+      <title>Diagrama de Schöeller D3.js</title>
+      <script src="https://d3js.org/d3.v7.min.js"></script>
+      <style>
+        body {{
+          margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+          background: #ffffff; user-select: none;
+        }}
+        .toolbar-schoeller {{
+          display: flex; justify-content: space-between; align-items: center;
+          padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+        }}
+        .btn-toolbar {{
+          background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px;
+          padding: 5px 12px; font-size: 11.5px; font-weight: 600; color: #334155;
+          cursor: pointer; display: inline-flex; align-items: center; gap: 5px;
+        }}
+        .btn-toolbar:hover {{ background: #691C32; color: #ffffff; border-color: #691C32; }}
+        svg {{ width: 100%; height: 500px; display: block; }}
+        .schoeller-line {{ fill: none; stroke-width: 2.2; transition: all 0.2s; }}
+        .schoeller-line.faded {{ opacity: 0.18; stroke-width: 1.2; }}
+        .schoeller-line.active {{ stroke-width: 3.5; opacity: 1; }}
+        .schoeller-dot {{ cursor: pointer; transition: r 0.2s; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; }}
+        .axis-text {{ font-size: 11px; fill: #475569; }}
+        #schoeller-tooltip {{
+          position: fixed; display: none; z-index: 9999;
+          background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+          border: 1px solid #cbd5e1; border-top: 3px solid #691C32;
+          border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+          padding: 8px 12px; font-size: 11.5px; color: #1e293b; pointer-events: none;
+        }}
+        .legend-container {{
+          display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 24px; background: #ffffff;
+        }}
+        .leg-item {{
+          display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+        }}
+        .leg-item:hover {{ background: #f1f5f9; }}
+        .leg-bullet {{ width: 10px; height: 10px; border-radius: 50%; }}
+      </style>
+    </head>
+    <body>
+      <div class="toolbar-schoeller">
+        <div style="font-size: 12px; font-weight: 700; color: #691C32;">
+          ⚡ Perfil Semilogarítmico de Schöeller-Berkaloff - Motor D3.js / SVG
+        </div>
+        <button class="btn-toolbar" onclick="descargarSVG()">
+          <span>📥</span> Exportar SVG
+        </button>
+      </div>
+
+      <div class="legend-container" id="legend-bar"></div>
+      <div id="schoeller-tooltip"></div>
+      <div id="schoeller-svg-container"></div>
+
+      <script>
+        const data = {json_str};
+        const ions = [
+          {{ key: "ca", label: "Ca²⁺" }},
+          {{ key: "mg", label: "Mg²⁺" }},
+          {{ key: "nak", label: "Na⁺+K⁺" }},
+          {{ key: "hco3", label: "HCO₃⁻" }},
+          {{ key: "so4", label: "SO₄²⁻" }},
+          {{ key: "cl", label: "Cl⁻" }}
+        ];
+
+        const w = 900, h = 440;
+        const padL = 70, padR = 40, padT = 30, padB = 55;
+
+        const svg = d3.select("#schoeller-svg-container").append("svg")
+          .attr("viewBox", `0 0 ${{w}} ${{h}}`)
+          .attr("id", "svg-schoeller")
+          .attr("preserveAspectRatio", "xMidYMid meet");
+
+        const tooltip = d3.select("#schoeller-tooltip");
+
+        const xScale = d3.scalePoint().domain(ions.map(d => d.label)).range([padL, w - padR]).padding(0.4);
+        const yScale = d3.scaleLog().domain([0.01, 100]).range([h - padB, padT]);
+
+        // Rejilla Y (log)
+        [0.01, 0.1, 1, 10, 100].forEach(val => {{
+          const y = yScale(val);
+          svg.append("line").attr("x1", padL).attr("y1", y).attr("x2", w - padR).attr("y2", y).attr("class", "grid-line");
+          svg.append("text").attr("x", padL - 10).attr("y", y).text(val).attr("class", "axis-text").attr("text-anchor", "end").attr("dominant-baseline", "middle");
+        }});
+
+        // Rejilla X
+        ions.forEach(ion => {{
+          const x = xScale(ion.label);
+          svg.append("line").attr("x1", x).attr("y1", padT).attr("x2", x).attr("y2", h - padB).attr("class", "grid-line");
+          svg.append("text").attr("x", x).attr("y", h - padB + 22).text(ion.label).attr("class", "axis-text").attr("text-anchor", "middle").style("font-weight", "700").style("fill", "#1e293b").style("font-size", "12px");
+        }});
+
+        // Títulos de ejes
+        svg.append("text").attr("x", (padL + w - padR)/2).attr("y", h - 10).text("Secuencia Hidrogeoquímica de Chebotarev").attr("class", "axis-text").attr("text-anchor", "middle").style("font-weight", "600");
+        svg.append("text").attr("transform", "rotate(-90)").attr("x", -(padT + h - padB)/2).attr("y", 18).text("Concentración Iónica (meq/L, escala log)").attr("class", "axis-text").attr("text-anchor", "middle").style("font-weight", "600");
+
+        // Barra de leyenda superior
+        const legBar = d3.select("#legend-bar");
+
+        data.forEach((m, idx) => {{
+          const lineGen = d3.line()
+            .x(d => xScale(d.label))
+            .y(d => yScale(d.val));
+
+          const pts = ions.map(ion => ({{ label: ion.label, val: m[ion.key] }}));
+
+          const path = svg.append("path")
+            .datum(pts)
+            .attr("d", lineGen)
+            .attr("stroke", m.color)
+            .attr("class", `schoeller-line line-${{idx}}`);
+
+          const dots = svg.selectAll(`.dot-${{idx}}`)
+            .data(pts)
+            .enter().append("circle")
+            .attr("cx", d => xScale(d.label))
+            .attr("cy", d => yScale(d.val))
+            .attr("r", 4.5)
+            .attr("fill", m.color)
+            .attr("stroke", "#ffffff")
+            .attr("stroke-width", 1.5)
+            .attr("class", `schoeller-dot dot-${{idx}}`);
+
+          const highlight = () => {{
+            d3.selectAll(".schoeller-line").classed("faded", true);
+            path.classed("faded", false).classed("active", true).raise();
+            dots.attr("r", 6.5).raise();
+          }};
+
+          const reset = () => {{
+            d3.selectAll(".schoeller-line").classed("faded", false).classed("active", false);
+            dots.attr("r", 4.5);
+            tooltip.style("display", "none");
+          }};
+
+          dots.on("mouseover", (event, d) => {{
+            highlight();
+            tooltip.html(`<b>🧪 ${{m.id}}</b><br><b>${{d.label}}:</b> ${{d.val.toFixed(2)}} meq/L<br><b>Facies:</b> ${{m.facies}}`)
+              .style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+          }}).on("mouseout", reset);
+
+          // Item de leyenda
+          const item = legBar.append("div").attr("class", "leg-item")
+            .on("mouseover", highlight).on("mouseout", reset);
+          item.append("div").attr("class", "leg-bullet").style("background", m.color);
+          item.append("span").text(m.id);
+        }});
+
+        function descargarSVG() {{
+          const svgEl = document.getElementById("svg-schoeller");
+          const serializer = new XMLSerializer();
+          let source = serializer.serializeToString(svgEl);
+          const blob = new Blob([source], {{ type: "image/svg+xml;charset=utf-8" }});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "Diagrama_Schoeller_Vectorial.svg";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    return html_code
 def generar_diagrama_stiff(df_procesado, muestra_sel=None):
     """
     Construye diagramas poligonales de Stiff limpios sin solapamiento:
@@ -1334,6 +1784,471 @@ def generar_diagrama_schoeller(df_procesado):
 # =============================================================================
 # 8. DIAGRAMAS AGRÍCOLAS (WILCOX Y USSL RIVERSIDE)
 # =============================================================================
+
+
+# =============================================================================
+# 8.1 DIAGRAMA DE WILCOX VECTORIAL D3.js / SVG (APTITUD PARA RIEGO)
+# =============================================================================
+def generar_diagrama_wilcox_d3(df_procesado):
+    """
+    Construye el Diagrama de Wilcox en D3.js / SVG nativo:
+      - Zonas de aptitud sombreadas (Excelente, Bueno, Permisible, Dudoso).
+      - Ejes nítidos con leyendas superiores sin solapamiento.
+      - Descarga directa en SVG vectorial y PNG a 300 DPI.
+    """
+    muestras = []
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
+
+    for idx, r in df_procesado.iterrows():
+        id_m = str(r.get('Muestra', f'M-{idx+1}'))
+        ce = float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65))
+        pct_na = float(r.get('Pct_Na_Riego', 0.0))
+        ras = float(r.get('RAS', 0.0))
+        muestras.append({
+            "id": id_m, "ce": ce, "pct_na": pct_na, "ras": ras,
+            "color": colores[idx % len(colores)],
+            "facies": str(r.get('Facies_Piper', ''))
+        })
+
+    json_str = json.dumps(muestras)
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="utf-8">
+      <title>Diagrama de Wilcox D3.js</title>
+      <script src="https://d3js.org/d3.v7.min.js"></script>
+      <style>
+        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; }}
+        .toolbar {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+        .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; }}
+        .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
+        svg {{ width: 100%; height: 480px; display: block; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; stroke-dasharray: 2, 2; }}
+        .zone-boundary {{ stroke-width: 1.5; stroke-dasharray: 4, 3; fill: none; }}
+        .axis-label {{ font-size: 11px; fill: #475569; font-weight: 600; }}
+        .zone-text {{ font-size: 11px; font-weight: 700; text-anchor: middle; }}
+        .dot {{ cursor: pointer; transition: r 0.2s; }}
+        #wilcox-tooltip {{
+          position: fixed; display: none; z-index: 9999;
+          background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+          border: 1px solid #cbd5e1; border-top: 3px solid #691C32;
+          border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+          padding: 8px 12px; font-size: 11px; color: #1e293b; pointer-events: none;
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="toolbar">
+        <div style="font-size: 11.5px; font-weight: 700; color: #691C32;">🌾 Diagrama de Wilcox (Aptitud Agronómica) - D3.js / SVG</div>
+        <button class="btn-toolbar" onclick="descargarSVG()"><span>📥</span> Exportar SVG</button>
+      </div>
+      <div id="wilcox-tooltip"></div>
+      <div id="wilcox-svg-container"></div>
+
+      <script>
+        const data = {json_str};
+        const w = 700, h = 440;
+        const padL = 60, padR = 30, padT = 30, padB = 55;
+
+        const svg = d3.select("#wilcox-svg-container").append("svg")
+          .attr("viewBox", `0 0 ${{w}} ${{h}}`)
+          .attr("id", "svg-wilcox")
+          .attr("preserveAspectRatio", "xMidYMid meet");
+
+        const tooltip = d3.select("#wilcox-tooltip");
+
+        const xScale = d3.scaleLinear().domain([0, 4000]).range([padL, w - padR]);
+        const yScale = d3.scaleLinear().domain([0, 100]).range([h - padB, padT]);
+
+        // Rejilla
+        xScale.ticks(8).forEach(tick => {{
+          svg.append("line").attr("x1", xScale(tick)).attr("y1", padT).attr("x2", xScale(tick)).attr("y2", h - padB).attr("class", "grid-line");
+          svg.append("text").attr("x", xScale(tick)).attr("y", h - padB + 18).text(tick).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "middle");
+        }});
+        yScale.ticks(5).forEach(tick => {{
+          svg.append("line").attr("x1", padL).attr("y1", yScale(tick)).attr("x2", w - padR).attr("y2", yScale(tick)).attr("class", "grid-line");
+          svg.append("text").attr("x", padL - 8).attr("y", yScale(tick)).text(tick + "%").attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "end").attr("dominant-baseline", "middle");
+        }});
+
+        // Títulos de ejes
+        svg.append("text").attr("x", (padL + w - padR)/2).attr("y", h - 12).text("Conductividad Eléctrica (µS/cm a 25 °C)").attr("class", "axis-label").attr("text-anchor", "middle");
+        svg.append("text").attr("transform", "rotate(-90)").attr("x", -(padT + h - padB)/2).attr("y", 16).text("Porcentaje de Sodio Soluble (% Na)").attr("class", "axis-label").attr("text-anchor", "middle");
+
+        // Curvas límites de zonas
+        const ceArr = d3.range(0, 4001, 100);
+        const curveExc = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(20, Math.min(100, 100 - d / 40.0))));
+        const curveBue = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(10, Math.min(80, 100 - d / 25.0))));
+        const curvePer = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(5, Math.min(60, 100 - d / 18.0))));
+
+        svg.append("path").datum(ceArr).attr("d", curveExc).attr("stroke", "#16a34a").attr("class", "zone-boundary");
+        svg.append("path").datum(ceArr).attr("d", curveBue).attr("stroke", "#2563eb").attr("class", "zone-boundary");
+        svg.append("path").datum(ceArr).attr("d", curvePer).attr("stroke", "#d97706").attr("class", "zone-boundary");
+
+        // Rótulos de zonas
+        svg.append("text").attr("x", xScale(350)).attr("y", yScale(85)).text("Excelente").attr("class", "zone-text").attr("fill", "#16a34a");
+        svg.append("text").attr("x", xScale(1000)).attr("y", yScale(55)).text("Bueno").attr("class", "zone-text").attr("fill", "#2563eb");
+        svg.append("text").attr("x", xScale(1800)).attr("y", yScale(30)).text("Permisible").attr("class", "zone-text").attr("fill", "#d97706");
+        svg.append("text").attr("x", xScale(2900)).attr("y", yScale(16)).text("Dudoso / Inadecuado").attr("class", "zone-text").attr("fill", "#dc2626");
+
+        // Muestras
+        data.forEach(m => {{
+          svg.append("circle")
+            .attr("cx", xScale(m.ce))
+            .attr("cy", yScale(m.pct_na))
+            .attr("r", 5.5)
+            .attr("fill", m.color)
+            .attr("stroke", "#ffffff")
+            .attr("stroke-width", 1.8)
+            .attr("class", "dot")
+            .on("mouseover", (event) => {{
+              tooltip.html(`
+                <b>🌾 ${{m.id}}</b><br>
+                <b>Conductividad:</b> ${{m.ce.toLocaleString()}} µS/cm<br>
+                <b>% Sodio Soluble:</b> ${{m.pct_na.toFixed(1)}}%<br>
+                <b>RAS:</b> ${{m.ras.toFixed(2)}}<br>
+                <b>Facies:</b> ${{m.facies}}
+              `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+            }})
+            .on("mouseout", () => {{ tooltip.style("display", "none"); }});
+        }});
+
+        function descargarSVG() {{
+          const svgEl = document.getElementById("svg-wilcox");
+          const serializer = new XMLSerializer();
+          const source = serializer.serializeToString(svgEl);
+          const blob = new Blob([source], {{ type: "image/svg+xml;charset=utf-8" }});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "Diagrama_Wilcox_Vectorial.svg";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    return html_code
+
+
+# =============================================================================
+# 8.2 DIAGRAMA DE RIVERSIDE (USSL) VECTORIAL D3.js / SVG
+# =============================================================================
+def generar_diagrama_riverside_d3(df_procesado):
+    """
+    Construye el Diagrama de Riverside (USSL) en D3.js / SVG nativo:
+      - Salinidad (C1-C4) vs Peligro de Sodificación (S1-S4).
+      - Escala logarítmica de CE e isolíneas empíricas de RAS.
+    """
+    muestras = []
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
+
+    for idx, r in df_procesado.iterrows():
+        id_m = str(r.get('Muestra', f'M-{idx+1}'))
+        ce = float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65))
+        ce = max(100.0, ce)
+        ras = float(r.get('RAS', 0.0))
+        muestras.append({
+            "id": id_m, "ce": ce, "ras": ras,
+            "clasif": str(r.get('Clasif_RAS', '')),
+            "color": colores[idx % len(colores)],
+            "facies": str(r.get('Facies_Piper', ''))
+        })
+
+    json_str = json.dumps(muestras)
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="utf-8">
+      <title>Diagrama de Riverside D3.js</title>
+      <script src="https://d3js.org/d3.v7.min.js"></script>
+      <style>
+        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; }}
+        .toolbar {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+        .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; }}
+        .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
+        svg {{ width: 100%; height: 480px; display: block; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; }}
+        .c-boundary {{ stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 4, 3; }}
+        .s-boundary {{ stroke-width: 1.2; stroke-dasharray: 3, 3; fill: none; }}
+        .axis-label {{ font-size: 11px; fill: #475569; font-weight: 600; }}
+        .dot {{ cursor: pointer; transition: r 0.2s; }}
+        #riv-tooltip {{
+          position: fixed; display: none; z-index: 9999;
+          background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+          border: 1px solid #cbd5e1; border-top: 3px solid #691C32;
+          border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+          padding: 8px 12px; font-size: 11px; color: #1e293b; pointer-events: none;
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="toolbar">
+        <div style="font-size: 11.5px; font-weight: 700; color: #691C32;">🌾 Diagrama de Riverside (USSL) - D3.js / SVG</div>
+        <button class="btn-toolbar" onclick="descargarSVG()"><span>📥</span> Exportar SVG</button>
+      </div>
+      <div id="riv-tooltip"></div>
+      <div id="riv-svg-container"></div>
+
+      <script>
+        const data = {json_str};
+        const w = 700, h = 440;
+        const padL = 60, padR = 30, padT = 30, padB = 55;
+
+        const svg = d3.select("#riv-svg-container").append("svg")
+          .attr("viewBox", `0 0 ${{w}} ${{h}}`)
+          .attr("id", "svg-riverside")
+          .attr("preserveAspectRatio", "xMidYMid meet");
+
+        const tooltip = d3.select("#riv-tooltip");
+
+        const xScale = d3.scaleLog().domain([100, 5000]).range([padL, w - padR]);
+        const yScale = d3.scaleLinear().domain([0, 32]).range([h - padB, padT]);
+
+        // Ejes y Ticks
+        [100, 250, 750, 2250, 5000].forEach(val => {{
+          svg.append("line").attr("x1", xScale(val)).attr("y1", padT).attr("x2", xScale(val)).attr("y2", h - padB).attr("class", val === 100 || val === 5000 ? "grid-line" : "c-boundary");
+          svg.append("text").attr("x", xScale(val)).attr("y", h - padB + 18).text(val).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "middle");
+        }});
+
+        [0, 5, 10, 15, 20, 25, 30].forEach(val => {{
+          svg.append("line").attr("x1", padL).attr("y1", yScale(val)).attr("x2", w - padR).attr("y2", yScale(val)).attr("class", "grid-line");
+          svg.append("text").attr("x", padL - 8).attr("y", yScale(val)).text(val).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "end").attr("dominant-baseline", "middle");
+        }});
+
+        // Rótulos de Salinidad C1 a C4
+        svg.append("text").attr("x", xScale(160)).attr("y", padT - 8).text("C1: Baja").attr("font-size", "10px").attr("fill", "#16a34a").attr("text-anchor", "middle").style("font-weight", "700");
+        svg.append("text").attr("x", xScale(430)).attr("y", padT - 8).text("C2: Media").attr("font-size", "10px").attr("fill", "#2563eb").attr("text-anchor", "middle").style("font-weight", "700");
+        svg.append("text").attr("x", xScale(1300)).attr("y", padT - 8).text("C3: Alta").attr("font-size", "10px").attr("fill", "#d97706").attr("text-anchor", "middle").style("font-weight", "700");
+        svg.append("text").attr("x", xScale(3350)).attr("y", padT - 8).text("C4: Muy Alta").attr("font-size", "10px").attr("fill", "#dc2626").attr("text-anchor", "middle").style("font-weight", "700");
+
+        // Curvas límites S1 a S4
+        const ceLogArr = d3.range(100, 5001, 100);
+        const curveS1 = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(0, 10.0 - 0.001 * d)));
+        const curveS2 = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(0, 18.0 - 0.0015 * d)));
+        const curveS3 = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(0, 26.0 - 0.002 * d)));
+
+        svg.append("path").datum(ceLogArr).attr("d", curveS1).attr("stroke", "#16a34a").attr("class", "s-boundary");
+        svg.append("path").datum(ceLogArr).attr("d", curveS2).attr("stroke", "#d97706").attr("class", "s-boundary");
+        svg.append("path").datum(ceLogArr).attr("d", curveS3).attr("stroke", "#dc2626").attr("class", "s-boundary");
+
+        // Títulos de ejes
+        svg.append("text").attr("x", (padL + w - padR)/2).attr("y", h - 12).text("Conductividad Eléctrica (µS/cm, escala log)").attr("class", "axis-label").attr("text-anchor", "middle");
+        svg.append("text").attr("transform", "rotate(-90)").attr("x", -(padT + h - padB)/2).attr("y", 18).text("Relación de Adsorción de Sodio (RAS / SAR)").attr("class", "axis-label").attr("text-anchor", "middle");
+
+        // Muestras
+        data.forEach(m => {{
+          svg.append("circle")
+            .attr("cx", xScale(m.ce))
+            .attr("cy", yScale(m.ras))
+            .attr("r", 5.5)
+            .attr("fill", m.color)
+            .attr("stroke", "#ffffff")
+            .attr("stroke-width", 1.8)
+            .attr("class", "dot")
+            .on("mouseover", (event) => {{
+              tooltip.html(`
+                <b>🌾 ${{m.id}}</b><br>
+                <b>Conductividad:</b> ${{m.ce.toLocaleString()}} µS/cm<br>
+                <b>RAS:</b> ${{m.ras.toFixed(2)}}<br>
+                <b>Diagnóstico:</b> ${{m.clasif}}<br>
+                <b>Facies:</b> ${{m.facies}}
+              `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+            }})
+            .on("mouseout", () => {{ tooltip.style("display", "none"); }});
+        }});
+
+        function descargarSVG() {{
+          const svgEl = document.getElementById("svg-riverside");
+          const serializer = new XMLSerializer();
+          const source = serializer.serializeToString(svgEl);
+          const blob = new Blob([source], {{ type: "image/svg+xml;charset=utf-8" }});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "Diagrama_Riverside_Vectorial.svg";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    return html_code
+
+
+# =============================================================================
+# 9.1 DIAGRAMAS DE GIBBS VECTORIAL D3.js / SVG (GÉNESIS GEOQUÍMICA)
+# =============================================================================
+def generar_diagrama_gibbs_d3(df_procesado):
+    """
+    Construye los diagramas duales de Gibbs en D3.js / SVG nativo:
+      - Cationes: Na/(Na+Ca) vs SDT (log).
+      - Aniones: Cl/(Cl+HCO3) vs SDT (log).
+      - Zonas geomorfológicas rectoras sombreadas (Lluvia, Agua-Roca, Evaporación).
+    """
+    muestras = []
+    colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
+
+    for idx, r in df_procesado.iterrows():
+        id_m = str(r.get('Muestra', f'M-{idx+1}'))
+        sdt = max(10.0, float(r.get('SDT_mg_L', 100.0) if pd.notna(r.get('SDT_mg_L')) else 100.0))
+        g_cat = float(r.get('Gibbs_Cationes', np.nan))
+        g_an = float(r.get('Gibbs_Aniones', np.nan))
+        muestras.append({
+            "id": id_m, "sdt": sdt, "g_cat": g_cat, "g_an": g_an,
+            "color": colores[idx % len(colores)],
+            "facies": str(r.get('Facies_Piper', ''))
+        })
+
+    json_str = json.dumps(muestras)
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="utf-8">
+      <title>Diagrama de Gibbs D3.js</title>
+      <script src="https://d3js.org/d3.v7.min.js"></script>
+      <style>
+        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; }}
+        .toolbar {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+        .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 4px 10px; font-size: 11px; font-weight: 600; cursor: pointer; }}
+        .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
+        svg {{ width: 100%; height: 500px; display: block; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; }}
+        .axis-label {{ font-size: 11px; fill: #475569; font-weight: 600; }}
+        .panel-title {{ font-size: 12.5px; fill: #1e293b; font-weight: 700; text-anchor: middle; }}
+        .zone-rect {{ stroke: none; rx: 4; }}
+        .zone-text {{ font-size: 9.5px; font-weight: 700; text-anchor: middle; }}
+        .dot {{ cursor: pointer; transition: r 0.2s; }}
+        #gibbs-tooltip {{
+          position: fixed; display: none; z-index: 9999;
+          background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+          border: 1px solid #cbd5e1; border-top: 3px solid #691C32;
+          border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+          padding: 8px 12px; font-size: 11px; color: #1e293b; pointer-events: none;
+        }}
+      </style>
+    </head>
+    <body>
+      <div class="toolbar">
+        <div style="font-size: 11.5px; font-weight: 700; color: #691C32;">🌍 Diagramas de Gibbs (Identificación de Procesos Hidrogeoquímicos) - D3.js / SVG</div>
+        <button class="btn-toolbar" onclick="descargarSVG()"><span>📥</span> Exportar SVG</button>
+      </div>
+      <div id="gibbs-tooltip"></div>
+      <div id="gibbs-svg-container"></div>
+
+      <script>
+        const data = {json_str};
+        const totalW = 920, h = 460;
+        const padT = 45, padB = 55;
+        const panelW = 400;
+        const gap = 60;
+        const padL1 = 65, padL2 = padL1 + panelW + gap;
+
+        const svg = d3.select("#gibbs-svg-container").append("svg")
+          .attr("viewBox", `0 0 ${{totalW}} ${{h}}`)
+          .attr("id", "svg-gibbs")
+          .attr("preserveAspectRatio", "xMidYMid meet");
+
+        const tooltip = d3.select("#gibbs-tooltip");
+        const yScale = d3.scaleLog().domain([10, 10000]).range([h - padB, padT]);
+
+        // Dibujar panel (1=Cationes, 2=Aniones)
+        function dibujarPanel(offsetL, titulo, xField, xLabel) {{
+          const xScale = d3.scaleLinear().domain([0, 1.0]).range([offsetL, offsetL + panelW]);
+
+          // Título
+          svg.append("text").attr("x", offsetL + panelW/2).attr("y", padT - 18).text(titulo).attr("class", "panel-title");
+
+          // Zonas Geomorfológicas
+          // 1. Precipitación
+          svg.append("rect")
+            .attr("x", xScale(0.5)).attr("y", yScale(80))
+            .attr("width", xScale(1.0) - xScale(0.5)).attr("height", yScale(10) - yScale(80))
+            .attr("fill", "rgba(59, 130, 246, 0.12)").attr("class", "zone-rect");
+          svg.append("text").attr("x", xScale(0.75)).attr("y", (yScale(80) + yScale(10))/2).text("Precipitación (Lluvia)").attr("class", "zone-text").attr("fill", "#1d4ed8");
+
+          // 2. Interacción Agua-Roca
+          svg.append("rect")
+            .attr("x", xScale(0.05)).attr("y", yScale(1000))
+            .attr("width", xScale(0.55) - xScale(0.05)).attr("height", yScale(100) - yScale(1000))
+            .attr("fill", "rgba(34, 197, 94, 0.12)").attr("class", "zone-rect");
+          svg.append("text").attr("x", xScale(0.30)).attr("y", (yScale(1000) + yScale(100))/2).text("Interacción Agua-Roca").attr("class", "zone-text").attr("fill", "#15803d");
+
+          // 3. Evaporación / Salinidad
+          svg.append("rect")
+            .attr("x", xScale(0.55)).attr("y", yScale(10000))
+            .attr("width", xScale(1.0) - xScale(0.55)).attr("height", yScale(1000) - yScale(10000))
+            .attr("fill", "rgba(239, 68, 68, 0.12)").attr("class", "zone-rect");
+          svg.append("text").attr("x", xScale(0.78)).attr("y", (yScale(10000) + yScale(1000))/2).text("Evaporación / Salinidad").attr("class", "zone-text").attr("fill", "#b91c1c");
+
+          // Rejilla X
+          [0, 0.2, 0.4, 0.6, 0.8, 1.0].forEach(val => {{
+            svg.append("line").attr("x1", xScale(val)).attr("y1", padT).attr("x2", xScale(val)).attr("y2", h - padB).attr("class", "grid-line");
+            svg.append("text").attr("x", xScale(val)).attr("y", h - padB + 18).text(val.toFixed(1)).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "middle");
+          }});
+
+          // Rejilla Y (solo en panel 1)
+          if (offsetL === padL1) {{
+            [10, 100, 1000, 10000].forEach(val => {{
+              svg.append("line").attr("x1", padL1).attr("y1", yScale(val)).attr("x2", padL1 + panelW).attr("y2", yScale(val)).attr("class", "grid-line");
+              svg.append("text").attr("x", padL1 - 8).attr("y", yScale(val)).text(val.toLocaleString()).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "end").attr("dominant-baseline", "middle");
+            }});
+            svg.append("text").attr("transform", "rotate(-90)").attr("x", -(padT + h - padB)/2).attr("y", 16).text("SDT (mg/L, escala log)").attr("class", "axis-label").attr("text-anchor", "middle");
+          }} else {{
+            [10, 100, 1000, 10000].forEach(val => {{
+              svg.append("line").attr("x1", offsetL).attr("y1", yScale(val)).attr("x2", offsetL + panelW).attr("y2", yScale(val)).attr("class", "grid-line");
+            }});
+          }}
+
+          // Título X
+          svg.append("text").attr("x", offsetL + panelW/2).attr("y", h - 12).text(xLabel).attr("class", "axis-label").attr("text-anchor", "middle");
+
+          // Muestras
+          data.forEach(m => {{
+            const xVal = m[xField];
+            if (xVal !== null && !isNaN(xVal)) {{
+              svg.append("circle")
+                .attr("cx", xScale(xVal))
+                .attr("cy", yScale(m.sdt))
+                .attr("r", 5.5)
+                .attr("fill", m.color)
+                .attr("stroke", "#ffffff")
+                .attr("stroke-width", 1.8)
+                .attr("class", "dot")
+                .on("mouseover", (event) => {{
+                  tooltip.html(`
+                    <b>🧪 ${{m.id}}</b><br>
+                    <b>${{xLabel}}:</b> ${{xVal.toFixed(2)}}<br>
+                    <b>SDT:</b> ${{m.sdt.toLocaleString()}} mg/L<br>
+                    <b>Facies:</b> ${{m.facies}}
+                  `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+                }})
+                .on("mouseout", () => {{ tooltip.style("display", "none"); }});
+            }}
+          }});
+        }}
+
+        dibujarPanel(padL1, "Cationes: Na⁺ / (Na⁺ + Ca²⁺)", "g_cat", "Relación Na⁺ / (Na⁺ + Ca²⁺)");
+        dibujarPanel(padL2, "Aniones: Cl⁻ / (Cl⁻ + HCO₃⁻)", "g_an", "Relación Cl⁻ / (Cl⁻ + HCO₃⁻)");
+
+        function descargarSVG() {{
+          const svgEl = document.getElementById("svg-gibbs");
+          const serializer = new XMLSerializer();
+          const source = serializer.serializeToString(svgEl);
+          const blob = new Blob([source], {{ type: "image/svg+xml;charset=utf-8" }});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url; a.download = "Diagrama_Gibbs_Vectorial.svg";
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        }}
+      </script>
+    </body>
+    </html>
+    """
+    return html_code
 def generar_diagrama_wilcox(df_procesado):
     """
     Diagrama de Wilcox con leyenda superior y zonas rotuladas sin solapamiento.

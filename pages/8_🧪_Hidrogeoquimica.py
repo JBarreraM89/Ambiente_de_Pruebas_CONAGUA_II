@@ -40,11 +40,14 @@ from core.data_loader import (
     cargar_catalogo, cargar_datos_maestros, normalizar_clave
 )
 from core.hidrogeoquimica import (
-    generar_plantilla_excel_hidroquimica, generar_diagrama_piper_d3, mapear_dataframe_hidroquimico,
+    generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
     procesar_muestras_hidroquimicas, auditar_norma_127,
-    generar_diagrama_piper, generar_diagrama_stiff,
-    generar_diagrama_schoeller, generar_diagrama_wilcox,
-    generar_diagrama_riverside, generar_diagrama_gibbs,
+    generar_diagrama_piper_d3, generar_diagrama_piper,
+    generar_diagrama_stiff_d3, generar_diagrama_stiff,
+    generar_diagrama_schoeller_d3, generar_diagrama_schoeller,
+    generar_diagrama_wilcox_d3, generar_diagrama_wilcox,
+    generar_diagrama_riverside_d3, generar_diagrama_riverside,
+    generar_diagrama_gibbs_d3, generar_diagrama_gibbs,
     generar_kmz_hidrogeoquimico, generar_shapefile_hidrogeoquimico,
     generar_reporte_excel_hidrogeoquimico,
     LIMITES_NOM_127_2021
@@ -590,14 +593,17 @@ with tab_stiff:
 
     col_st1, col_st2 = st.columns([1.25, 1.0], gap="large")
     with col_st1:
-        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>1. Polígonos de Huella Iónica de Stiff (meq/L)</p>", unsafe_allow_html=True)
-        fig_stiff = generar_diagrama_stiff(df_procesado, sel_stiff_m)
-        st.plotly_chart(fig_stiff, use_container_width=True)
+        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>1. Polígonos de Huella Iónica de Stiff (meq/L) - Vectorial D3.js / SVG</p>", unsafe_allow_html=True)
+        html_stiff = generar_diagrama_stiff_d3(df_procesado, sel_stiff_m)
+        n_m = 1 if (sel_stiff_m and sel_stiff_m != "Todas las Muestras") else len(df_procesado)
+        n_filas = math.ceil(n_m / 2.0)
+        h_stiff = max(360, n_filas * 270 + 80)
+        components.html(html_stiff, height=h_stiff, scrolling=True)
 
     with col_st2:
-        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>2. Perfil Semilogarítmico de Schöeller-Berkaloff</p>", unsafe_allow_html=True)
-        fig_schoeller = generar_diagrama_schoeller(df_procesado)
-        st.plotly_chart(fig_schoeller, use_container_width=True)
+        st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:4px;'>2. Perfil Semilogarítmico de Schöeller-Berkaloff - Vectorial D3.js / SVG</p>", unsafe_allow_html=True)
+        html_schoeller = generar_diagrama_schoeller_d3(df_procesado)
+        components.html(html_schoeller, height=540)
 
 # -----------------------------------------------------------------------------
 # TAB 3: APTITUD PARA RIEGO AGRÍCOLA
@@ -614,12 +620,12 @@ with tab_riego:
 
     r_col1, r_col2 = st.columns(2, gap="large")
     with r_col1:
-        fig_wilcox = generar_diagrama_wilcox(df_procesado)
-        st.plotly_chart(fig_wilcox, use_container_width=True)
+        html_wilcox = generar_diagrama_wilcox_d3(df_procesado)
+        components.html(html_wilcox, height=520)
 
     with r_col2:
-        fig_riverside = generar_diagrama_riverside(df_procesado)
-        st.plotly_chart(fig_riverside, use_container_width=True)
+        html_riverside = generar_diagrama_riverside_d3(df_procesado)
+        components.html(html_riverside, height=520)
 
     with st.container(border=True):
         st.markdown("<p style='font-weight:700; color:#691C32; font-size:12.5px; margin-bottom:6px;'>📋 Tabla de Diagnóstico Agronómico por Pozo / Fuente</p>", unsafe_allow_html=True)
@@ -649,8 +655,8 @@ with tab_gibbs:
         </div>
     """, unsafe_allow_html=True)
 
-    fig_gibbs = generar_diagrama_gibbs(df_procesado)
-    st.plotly_chart(fig_gibbs, use_container_width=True)
+    html_gibbs = generar_diagrama_gibbs_d3(df_procesado)
+    components.html(html_gibbs, height=540)
 
     with st.expander("🔍 Auditoría de Relaciones Iónicas Molares e Índice de Revelle", expanded=True):
         st.markdown("""
