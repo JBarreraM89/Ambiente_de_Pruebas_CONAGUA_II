@@ -42,17 +42,19 @@ from core.data_loader import (
 )
 import importlib
 import core.hidrogeoquimica
+import core.hidro_d3_diagrams
+importlib.reload(core.hidro_d3_diagrams)
 importlib.reload(core.hidrogeoquimica)
 from core.hidrogeoquimica import (
     parse_concatenated_csv,
     generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
     procesar_muestras_hidroquimicas, auditar_norma_127,
-    generar_diagrama_piper_d3, generar_diagrama_piper,
-    generar_diagrama_stiff_d3, generar_diagrama_stiff,
-    generar_diagrama_schoeller_d3, generar_diagrama_schoeller,
-    generar_diagrama_wilcox_d3, generar_diagrama_wilcox,
-    generar_diagrama_riverside_d3, generar_diagrama_riverside,
-    generar_diagrama_gibbs_d3, generar_diagrama_gibbs,
+    generar_diagrama_piper_d3,
+    generar_diagrama_stiff_d3,
+    generar_diagrama_schoeller_d3,
+    generar_diagrama_wilcox_d3,
+    generar_diagrama_riverside_d3,
+    generar_diagrama_gibbs_d3,
     generar_kmz_hidrogeoquimico, generar_shapefile_hidrogeoquimico,
     generar_reporte_excel_hidrogeoquimico,
     LIMITES_NOM_127_2021
@@ -308,8 +310,8 @@ def obtener_muestras_demostracion():
 # 📌 3. GESTIÓN DE SESIÓN Y CARGA DE DATOS
 # =============================================================================
 if "df_hidro_raw" not in st.session_state:
-    st.session_state["df_hidro_raw"] = obtener_muestras_demostracion()
-    st.session_state["es_demostracion_hidro"] = True
+    st.session_state["df_hidro_raw"] = pd.DataFrame()
+    st.session_state["es_demostracion_hidro"] = False
 
 # =============================================================================
 # 🎛️ 4. BARRA LATERAL (INGESTA Y CONTROL DE MUESTRAS)
@@ -388,23 +390,14 @@ with st.sidebar:
     )
     st.markdown(btn_plantilla, unsafe_allow_html=True)
 
-    col_btn1, col_btn2, col_btn3 = st.columns([1, 1.3, 0.7])
+    col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
-        if st.button("🧪 Demo Memo", key="btn_demo_hidro", use_container_width=True, help="Carga el set de demostración de Jalacingo y Altotonga."):
+        if st.button("🧪 Cargar Demo", key="btn_demo_hidro", use_container_width=True, help="Carga datos de demostración oficiales"):
             st.session_state["df_hidro_raw"] = obtener_muestras_demostracion()
             st.session_state["es_demostracion_hidro"] = True
             st.rerun()
     with col_btn2:
-        if st.button("⚡ Set 105 Pozos", key="btn_105_hidro", use_container_width=True, help="Carga el conjunto completo de 105 pozos con meq/L e iones mayores."):
-            try:
-                df_105 = pd.read_csv("data/muestras_hidroquimicas_105_pozos.csv")
-                st.session_state["df_hidro_raw"] = df_105
-                st.session_state["es_demostracion_hidro"] = False
-                st.rerun()
-            except Exception as e_105:
-                st.error(f"Error al cargar set de 105 pozos: {e_105}")
-    with col_btn3:
-        if st.button("🗑️ Limpiar", key="btn_clean_hidro", use_container_width=True):
+        if st.button("🗑️ Limpiar", key="btn_clean_hidro", use_container_width=True, help="Limpia los datos cargados"):
             st.session_state["df_hidro_raw"] = pd.DataFrame()
             st.session_state["es_demostracion_hidro"] = False
             st.rerun()
@@ -464,7 +457,53 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 if df_procesado.empty:
-    st.info("ℹ️ No hay muestras cargadas actualmente. Carga un archivo Excel o CSV en el panel lateral o presiona 'Muestras Demo'.")
+    st.markdown("""
+    <div style="background: linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%); border: 2px dashed #691C32; border-radius: 12px; padding: 42px 30px; text-align: center; margin: 20px 0;">
+        <div style="font-size: 44px; margin-bottom: 10px;">📊</div>
+        <h3 style="color: #691C32; margin: 0 0 8px 0; font-size: 21px; font-weight: 700;">
+            Cargar Archivo de Laboratorio Hidroquímico
+        </h3>
+        <p style="color: #475569; font-size: 13.5px; max-width: 650px; margin: 0 auto 18px auto; line-height: 1.55;">
+            Arrastra o selecciona tu archivo en formato <b>Excel (.xlsx / .xls)</b> o <b>CSV</b> con tus análisis fisicoquímicos (iones mayores Ca²⁺, Mg²⁺, Na⁺, K⁺, HCO₃⁻, Cl⁻, SO₄²⁻, etc.).
+            El sistema mapeará automáticamente los nombres de columnas de laboratorio y generará todos los diagramas hidrogeoquímicos vectoriales interactivos.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col_up_main, _ = st.columns([3, 1])
+    with col_up_main:
+        archivo_main = st.file_uploader(
+            "Seleccionar o arrastrar archivo Excel (.xlsx / .xls) o CSV:",
+            type=['xlsx', 'xls', 'csv'],
+            key="file_uploader_main_hero"
+        )
+        if archivo_main is not None:
+            try:
+                if archivo_main.name.lower().endswith(('.xlsx', '.xls')):
+                    df_cargado_hero = pd.read_excel(archivo_main)
+                else:
+                    try:
+                        raw_c = archivo_main.getvalue().decode('utf-8-sig')
+                    except Exception:
+                        raw_c = archivo_main.getvalue().decode('latin1', errors='replace')
+                    df_cargado_hero = parse_concatenated_csv(raw_c)
+                if not df_cargado_hero.empty:
+                    st.session_state["df_hidro_raw"] = df_cargado_hero
+                    st.session_state["es_demostracion_hidro"] = False
+                    st.success(f"✅ Archivo cargado con éxito ({len(df_cargado_hero)} muestras identificadas).")
+                    st.rerun()
+            except Exception as e_hero:
+                st.error(f"Error al leer archivo: {e_hero}")
+
+    col_h_b1, col_h_b2 = st.columns([1, 1])
+    with col_h_b1:
+        st.markdown(btn_plantilla, unsafe_allow_html=True)
+    with col_h_b2:
+        if st.button("🧪 Cargar Muestras Demo Oficiales", key="btn_hero_demo", use_container_width=True):
+            st.session_state["df_hidro_raw"] = obtener_muestras_demostracion()
+            st.session_state["es_demostracion_hidro"] = True
+            st.rerun()
+
     st.stop()
 
 # Tarjetas KPI Superiores
@@ -516,24 +555,11 @@ with tab_piper:
         </div>
     """, unsafe_allow_html=True)
 
-    col_mot1, col_mot2 = st.columns([1.8, 1.0])
-    with col_mot1:
-        motor_piper = st.radio(
-            "Motor Gráfico del Diagrama de Piper:",
-            ["⚡ Vectorial D3.js / SVG (Publicación Científica - Ultra-Rápido)", "📊 Plotly Clásico"],
-            horizontal=True,
-            key="radio_motor_piper"
-        )
-
     col_p_plot, col_p_info = st.columns([7.5, 4.5], gap="large")
 
     with col_p_plot:
-        if "D3.js" in motor_piper:
-            html_piper_d3 = generar_diagrama_piper_d3(df_procesado)
-            st.iframe(html_piper_d3, height=800)
-        else:
-            fig_piper = generar_diagrama_piper(df_procesado)
-            st.plotly_chart(fig_piper, use_container_width=True)
+        html_piper_d3 = generar_diagrama_piper_d3(df_procesado)
+        st.iframe(html_piper_d3, height=820)
 
     with col_p_info:
         with st.container(border=True):
@@ -771,401 +797,372 @@ with tab_geo:
         if 'Estatus_NOM127' not in df_geo_pts.columns and not df_auditoria.empty:
             df_geo_pts = df_geo_pts.merge(df_auditoria[['Muestra', 'Estatus_NOM127', 'Parametros_Excedidos']], on='Muestra', how='left')
 
-        col_ctrl1, col_ctrl2 = st.columns([1.5, 1.0])
-        with col_ctrl1:
-            col_criterio = st.radio(
-                "Simbología de Fuentes en Geovisor:",
-                ["Por Facies Hidrogeoquímica (Piper)", "Por Cumplimiento NOM-127-SSA1-2021"],
-                horizontal=True,
-                key="radio_geo_criterio"
-            )
-        with col_ctrl2:
-            motor_mapa = st.radio(
-                "Motor Cartográfico:",
-                ["🗺️ Geovisor SIG MapLibre GL", "📊 Vista Rápida Plotly (OSM)"],
-                horizontal=True,
-                key="radio_motor_mapa"
-            )
+        col_criterio = st.radio(
+            "Simbología de Fuentes en Geovisor:",
+            ["Por Facies Hidrogeoquímica (Piper)", "Por Cumplimiento NOM-127-SSA1-2021"],
+            horizontal=True,
+            key="radio_geo_criterio"
+        )
 
         c_lat_cen = float(df_geo_pts['Latitud'].mean())
         c_lon_cen = float(df_geo_pts['Longitud'].mean())
 
-        if motor_mapa == "🗺️ Geovisor SIG MapLibre GL":
-            # Construir GeoJSON de puntos
-            features_pts = []
-            for _, r in df_geo_pts.iterrows():
-                id_m = html.escape(str(r.get('Muestra', 'Muestra')))
-                facies = str(r.get('Facies_Piper', 'N/D'))
-                estatus = str(r.get('Estatus_NOM127', 'Conforme'))
-                exc = str(r.get('Parametros_Excedidos', 'Ninguno'))
-                
-                # Asignar color según criterio
-                if "Piper" in col_criterio:
-                    if "Bicarbonatada Cálcica" in facies: color_pt = "#0284c7"
-                    elif "Bicarbonatada Sódica" in facies: color_pt = "#7c3aed"
-                    elif "Clorurada Sódica" in facies: color_pt = "#dc2626"
-                    elif "Sulfatada" in facies: color_pt = "#d97706"
-                    else: color_pt = "#059669"
-                else:
-                    if "No Conforme" in estatus: color_pt = "#dc2626"
-                    elif "Alerta" in estatus: color_pt = "#d97706"
-                    else: color_pt = "#16a34a"
-
-                popup_html = f"""
-                <div style='font-family: Arial, sans-serif; font-size: 11.5px; line-height: 1.4; color: #1e293b; min-width: 250px;'>
-                  <div style='background: #691C32; color: white; padding: 6px 10px; font-weight: bold; border-radius: 4px 4px 0 0;'>
-                    🧪 {id_m} ({r.get('Tipo_Fuente', 'Fuente')})
-                  </div>
-                  <div style='padding: 8px 10px; border: 1px solid #cbd5e1; border-top: none; background: white; border-radius: 0 0 4px 4px;'>
-                    <b>Facies:</b> {facies}<br>
-                    <b>Dictamen NOM-127:</b> {estatus}<br>
-                    <b>SDT:</b> {r.get('SDT_mg_L', 0):,.1f} mg/L | <b>CE:</b> {r.get('CE_uS_cm', 0):,.0f} µS/cm<br>
-                    <b>Balance CBE:</b> {r.get('CBE_pct', 0):+.2f}%<br>
-                    <b>Índice Revelle:</b> {r.get('Indice_Revelle', 0):.2f}<br>
-                    <hr style='margin: 4px 0;'>
-                    <b>Fuera de Norma:</b> <span style='color:#dc2626; font-weight:600;'>{exc}</span>
-                  </div>
-                </div>
-                """
-
-                features_pts.append({
-                    "type": "Feature",
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [float(r['Longitud']), float(r['Latitud'])]
-                    },
-                    "properties": {
-                        "id": id_m,
-                        "color": color_pt,
-                        "facies": facies,
-                        "estatus": estatus,
-                        "popup": popup_html
-                    }
-                })
-
-            geojson_muestras_str = json.dumps({"type": "FeatureCollection", "features": features_pts})
-            geojson_poly_str = json.dumps(poligono_geojson) if poligono_geojson else "null"
-            bounds_poly_str = json.dumps(bounds_poligono) if bounds_poligono else "null"
-
-            # Construir items de la leyenda según criterio
+        # Construir GeoJSON de puntos
+        features_pts = []
+        for _, r in df_geo_pts.iterrows():
+            id_m = html.escape(str(r.get('Muestra', 'Muestra')))
+            facies = str(r.get('Facies_Piper', 'N/D'))
+            estatus = str(r.get('Estatus_NOM127', 'Conforme'))
+            exc = str(r.get('Parametros_Excedidos', 'Ninguno'))
+            
+            # Asignar color según criterio
             if "Piper" in col_criterio:
-                legend_items = """
-                <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Facies Hidrogeoquímicas:</div>
-                <div><i style='background:#0284c7;'></i> Bicarbonatada Cálcica</div>
-                <div><i style='background:#7c3aed;'></i> Bicarbonatada Sódica</div>
-                <div><i style='background:#dc2626;'></i> Clorurada Sódica</div>
-                <div><i style='background:#d97706;'></i> Sulfatada Cálcica</div>
-                <div><i style='background:#059669;'></i> Mixta / Otra</div>
-                """
+                if "Bicarbonatada Cálcica" in facies: color_pt = "#0284c7"
+                elif "Bicarbonatada Sódica" in facies: color_pt = "#7c3aed"
+                elif "Clorurada Sódica" in facies: color_pt = "#dc2626"
+                elif "Sulfatada" in facies: color_pt = "#d97706"
+                else: color_pt = "#059669"
             else:
-                legend_items = """
-                <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Dictamen NOM-127:</div>
-                <div><i style='background:#16a34a;'></i> Conforme (Apta)</div>
-                <div><i style='background:#d97706;'></i> Alerta Preventiva</div>
-                <div><i style='background:#dc2626;'></i> No Conforme (Rebasa)</div>
-                """
+                if "No Conforme" in estatus: color_pt = "#dc2626"
+                elif "Alerta" in estatus: color_pt = "#d97706"
+                else: color_pt = "#16a34a"
 
-            html_maplibre = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="utf-8" />
-                <title>Geovisor Hidrogeoquímico</title>
-                <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
-                <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-                <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-                <style>
-                    body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
-                    #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; border-radius: 8px; }}
+            popup_html = f"""
+            <div style='font-family: Arial, sans-serif; font-size: 11.5px; line-height: 1.4; color: #1e293b; min-width: 250px;'>
+              <div style='background: #691C32; color: white; padding: 6px 10px; font-weight: bold; border-radius: 4px 4px 0 0;'>
+                🧪 {id_m} ({r.get('Tipo_Fuente', 'Fuente')})
+              </div>
+              <div style='padding: 8px 10px; border: 1px solid #cbd5e1; border-top: none; background: white; border-radius: 0 0 4px 4px;'>
+                <b>Facies:</b> {facies}<br>
+                <b>Dictamen NOM-127:</b> {estatus}<br>
+                <b>SDT:</b> {r.get('SDT_mg_L', 0):,.1f} mg/L | <b>CE:</b> {r.get('CE_uS_cm', 0):,.0f} µS/cm<br>
+                <b>Balance CBE:</b> {r.get('CBE_pct', 0):+.2f}%<br>
+                <b>Índice Revelle:</b> {r.get('Indice_Revelle', 0):.2f}<br>
+                <hr style='margin: 4px 0;'>
+                <b>Fuera de Norma:</b> <span style='color:#dc2626; font-weight:600;'>{exc}</span>
+              </div>
+            </div>
+            """
 
-                    .btn-open-dock-circle {{
-                        position: absolute; top: 12px; left: 12px; z-index: 1000;
-                        background: #691C32; color: #ffffff; width: 38px; height: 38px;
-                        border-radius: 50%; border: 1.5px solid #DDC9A3;
-                        box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
-                        font-size: 19px; font-weight: bold; cursor: pointer;
-                        display: flex; align-items: center; justify-content: center;
-                        transition: all 0.2s ease;
-                    }}
-                    .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.08); }}
+            features_pts.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(r['Longitud']), float(r['Latitud'])]
+                },
+                "properties": {
+                    "id": id_m,
+                    "color": color_pt,
+                    "facies": facies,
+                    "estatus": estatus,
+                    "popup": popup_html
+                }
+            })
 
-                    .workbench-dock {{
-                        position: absolute; top: 12px; left: 12px; z-index: 2000;
-                        background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
-                        width: 285px; border-radius: 10px; overflow: hidden;
-                        box-shadow: 0 6px 22px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
-                        border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
-                        font-size: 11.5px; color: #1E293B;
-                    }}
-                    .dock-header {{ 
-                        background: #691C32; color: white; padding: 9px 12px; 
-                        font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
-                    }}
-                    .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
-                    .dock-section {{ margin-bottom: 12px; }}
-                    .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
-                    .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+        geojson_muestras_str = json.dumps({"type": "FeatureCollection", "features": features_pts})
+        geojson_poly_str = json.dumps(poligono_geojson) if poligono_geojson else "null"
+        bounds_poly_str = json.dumps(bounds_poligono) if bounds_poligono else "null"
 
-                    .hud-elevation {{
-                        position: absolute; top: 12px; right: 55px; z-index: 1000;
-                        background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
-                        color: #1e293b; padding: 7px 14px; border-radius: 8px;
-                        border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-                        font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
-                    }}
-                    .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+        # Construir items de la leyenda según criterio
+        if "Piper" in col_criterio:
+            legend_items = """
+            <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Facies Hidrogeoquímicas:</div>
+            <div><i style='background:#0284c7;'></i> Bicarbonatada Cálcica</div>
+            <div><i style='background:#7c3aed;'></i> Bicarbonatada Sódica</div>
+            <div><i style='background:#dc2626;'></i> Clorurada Sódica</div>
+            <div><i style='background:#d97706;'></i> Sulfatada Cálcica</div>
+            <div><i style='background:#059669;'></i> Mixta / Otra</div>
+            """
+        else:
+            legend_items = """
+            <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Dictamen NOM-127:</div>
+            <div><i style='background:#16a34a;'></i> Conforme (Apta)</div>
+            <div><i style='background:#d97706;'></i> Alerta Preventiva</div>
+            <div><i style='background:#dc2626;'></i> No Conforme (Rebasa)</div>
+            """
 
-                    .legend-panel {{
-                        position: absolute; bottom: 25px; left: 12px; z-index: 1000;
-                        background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
-                        padding: 10px 14px; border-radius: 8px;
-                        box-shadow: 0 4px 14px rgba(0,0,0,0.16); font-size: 11px; line-height: 1.6;
-                        border: 1px solid #E2E8F0; border-top: 3px solid #691C32; max-width: 280px;
-                    }}
-                    .legend-panel i {{
-                        width: 12px; height: 12px; display: inline-block; border-radius: 50%;
-                        margin-right: 6px; vertical-align: middle; border: 1px solid #fff;
-                        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-                    }}
+        html_maplibre = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8" />
+            <title>Geovisor Hidrogeoquímico</title>
+            <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+            <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+            <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+            <style>
+                body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
+                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; border-radius: 8px; }}
 
-                    .gis-badge-popup .maplibregl-popup-content {{
-                        background: rgba(255, 255, 255, 0.96) !important;
-                        backdrop-filter: blur(8px) !important;
-                        border: 1px solid #CBD5E1 !important;
-                        border-top: 3px solid #691C32 !important;
-                        border-radius: 6px !important;
-                        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.20) !important;
-                        padding: 0 !important;
-                        overflow: hidden !important;
-                    }}
-                    .gis-badge-popup .maplibregl-popup-tip {{
-                        border-top-color: rgba(255, 255, 255, 0.96) !important;
-                    }}
-                    .gis-badge-popup .maplibregl-popup-close-button {{
-                        color: #ffffff !important;
-                        font-size: 15px !important;
-                        top: 4px !important; right: 6px !important;
-                        padding: 2px 4px !important;
-                    }}
-                </style>
-            </head>
-            <body>
-                <div id="map"></div>
+                .btn-open-dock-circle {{
+                    position: absolute; top: 12px; left: 12px; z-index: 1000;
+                    background: #691C32; color: #ffffff; width: 38px; height: 38px;
+                    border-radius: 50%; border: 1.5px solid #DDC9A3;
+                    box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+                    font-size: 19px; font-weight: bold; cursor: pointer;
+                    display: flex; align-items: center; justify-content: center;
+                    transition: all 0.2s ease;
+                }}
+                .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.08); }}
 
-                <div class="btn-open-dock-circle" onclick="toggleDock()" title="Capas y Controles SIG">☰</div>
+                .workbench-dock {{
+                    position: absolute; top: 12px; left: 12px; z-index: 2000;
+                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                    width: 285px; border-radius: 10px; overflow: hidden;
+                    box-shadow: 0 6px 22px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
+                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+                    font-size: 11.5px; color: #1E293B;
+                }}
+                .dock-header {{ 
+                    background: #691C32; color: white; padding: 9px 12px; 
+                    font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
+                }}
+                .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
+                .dock-section {{ margin-bottom: 12px; }}
+                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
+                .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
 
-                <div id="dock-panel" class="workbench-dock" style="display: none;">
-                    <div class="dock-header">
-                        <span>🛠️ Capas y Control SIG</span>
-                        <span style="cursor:pointer; font-size:16px;" onclick="toggleDock()">✕</span>
+                .hud-elevation {{
+                    position: absolute; top: 12px; right: 55px; z-index: 1000;
+                    background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
+                    color: #1e293b; padding: 7px 14px; border-radius: 8px;
+                    border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                    font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
+                }}
+                .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+
+                .legend-panel {{
+                    position: absolute; bottom: 25px; left: 12px; z-index: 1000;
+                    background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
+                    padding: 10px 14px; border-radius: 8px;
+                    box-shadow: 0 4px 14px rgba(0,0,0,0.16); font-size: 11px; line-height: 1.6;
+                    border: 1px solid #E2E8F0; border-top: 3px solid #691C32; max-width: 280px;
+                }}
+                .legend-panel i {{
+                    width: 12px; height: 12px; display: inline-block; border-radius: 50%;
+                    margin-right: 6px; vertical-align: middle; border: 1px solid #fff;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+                }}
+
+                .gis-badge-popup .maplibregl-popup-content {{
+                    background: rgba(255, 255, 255, 0.96) !important;
+                    backdrop-filter: blur(8px) !important;
+                    border: 1px solid #CBD5E1 !important;
+                    border-top: 3px solid #691C32 !important;
+                    border-radius: 6px !important;
+                    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.20) !important;
+                    padding: 0 !important;
+                    overflow: hidden !important;
+                }}
+                .gis-badge-popup .maplibregl-popup-tip {{
+                    border-top-color: rgba(255, 255, 255, 0.96) !important;
+                }}
+                .gis-badge-popup .maplibregl-popup-close-button {{
+                    color: #ffffff !important;
+                    font-size: 15px !important;
+                    top: 4px !important; right: 6px !important;
+                    padding: 2px 4px !important;
+                }}
+            </style>
+        </head>
+        <body>
+            <div id="map"></div>
+
+            <div class="btn-open-dock-circle" onclick="toggleDock()" title="Capas y Controles SIG">☰</div>
+
+            <div id="dock-panel" class="workbench-dock" style="display: none;">
+                <div class="dock-header">
+                    <span>🛠️ Capas y Control SIG</span>
+                    <span style="cursor:pointer; font-size:16px;" onclick="toggleDock()">✕</span>
+                </div>
+                <div class="dock-body">
+                    <div class="dock-section">
+                        <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">1. Capa Base Cartográfica</div>
+                        <label><input type="radio" name="basemap" value="esri" checked onchange="cambiarBasemap(this.value)"> 🛰️ Satelital ESRI Maxar</label>
+                        <label><input type="radio" name="basemap" value="carto" onchange="cambiarBasemap(this.value)"> 🗺️ Carto Claro (Vector)</label>
+                        <label><input type="radio" name="basemap" value="topo" onchange="cambiarBasemap(this.value)"> ⛰️ Topografía y Relieve</label>
+                        <label><input type="radio" name="basemap" value="osm" onchange="cambiarBasemap(this.value)"> 🌐 OpenStreetMap</label>
                     </div>
-                    <div class="dock-body">
-                        <div class="dock-section">
-                            <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">1. Capa Base Cartográfica</div>
-                            <label><input type="radio" name="basemap" value="esri" checked onchange="cambiarBasemap(this.value)"> 🛰️ Satelital ESRI Maxar</label>
-                            <label><input type="radio" name="basemap" value="carto" onchange="cambiarBasemap(this.value)"> 🗺️ Carto Claro (Vector)</label>
-                            <label><input type="radio" name="basemap" value="topo" onchange="cambiarBasemap(this.value)"> ⛰️ Topografía y Relieve</label>
-                            <label><input type="radio" name="basemap" value="osm" onchange="cambiarBasemap(this.value)"> 🌐 OpenStreetMap</label>
-                        </div>
-                        <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
-                            <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">2. Capas Temáticas</div>
-                            <label><input type="checkbox" id="chk-poligono" checked onchange="toggleLayer('layer-poligono-fill'); toggleLayer('layer-poligono-line');"> 🏛️ Polígono Oficial Acuífero</label>
-                            <label><input type="checkbox" id="chk-muestras" checked onchange="toggleLayer('layer-muestras-circle');"> 🧪 Fuentes de Monitoreo</label>
-                        </div>
-                        <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
-                            <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px; text-transform:uppercase;">3. Opacidad del Polígono</div>
-                            <input type="range" class="slider-ctrl" min="0" max="100" value="20" oninput="ajustarOpacidadPoligono(this.value)">
-                        </div>
+                    <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
+                        <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">2. Capas Temáticas</div>
+                        <label><input type="checkbox" id="chk-poligono" checked onchange="toggleLayer('layer-poligono-fill'); toggleLayer('layer-poligono-line');"> 🏛️ Polígono Oficial Acuífero</label>
+                        <label><input type="checkbox" id="chk-muestras" checked onchange="toggleLayer('layer-muestras-circle');"> 🧪 Fuentes de Monitoreo</label>
+                    </div>
+                    <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
+                        <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px; text-transform:uppercase;">3. Opacidad del Polígono</div>
+                        <input type="range" class="slider-ctrl" min="0" max="100" value="20" oninput="ajustarOpacidadPoligono(this.value)">
                     </div>
                 </div>
+            </div>
 
-                <div class="hud-elevation" id="hud-coord">
-                    <div><b>Lon:</b> <span id="hud-lon">{c_lon_cen:.4f}</span>°</div>
-                    <div><b>Lat:</b> <span id="hud-lat">{c_lat_cen:.4f}</span>°</div>
-                    <div><b>Zoom:</b> <span id="hud-zoom">11.0</span></div>
-                </div>
+            <div class="hud-elevation" id="hud-coord">
+                <div><b>Lon:</b> <span id="hud-lon">{c_lon_cen:.4f}</span>°</div>
+                <div><b>Lat:</b> <span id="hud-lat">{c_lat_cen:.4f}</span>°</div>
+                <div><b>Zoom:</b> <span id="hud-zoom">11.0</span></div>
+            </div>
 
-                <div class="legend-panel">
-                    {legend_items}
-                </div>
+            <div class="legend-panel">
+                {legend_items}
+            </div>
 
-                <script>
-                    const basemaps = {{
-                        esri: {{
-                            version: 8,
-                            sources: {{
-                                'esri-sat': {{
-                                    type: 'raster',
-                                    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'],
-                                    tileSize: 256,
-                                    attribution: '© Esri, Maxar, Earthstar Geographics'
-                                }}
-                            }},
-                            layers: [{{ id: 'base-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 19 }}]
-                        }},
-                        carto: {{
-                            version: 8,
-                            sources: {{
-                                'carto-light': {{
-                                    type: 'raster',
-                                    tiles: ['https://basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}.png'],
-                                    tileSize: 256,
-                                    attribution: '© CARTO, OpenStreetMap'
-                                }}
-                            }},
-                            layers: [{{ id: 'base-layer', type: 'raster', source: 'carto-light', minzoom: 0, maxzoom: 19 }}]
-                        }},
-                        topo: {{
-                            version: 8,
-                            sources: {{
-                                'topo-layer': {{
-                                    type: 'raster',
-                                    tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'],
-                                    tileSize: 256,
-                                    attribution: '© Esri Topo'
-                                }}
-                            }},
-                            layers: [{{ id: 'base-layer', type: 'raster', source: 'topo-layer', minzoom: 0, maxzoom: 19 }}]
-                        }},
-                        osm: {{
-                            version: 8,
-                            sources: {{
-                                'osm-tiles': {{
-                                    type: 'raster',
-                                    tiles: ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'],
-                                    tileSize: 256,
-                                    attribution: '© OpenStreetMap contributors'
-                                }}
-                            }},
-                            layers: [{{ id: 'base-layer', type: 'raster', source: 'osm-tiles', minzoom: 0, maxzoom: 19 }}]
-                        }}
-                    }};
-
-                    const map = new maplibregl.Map({{
-                        container: 'map',
-                        style: basemaps.esri,
-                        center: [{c_lon_cen}, {c_lat_cen}],
-                        zoom: 11
-                    }});
-
-                    map.addControl(new maplibregl.NavigationControl(), 'top-right');
-                    map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
-
-                    const geojsonMuestras = {geojson_muestras_str};
-                    const geojsonPoligono = {geojson_poly_str};
-                    const boundsPoligono = {bounds_poly_str};
-
-                    function toggleDock() {{
-                        const dock = document.getElementById('dock-panel');
-                        dock.style.display = (dock.style.display === 'none' || dock.style.display === '') ? 'block' : 'none';
-                    }}
-
-                    function toggleLayer(layerId) {{
-                        if (map.getLayer(layerId)) {{
-                            const vis = map.getLayoutProperty(layerId, 'visibility');
-                            map.setLayoutProperty(layerId, 'visibility', vis === 'none' ? 'visible' : 'none');
-                        }}
-                    }}
-
-                    function ajustarOpacidadPoligono(val) {{
-                        const op = parseFloat(val) / 100.0;
-                        if (map.getLayer('layer-poligono-fill')) {{
-                            map.setPaintProperty('layer-poligono-fill', 'fill-opacity', op);
-                        }}
-                    }}
-
-                    map.on('mousemove', (e) => {{
-                        document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4);
-                        document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4);
-                        document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
-                    }});
-
-                    function cargarCapasDatos() {{
-                        // 1. Polígono Oficial del Acuífero
-                        if (geojsonPoligono && geojsonPoligono.geometry) {{
-                            if (!map.getSource('src-poligono')) {{
-                                map.addSource('src-poligono', {{ type: 'geojson', data: geojsonPoligono }});
-                                map.addLayer({{
-                                    id: 'layer-poligono-fill',
-                                    type: 'fill',
-                                    source: 'src-poligono',
-                                    paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.20 }}
-                                }});
-                                map.addLayer({{
-                                    id: 'layer-poligono-line',
-                                    type: 'line',
-                                    source: 'src-poligono',
-                                    paint: {{ 'line-color': '#691C32', 'line-width': 2.8 }}
-                                }});
+            <script>
+                const basemaps = {{
+                    esri: {{
+                        version: 8,
+                        sources: {{
+                            'esri-sat': {{
+                                type: 'raster',
+                                tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'],
+                                tileSize: 256,
+                                attribution: '© Esri, Maxar, Earthstar Geographics'
                             }}
-                        }}
+                        }},
+                        layers: [{{ id: 'base-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 19 }}]
+                    }},
+                    carto: {{
+                        version: 8,
+                        sources: {{
+                            'carto-light': {{
+                                type: 'raster',
+                                tiles: ['https://basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}.png'],
+                                tileSize: 256,
+                                attribution: '© CARTO, OpenStreetMap'
+                            }}
+                        }},
+                        layers: [{{ id: 'base-layer', type: 'raster', source: 'carto-light', minzoom: 0, maxzoom: 19 }}]
+                    }},
+                    topo: {{
+                        version: 8,
+                        sources: {{
+                            'topo-layer': {{
+                                type: 'raster',
+                                tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'],
+                                tileSize: 256,
+                                attribution: '© Esri Topo'
+                            }}
+                        }},
+                        layers: [{{ id: 'base-layer', type: 'raster', source: 'topo-layer', minzoom: 0, maxzoom: 19 }}]
+                    }},
+                    osm: {{
+                        version: 8,
+                        sources: {{
+                            'osm-tiles': {{
+                                type: 'raster',
+                                tiles: ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'],
+                                tileSize: 256,
+                                attribution: '© OpenStreetMap contributors'
+                            }}
+                        }},
+                        layers: [{{ id: 'base-layer', type: 'raster', source: 'osm-tiles', minzoom: 0, maxzoom: 19 }}]
+                    }}
+                }};
 
-                        // 2. Fuentes de Muestreo Hidrogeoquímico
-                        if (!map.getSource('src-muestras')) {{
-                            map.addSource('src-muestras', {{ type: 'geojson', data: geojsonMuestras }});
+                const map = new maplibregl.Map({{
+                    container: 'map',
+                    style: basemaps.esri,
+                    center: [{c_lon_cen}, {c_lat_cen}],
+                    zoom: 11
+                }});
+
+                map.addControl(new maplibregl.NavigationControl(), 'top-right');
+                map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
+
+                const geojsonMuestras = {geojson_muestras_str};
+                const geojsonPoligono = {geojson_poly_str};
+                const boundsPoligono = {bounds_poly_str};
+
+                function toggleDock() {{
+                    const dock = document.getElementById('dock-panel');
+                    dock.style.display = (dock.style.display === 'none' || dock.style.display === '') ? 'block' : 'none';
+                }}
+
+                function toggleLayer(layerId) {{
+                    if (map.getLayer(layerId)) {{
+                        const vis = map.getLayoutProperty(layerId, 'visibility');
+                        map.setLayoutProperty(layerId, 'visibility', vis === 'none' ? 'visible' : 'none');
+                    }}
+                }}
+
+                function ajustarOpacidadPoligono(val) {{
+                    const op = parseFloat(val) / 100.0;
+                    if (map.getLayer('layer-poligono-fill')) {{
+                        map.setPaintProperty('layer-poligono-fill', 'fill-opacity', op);
+                    }}
+                }}
+
+                map.on('mousemove', (e) => {{
+                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4);
+                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4);
+                    document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
+                }});
+
+                function cargarCapasDatos() {{
+                    // 1. Polígono Oficial del Acuífero
+                    if (geojsonPoligono && geojsonPoligono.geometry) {{
+                        if (!map.getSource('src-poligono')) {{
+                            map.addSource('src-poligono', {{ type: 'geojson', data: geojsonPoligono }});
                             map.addLayer({{
-                                id: 'layer-muestras-circle',
-                                type: 'circle',
-                                source: 'src-muestras',
-                                paint: {{
-                                    'circle-radius': 9,
-                                    'circle-color': ['get', 'color'],
-                                    'circle-stroke-width': 2.2,
-                                    'circle-stroke-color': '#ffffff'
-                                }}
+                                id: 'layer-poligono-fill',
+                                type: 'fill',
+                                source: 'src-poligono',
+                                paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.20 }}
+                            }});
+                            map.addLayer({{
+                                id: 'layer-poligono-line',
+                                type: 'line',
+                                source: 'src-poligono',
+                                paint: {{ 'line-color': '#691C32', 'line-width': 2.8 }}
                             }});
                         }}
-
-                        // Encuadre automático (fitBounds)
-                        if (boundsPoligono && boundsPoligono.length === 4) {{
-                            map.fitBounds([
-                                [boundsPoligono[0], boundsPoligono[1]],
-                                [boundsPoligono[2], boundsPoligono[3]]
-                            ], {{ padding: 45, maxZoom: 13.5 }});
-                        }}
                     }}
 
-                    map.on('load', cargarCapasDatos);
-
-                    map.on('click', 'layer-muestras-circle', (e) => {{
-                        const f = e.features[0];
-                        new maplibregl.Popup({{ className: 'gis-badge-popup' }})
-                            .setLngLat(f.geometry.coordinates)
-                            .setHTML(f.properties.popup)
-                            .addTo(map);
-                    }});
-
-                    map.on('mouseenter', 'layer-muestras-circle', () => {{ map.getCanvas().style.cursor = 'pointer'; }});
-                    map.on('mouseleave', 'layer-muestras-circle', () => {{ map.getCanvas().style.cursor = ''; }});
-
-                    function cambiarBasemap(tipo) {{
-                        map.setStyle(basemaps[tipo]);
-                        map.once('style.load', cargarCapasDatos);
+                    // 2. Fuentes de Muestreo Hidrogeoquímico
+                    if (!map.getSource('src-muestras')) {{
+                        map.addSource('src-muestras', {{ type: 'geojson', data: geojsonMuestras }});
+                        map.addLayer({{
+                            id: 'layer-muestras-circle',
+                            type: 'circle',
+                            source: 'src-muestras',
+                            paint: {{
+                                'circle-radius': 9,
+                                'circle-color': ['get', 'color'],
+                                'circle-stroke-width': 2.2,
+                                'circle-stroke-color': '#ffffff'
+                            }}
+                        }});
                     }}
-                </script>
-            </body>
-            </html>
-            """
-            st.iframe(html_maplibre, height=680)
-        else:
-            # Alternativa en Plotly con OpenStreetMap
-            color_col = 'Facies_Piper' if "Piper" in col_criterio else 'Estatus_NOM127'
-            fig_map = px.scatter_mapbox(
-                df_geo_pts,
-                lat='Latitud',
-                lon='Longitud',
-                color=color_col,
-                size_max=14,
-                zoom=11,
-                hover_name='Muestra',
-                hover_data=['Tipo_Fuente', 'Facies_Piper', 'SDT_mg_L', 'Estatus_NOM127'],
-                center=dict(lat=c_lat_cen, lon=c_lon_cen),
-                mapbox_style="open-street-map",
-                title=f"<b>Distribución Espacial de Muestras - {col_criterio}</b>"
-            )
-            fig_map.update_traces(marker=dict(size=12, opacity=0.9))
-            fig_map.update_layout(height=580, margin=dict(t=40, b=10, l=10, r=10))
-            st.plotly_chart(fig_map, use_container_width=True)
+
+                    // Encuadre automático (fitBounds)
+                    if (boundsPoligono && boundsPoligono.length === 4) {{
+                        map.fitBounds([
+                            [boundsPoligono[0], boundsPoligono[1]],
+                            [boundsPoligono[2], boundsPoligono[3]]
+                        ], {{ padding: 45, maxZoom: 13.5 }});
+                    }}
+                }}
+
+                map.on('load', cargarCapasDatos);
+
+                map.on('click', 'layer-muestras-circle', (e) => {{
+                    const f = e.features[0];
+                    new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                        .setLngLat(f.geometry.coordinates)
+                        .setHTML(f.properties.popup)
+                        .addTo(map);
+                }});
+
+                map.on('mouseenter', 'layer-muestras-circle', () => {{ map.getCanvas().style.cursor = 'pointer'; }});
+                map.on('mouseleave', 'layer-muestras-circle', () => {{ map.getCanvas().style.cursor = ''; }});
+
+                function cambiarBasemap(tipo) {{
+                    map.setStyle(basemaps[tipo]);
+                    map.once('style.load', cargarCapasDatos);
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        st.iframe(html_maplibre, height=680)
 
 # -----------------------------------------------------------------------------
 # TAB 7: EXPORTACIÓN PERICIAL
