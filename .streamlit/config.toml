@@ -18,9 +18,11 @@ font = "sans serif"
 
 [client]
 # Ocultar errores crudos de python al usuario final
-showErrorDetails = false
+showErrorDetails = true
 
 [server]
 # Aumentar límite de subida para archivos pesados y evitar cortes de conexión
 maxUploadSize = 500
 enableStaticServing = true
+runOnSave = true
+headless = true
