@@ -44,6 +44,7 @@ import importlib
 import core.hidrogeoquimica
 importlib.reload(core.hidrogeoquimica)
 from core.hidrogeoquimica import (
+    parse_concatenated_csv,
     generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
     procesar_muestras_hidroquimicas, auditar_norma_127,
     generar_diagrama_piper_d3, generar_diagrama_piper,
@@ -364,9 +365,10 @@ with st.sidebar:
                 df_cargado = pd.read_excel(archivo_subido)
             else:
                 try:
-                    df_cargado = pd.read_csv(archivo_subido, encoding='utf-8-sig')
+                    contenido_raw = archivo_subido.getvalue().decode('utf-8-sig')
                 except Exception:
-                    df_cargado = pd.read_csv(archivo_subido, encoding='latin1')
+                    contenido_raw = archivo_subido.getvalue().decode('latin1', errors='replace')
+                df_cargado = parse_concatenated_csv(contenido_raw)
 
             if not df_cargado.empty:
                 st.session_state["df_hidro_raw"] = df_cargado
@@ -386,13 +388,22 @@ with st.sidebar:
     )
     st.markdown(btn_plantilla, unsafe_allow_html=True)
 
-    col_btn1, col_btn2 = st.columns(2)
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 1.3, 0.7])
     with col_btn1:
-        if st.button("🔄 Muestras Demo", key="btn_demo_hidro", use_container_width=True, help="Carga el set oficial del memo de CONAGUA en Jalacingo y Altotonga."):
+        if st.button("🧪 Demo Memo", key="btn_demo_hidro", use_container_width=True, help="Carga el set de demostración de Jalacingo y Altotonga."):
             st.session_state["df_hidro_raw"] = obtener_muestras_demostracion()
             st.session_state["es_demostracion_hidro"] = True
             st.rerun()
     with col_btn2:
+        if st.button("⚡ Set 105 Pozos", key="btn_105_hidro", use_container_width=True, help="Carga el conjunto completo de 105 pozos con meq/L e iones mayores."):
+            try:
+                df_105 = pd.read_csv("data/muestras_hidroquimicas_105_pozos.csv")
+                st.session_state["df_hidro_raw"] = df_105
+                st.session_state["es_demostracion_hidro"] = False
+                st.rerun()
+            except Exception as e_105:
+                st.error(f"Error al cargar set de 105 pozos: {e_105}")
+    with col_btn3:
         if st.button("🗑️ Limpiar", key="btn_clean_hidro", use_container_width=True):
             st.session_state["df_hidro_raw"] = pd.DataFrame()
             st.session_state["es_demostracion_hidro"] = False

@@ -106,15 +106,17 @@ ALIAS_COLUMNAS = {
     'SDT_mg_L': ['SDT', 'TDS', 'SOLIDOS_DISUELTOS_TOTALES', 'SDT_MG_L', 'SOLIDOS_TOTALES_DISUELTOS'],
     'Dureza_mg_L': ['DUREZA', 'DUREZA_TOTAL', 'DUREZA_MG_L', 'DUREZA_CACO3', 'TH'],
     # Cationes
-    'Ca_mg_L': ['CA', 'CALCIO', 'CA_MG_L', 'CA2', 'CA_DISUELTO', 'CALCIO_TOTAL'],
-    'Mg_mg_L': ['MG', 'MAGNESIO', 'MG_MG_L', 'MG2', 'MG_DISUELTO', 'MAGNESIO_TOTAL'],
-    'Na_mg_L': ['NA', 'SODIO', 'NA_MG_L', 'NA1', 'NA_DISUELTO', 'SODIO_TOTAL'],
-    'K_mg_L':  ['K', 'POTASIO', 'K_MG_L', 'K1', 'K_DISUELTO', 'POTASIO_TOTAL'],
+    'Ca_mg_L': ['CA', 'CALCIO', 'CA_MG_L', 'CA2', 'CA_DISUELTO', 'CALCIO_TOTAL', 'CA_MEQ', 'CA_MEQ_L'],
+    'Mg_mg_L': ['MG', 'MAGNESIO', 'MG_MG_L', 'MG2', 'MG_DISUELTO', 'MAGNESIO_TOTAL', 'MG_MEQ', 'MG_MEQ_L'],
+    'Na_mg_L': ['NA', 'SODIO', 'NA_MG_L', 'NA1', 'NA_DISUELTO', 'SODIO_TOTAL', 'NA_MEQ', 'NA_MEQ_L'],
+    'K_mg_L':  ['K', 'POTASIO', 'K_MG_L', 'K1', 'K_DISUELTO', 'POTASIO_TOTAL', 'K_MEQ', 'K_MEQ_L'],
+    'Na_K_meq_L': ['NA_K', 'NA+K', 'NA_MAS_K', 'SODIO_POTASIO', 'NAK'],
     # Aniones
-    'HCO3_mg_L': ['HCO3', 'BICARBONATOS', 'BICARBONATO', 'HCO3_MG_L', 'ALCALINIDAD_HCO3', 'ALC_HCO3'],
-    'CO3_mg_L':  ['CO3', 'CARBONATOS', 'CARBONATO', 'CO3_MG_L', 'ALCALINIDAD_CO3'],
-    'Cl_mg_L':   ['CL', 'CLORUROS', 'CLORURO', 'CL_MG_L', 'CHLORIDE'],
-    'SO4_mg_L':  ['SO4', 'SULFATOS', 'SULFATO', 'SO4_MG_L', 'SULFATE'],
+    'HCO3_mg_L': ['HCO3', 'BICARBONATOS', 'BICARBONATO', 'HCO3_MG_L', 'ALCALINIDAD_HCO3', 'ALC_HCO3', 'HCO3_MEQ', 'HCO3_MEQ_L'],
+    'CO3_mg_L':  ['CO3', 'CARBONATOS', 'CARBONATO', 'CO3_MG_L', 'ALCALINIDAD_CO3', 'CO3_MEQ', 'CO3_MEQ_L'],
+    'HCO3_CO3_meq_L': ['HCO3_CO3', 'HCO3+CO3', 'BICARBONATO_CARBONATO', 'ALCALINIDAD_TOTAL'],
+    'Cl_mg_L':   ['CL', 'CLORUROS', 'CLORURO', 'CL_MG_L', 'CHLORIDE', 'CL_MEQ', 'CL_MEQ_L'],
+    'SO4_mg_L':  ['SO4', 'SULFATOS', 'SULFATO', 'SO4_MG_L', 'SULFATE', 'SO4_MEQ', 'SO4_MEQ_L'],
     'NO3_mg_L':  ['NO3', 'NITRATOS', 'NITRATO', 'NO3_MG_L', 'NITRATE'],
     'N_NO3_mg_L': ['N_NO3', 'N-NITRATOS', 'N_NITRATOS', 'NITROGENO_NITRATOS'],
     'F_mg_L':    ['F', 'FLUORUROS', 'FLUORURO', 'F_MG_L', 'FLUOR'],
@@ -141,6 +143,46 @@ def normalizar_texto_col(col):
     t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
     t = re.sub(r'[^A-Z0-9]', '_', t)
     return re.sub(r'_+', '_', t).strip('_')
+
+def parse_concatenated_csv(raw_text):
+    """
+    Detecta y fusiona tablas hidroquimicas concatenadas en un mismo archivo de texto/CSV
+    (por ejemplo, cuando se exporta una tabla de cationes/aniones combinados y otra con el desglose de Na, K, HCO3, CO3).
+    """
+    if not raw_text or not raw_text.strip():
+        return pd.DataFrame()
+
+    lines = [l.strip() for l in raw_text.strip().splitlines() if l.strip()]
+    if not lines:
+        return pd.DataFrame()
+
+    header_indices = []
+    for idx, line in enumerate(lines):
+        parts = [p.strip() for p in line.split(',')]
+        matches = [p for p in parts if any(k in p.upper() for k in ['CA', 'NA', 'K', 'MG', 'CL', 'SO4', 'HCO3', 'CO3', 'ID'])]
+        if len(matches) >= 3:
+            header_indices.append(idx)
+
+    if len(header_indices) <= 1:
+        return pd.read_csv(io.StringIO(raw_text))
+
+    dfs = []
+    for i, h_idx in enumerate(header_indices):
+        end_idx = header_indices[i + 1] if i + 1 < len(header_indices) else len(lines)
+        table_lines = lines[h_idx:end_idx]
+        df_sub = pd.read_csv(io.StringIO('\n'.join(table_lines)))
+        dfs.append(df_sub)
+
+    if len(dfs) == 2 and len(dfs[0]) == len(dfs[1]):
+        df_merged = dfs[0].copy()
+        for col in dfs[1].columns:
+            clean_col = col.strip()
+            if clean_col not in df_merged.columns:
+                df_merged[clean_col] = dfs[1][col].values
+        return df_merged
+
+    return dfs[0]
+
 
 def mapear_dataframe_hidroquimico(df_raw):
     """
@@ -221,24 +263,66 @@ def mapear_dataframe_hidroquimico(df_raw):
 # =============================================================================
 # 3. CÁLCULOS HIDROGEOQUÍMICOS (meq/L, CBE, ÍNDICES Y FACIES)
 # =============================================================================
-def procesar_muestras_hidroquimicas(df_muestras):
+def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
     """
     Calcula meq/L, suma de cationes/aniones, error de balance iónico (% CBE),
     facies de Piper, índices de riego (RAS, %Na, CSR) y coordenadas de Gibbs.
+    Detecta automáticamente si los datos vienen en meq/L o mg/L.
     """
     if df_muestras is None or df_muestras.empty:
         return pd.DataFrame()
 
     df = df_muestras.copy()
 
-    # 1. Conversión de concentraciones mg/L a meq/L
+    # Detección inteligente de unidades (meq/L vs mg/L)
+    es_meq = False
+    if unidad_forzada == 'meq_L':
+        es_meq = True
+    elif unidad_forzada == 'mg_L':
+        es_meq = False
+    else:
+        # Si los iones mayores tienen percentil 75 < 20 y mediana < 10, están en meq/L
+        cols_iones = [f"{ion}_mg_L" for ion in ['Ca', 'Mg', 'Na', 'Cl', 'HCO3', 'SO4'] if f"{ion}_mg_L" in df.columns]
+        if cols_iones:
+            vals = []
+            for c in cols_iones:
+                v = pd.to_numeric(df[c], errors='coerce').dropna()
+                if len(v) > 0: vals.extend(v.tolist())
+            if vals and np.percentile(vals, 75) < 20.0 and np.median(vals) < 10.0:
+                es_meq = True
+
+    # 1. Conversión de concentraciones
     for ion, datos in PESOS_EQUIVALENTES.items():
         col_mg = f"{ion}_mg_L"
         col_meq = f"{ion}_meq_L"
-        if col_mg in df.columns:
-            df[col_meq] = df[col_mg].fillna(0.0) / datos['eq_wt']
+        if es_meq:
+            if col_mg in df.columns:
+                df[col_meq] = pd.to_numeric(df[col_mg], errors='coerce').fillna(0.0)
+                df[col_mg] = df[col_meq] * datos['eq_wt']
+            else:
+                df[col_meq] = 0.0
+                df[col_mg] = 0.0
         else:
-            df[col_meq] = 0.0
+            if col_mg in df.columns:
+                df[col_meq] = pd.to_numeric(df[col_mg], errors='coerce').fillna(0.0) / datos['eq_wt']
+            else:
+                df[col_meq] = 0.0
+
+    # Soporte para Na+K consolidado si no hay Na o K separados
+    if ('Na_meq_L' not in df.columns or df['Na_meq_L'].sum() == 0) and 'Na_K_meq_L' in df.columns:
+        nak = pd.to_numeric(df['Na_K_meq_L'], errors='coerce').fillna(0.0)
+        df['Na_meq_L'] = nak * 0.90
+        df['K_meq_L'] = nak * 0.10
+        df['Na_mg_L'] = df['Na_meq_L'] * PESOS_EQUIVALENTES['Na']['eq_wt']
+        df['K_mg_L'] = df['K_meq_L'] * PESOS_EQUIVALENTES['K']['eq_wt']
+
+    # Soporte para HCO3+CO3 consolidado si no hay HCO3 o CO3 separados
+    if ('HCO3_meq_L' not in df.columns or df['HCO3_meq_L'].sum() == 0) and 'HCO3_CO3_meq_L' in df.columns:
+        hco3_co3 = pd.to_numeric(df['HCO3_CO3_meq_L'], errors='coerce').fillna(0.0)
+        df['HCO3_meq_L'] = hco3_co3
+        df['CO3_meq_L'] = 0.0
+        df['HCO3_mg_L'] = df['HCO3_meq_L'] * PESOS_EQUIVALENTES['HCO3']['eq_wt']
+        df['CO3_mg_L'] = 0.0
 
     # Si se reportó N-NO3 en lugar de NO3, convertir: NO3 = N-NO3 * 4.427
     if 'NO3_mg_L' not in df.columns and 'N_NO3_mg_L' in df.columns:
@@ -252,7 +336,15 @@ def procesar_muestras_hidroquimicas(df_muestras):
 
     # 2. Sumas iónicas
     df['Suma_Cationes_meq'] = df['Ca_meq_L'] + df['Mg_meq_L'] + df['Na_meq_L'] + df['K_meq_L']
-    df['Suma_Aniones_meq'] = df['HCO3_meq_L'] + df['CO3_meq_L'] + df['Cl_meq_L'] + df['SO4_meq_L'] + df['NO3_meq_L']
+    df['Suma_Aniones_meq'] = df['HCO3_meq_L'] + df['CO3_meq_L'] + df['Cl_meq_L'] + df['SO4_meq_L'] + (df['NO3_meq_L'] if 'NO3_meq_L' in df.columns else 0.0)
+
+    # Estimaciones físicas si no se reportaron CE o SDT (para diagramas de Wilcox, Riverside y Gibbs)
+    if 'CE_uS_cm' not in df.columns or df['CE_uS_cm'].isna().all() or (df['CE_uS_cm'] == 0).all():
+        df['CE_uS_cm'] = np.where(df['Suma_Aniones_meq'] > 0, (df['Suma_Aniones_meq'] * 100.0).round(1), 250.0)
+    if 'SDT_mg_L' not in df.columns or df['SDT_mg_L'].isna().all() or (df['SDT_mg_L'] == 0).all():
+        df['SDT_mg_L'] = (df['CE_uS_cm'] * 0.65).round(1)
+    if 'pH' not in df.columns or df['pH'].isna().all():
+        df['pH'] = 7.5
 
     # 3. Error de Balance Iónico (% CBE - Charge Balance Error)
     # CBE = (Cationes - Aniones) / (Cationes + Aniones) * 100
