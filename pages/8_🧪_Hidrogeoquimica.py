@@ -1183,23 +1183,28 @@ with tab_export:
     c_exp1, c_exp2 = st.columns(2, gap="medium")
     c_exp3, c_exp4 = st.columns(2, gap="medium")
 
+    tiene_coords = ('Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns and not df_procesado.dropna(subset=['Latitud', 'Longitud']).empty) if not df_procesado.empty else False
+
     # 1. Google Earth KMZ
     with c_exp1:
         st.markdown("""
         <div class="card-export-pericial">
             <div>
-                <h4 style="color:#691C32; margin:0 0 6px 0; font-size:15px;">🌍 Paquete KMZ (Google Earth)</h4>
+                <h4 style="color:#691C32; margin:0 0 6px 0; font-size:15px;">🌐 Paquete KMZ (Google Earth)</h4>
                 <p style="font-size:12px; color:#475569; margin-bottom:14px; line-height:1.45;">
                     Incluye puntos 3D fijados al terreno, polígono perimetral del acuífero oficial y carpetas jerárquicas organizadas por Facies y por Dictamen NOM-127 con fichas completas de laboratorio. Totalmente compatible con la app móvil de Google Earth.
                 </p>
             </div>
         """, unsafe_allow_html=True)
-        bytes_kmz = generar_kmz_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
-        btn_kmz = generar_enlace_descarga(
-            bytes_kmz, f"auditoria_hidroquimica_{clave_sel or 'acuifero'}.kmz",
-            "application/vnd.google-earth.kmz", "Descargar Paquete KMZ (.kmz)", icon="🌍"
-        )
-        st.markdown(btn_kmz, unsafe_allow_html=True)
+        if tiene_coords:
+            bytes_kmz = generar_kmz_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
+            btn_kmz = generar_enlace_descarga(
+                bytes_kmz, f"auditoria_hidroquimica_{clave_sel or 'acuifero'}.kmz",
+                "application/vnd.google-earth.kmz", "Descargar Paquete KMZ (.kmz)", icon="🌐"
+            )
+            st.markdown(btn_kmz, unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; padding: 12px; font-size: 11.5px; color: #64748b; text-align: center;'>⚠️ Requiere columnas de 'Latitud' y 'Longitud' georreferenciadas.</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     # 2. Shapefile ESRI (.zip)
@@ -1213,12 +1218,15 @@ with tab_export:
                 </p>
             </div>
         """, unsafe_allow_html=True)
-        bytes_shp = generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria, f"hidroquimica_{clave_sel or 'acuifero'}")
-        btn_shp = generar_enlace_descarga(
-            bytes_shp, f"shapefile_hidroquimica_{clave_sel or 'acuifero'}.zip",
-            "application/zip", "Descargar Shapefile ZIP (.zip)", icon="🗺️"
-        )
-        st.markdown(btn_shp, unsafe_allow_html=True)
+        if tiene_coords:
+            bytes_shp = generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria, f"hidroquimica_{clave_sel or 'acuifero'}")
+            btn_shp = generar_enlace_descarga(
+                bytes_shp, f"shapefile_hidroquimica_{clave_sel or 'acuifero'}.zip",
+                "application/zip", "Descargar Shapefile ZIP (.zip)", icon="🗺️"
+            )
+            st.markdown(btn_shp, unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; padding: 12px; font-size: 11.5px; color: #64748b; text-align: center;'>⚠️ Requiere columnas de 'Latitud' y 'Longitud' georreferenciadas.</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div style='margin-top: 14px;'></div>", unsafe_allow_html=True)
@@ -1254,19 +1262,16 @@ with tab_export:
                 </p>
             </div>
         """, unsafe_allow_html=True)
-        if 'Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns:
+        if tiene_coords:
             df_valid_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
-            if not df_valid_geo.empty:
-                pts_geom = [Point(xy) for xy in zip(df_valid_geo['Longitud'], df_valid_geo['Latitud'])]
-                gdf_pts = gpd.GeoDataFrame(df_valid_geo, geometry=pts_geom, crs="EPSG:4326")
-                bytes_geojson = gdf_pts.to_json().encode('utf-8')
-            else:
-                bytes_geojson = b"{}"
+            pts_geom = [Point(xy) for xy in zip(df_valid_geo['Longitud'], df_valid_geo['Latitud'])]
+            gdf_pts = gpd.GeoDataFrame(df_valid_geo, geometry=pts_geom, crs="EPSG:4326")
+            bytes_geojson = gdf_pts.to_json().encode('utf-8')
+            btn_geojson = generar_enlace_descarga(
+                bytes_geojson, f"capa_hidroquimica_{clave_sel or 'acuifero'}.geojson",
+                "application/geo+json", "Descargar GeoJSON (.geojson)", icon="🌐"
+            )
+            st.markdown(btn_geojson, unsafe_allow_html=True)
         else:
-            bytes_geojson = b"{}"
-        btn_geojson = generar_enlace_descarga(
-            bytes_geojson, f"muestras_hidroquimicas_{clave_sel or 'acuifero'}.geojson",
-            "application/geo+json", "Descargar GeoJSON (.geojson)", icon="🌐"
-        )
-        st.markdown(btn_geojson, unsafe_allow_html=True)
+            st.markdown("<div style='background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; padding: 12px; font-size: 11.5px; color: #64748b; text-align: center;'>⚠️ Requiere columnas de 'Latitud' y 'Longitud' georreferenciadas.</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)

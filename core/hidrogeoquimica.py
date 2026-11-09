@@ -2987,6 +2987,8 @@ def generar_kmz_hidrogeoquimico(df_procesado, df_auditoria=None, clave_ac="Acuif
     """
     if df_procesado is None or df_procesado.empty:
         return b""
+    if 'Latitud' not in df_procesado.columns or 'Longitud' not in df_procesado.columns:
+        return b""
 
     df_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
     if df_geo.empty:
@@ -3147,6 +3149,8 @@ def generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria=None, nombre_ba
     from shapely.geometry import Point
 
     if df_procesado is None or df_procesado.empty:
+        return b""
+    if 'Latitud' not in df_procesado.columns or 'Longitud' not in df_procesado.columns:
         return b""
 
     df_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
