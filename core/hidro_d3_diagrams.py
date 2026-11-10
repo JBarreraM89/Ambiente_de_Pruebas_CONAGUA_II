@@ -88,7 +88,7 @@ def generar_diagrama_piper_d3(df_procesado):
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
         #piper-svg-container {{
-          width: 100%; height: 600px; position: relative; background: #ffffff; overflow: hidden;
+          width: 100%; height: 720px; position: relative; background: #ffffff; overflow: hidden;
           cursor: grab;
         }}
         #piper-svg-container.grabbing {{ cursor: grabbing; }}
@@ -102,12 +102,31 @@ def generar_diagrama_piper_d3(df_procesado):
           padding: 9px 13px; font-size: 11.5px; color: #1e293b;
           pointer-events: none; width: 280px; line-height: 1.45;
         }}
-        .facies-label {{
-          font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle;
+        .axis-label-piper {{
+          font-size: 11px; font-weight: 800; fill: #1e293b; text-anchor: middle;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        .ion-label {{
+          font-size: 13px; font-weight: 800; fill: #0f172a;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        .tick-label-piper {{
+          font-size: 8.5px; font-weight: 600; fill: #334155;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        .tick-label-100 {{
+          font-size: 9.5px; font-weight: 700; fill: #0f172a;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }}
+        .facies-label-side {{
+          font-size: 11.5px; font-weight: 800; text-anchor: middle; dominant-baseline: middle;
           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
           paint-order: stroke fill; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round;
-          pointer-events: none; opacity: 0.95;
         }}
+        .grid-line {{ stroke: #475569; stroke-width: 0.85; stroke-dasharray: 3,2.5; opacity: 0.8; }}
+        .grid-line-diamond {{ stroke: #475569; stroke-width: 0.85; stroke-dasharray: 3,2.5; opacity: 0.8; }}
+        .axis-line {{ stroke: #0f172a; stroke-width: 1.8; fill: none; }}
+        .tick-line {{ stroke: #0f172a; stroke-width: 1.2; }}
       </style>
     </head>
     <body>
@@ -170,30 +189,30 @@ def generar_diagrama_piper_d3(df_procesado):
         // 1. Constantes geométricas canónicas (OMM / UNESCO / A.M. Piper 1944)
         const L = 330.0;
         const H = L * Math.sqrt(3) / 2.0; // 285.788
-        const gap = 64.0;
-        const y_base = 715.0;
+        const gap = 88.0;
+        const y_base = 680.0;
 
         // Triángulo de Cationes (Izquierda)
-        const x_c_left = 118.0;
-        const x_c_right = x_c_left + L;   // 448.0
-        const x_c_top = x_c_left + L / 2.0; // 283.0
-        const y_c_top = y_base - H;        // 429.21
+        const x_c_left = 106.0;
+        const x_c_right = x_c_left + L;   // 436.0
+        const x_c_top = x_c_left + L / 2.0; // 271.0
+        const y_c_top = y_base - H;        // 394.21
 
         // Triángulo de Aniones (Derecha)
-        const x_a_left = x_c_right + gap; // 512.0
-        const x_a_right = x_a_left + L;   // 842.0
-        const x_a_top = x_a_left + L / 2.0; // 677.0
-        const y_a_top = y_c_top;           // 429.21
+        const x_a_left = x_c_right + gap; // 524.0
+        const x_a_right = x_a_left + L;   // 854.0
+        const x_a_top = x_a_left + L / 2.0; // 689.0
+        const y_a_top = y_c_top;           // 394.21
 
-        // Rombo Central Canónico (Intersección analítica de rayos extremos)
+        // Rombo Central Canónico (Exacta intersección analítica de rayos extremos)
         const x_d_bot = 480.0;
-        const y_d_bot = y_base - Math.sqrt(3) * gap / 2.0; // 659.57
+        const y_d_bot = y_base - Math.sqrt(3) * gap / 2.0; // 603.79
         const x_d_left = (x_c_left + x_a_left) / 2.0;     // 315.0
-        const y_d_left = y_base - Math.sqrt(3) * (x_a_left - x_c_left) / 2.0; // 373.79
+        const y_d_left = y_base - Math.sqrt(3) * (x_a_left - x_c_left) / 2.0; // 318.00
         const x_d_right = (x_c_right + x_a_right) / 2.0;  // 645.0
-        const y_d_right = y_d_left;                       // 373.79
+        const y_d_right = y_d_left;                       // 318.00
         const x_d_top = 480.0;
-        const y_d_top = y_base - Math.sqrt(3) * (x_a_right - x_c_left) / 2.0; // 88.00
+        const y_d_top = y_base - Math.sqrt(3) * (x_a_right - x_c_left) / 2.0; // 32.21
 
         const gGrid = zoomGroup.append("g").attr("id", "grid-group");
         const gDiamond = zoomGroup.append("g").attr("id", "diamond-group");
@@ -207,20 +226,20 @@ def generar_diagrama_piper_d3(df_procesado):
           const f = step / 10.0;
 
           // Triángulo Cationes
-          // Líneas paralelas a la base (Mg constante)
+          // 1) Líneas paralelas a la base (Mg constante)
           const c_y = y_base - f * H;
           const c_x1 = x_c_left + 0.5 * f * L;
           const c_x2 = x_c_right - 0.5 * f * L;
           gGrid.append("line").attr("x1", c_x1).attr("y1", c_y).attr("x2", c_x2).attr("y2", c_y).attr("class", "grid-line");
 
-          // Líneas paralelas al lado izquierdo (Na+K constante)
+          // 2) Líneas paralelas al lado izquierdo (Na+K constante)
           const c_na_x1 = x_c_left + f * L;
           const c_na_y1 = y_base;
           const c_na_x2 = x_c_top + 0.5 * f * L;
           const c_na_y2 = y_c_top + f * H;
           gGrid.append("line").attr("x1", c_na_x1).attr("y1", c_na_y1).attr("x2", c_na_x2).attr("y2", c_na_y2).attr("class", "grid-line");
 
-          // Líneas paralelas al lado derecho (Ca constante)
+          // 3) Líneas paralelas al lado derecho (Ca constante)
           const c_ca_x1 = x_c_right - f * L;
           const c_ca_y1 = y_base;
           const c_ca_x2 = x_c_top - 0.5 * f * L;
@@ -228,27 +247,27 @@ def generar_diagrama_piper_d3(df_procesado):
           gGrid.append("line").attr("x1", c_ca_x1).attr("y1", c_ca_y1).attr("x2", c_ca_x2).attr("y2", c_ca_y2).attr("class", "grid-line");
 
           // Triángulo Aniones
-          // Líneas paralelas a la base (SO4 constante)
+          // 1) Líneas paralelas a la base (SO4 constante)
           const a_y = y_base - f * H;
           const a_x1 = x_a_left + 0.5 * f * L;
           const a_x2 = x_a_right - 0.5 * f * L;
           gGrid.append("line").attr("x1", a_x1).attr("y1", a_y).attr("x2", a_x2).attr("y2", a_y).attr("class", "grid-line");
 
-          // Líneas paralelas al lado izquierdo (Cl constante)
+          // 2) Líneas paralelas al lado izquierdo (Cl constante)
           const a_cl_x1 = x_a_left + f * L;
           const a_cl_y1 = y_base;
           const a_cl_x2 = x_a_top + 0.5 * f * L;
           const a_cl_y2 = y_a_top + f * H;
           gGrid.append("line").attr("x1", a_cl_x1).attr("y1", a_cl_y1).attr("x2", a_cl_x2).attr("y2", a_cl_y2).attr("class", "grid-line");
 
-          // Líneas paralelas al lado derecho (HCO3 constante)
+          // 3) Líneas paralelas al lado derecho (HCO3 constante)
           const a_hco3_x1 = x_a_right - f * L;
           const a_hco3_y1 = y_base;
           const a_hco3_x2 = x_a_top - 0.5 * f * L;
           const a_hco3_y2 = y_a_top + f * H;
           gGrid.append("line").attr("x1", a_hco3_x1).attr("y1", a_hco3_y1).attr("x2", a_hco3_x2).attr("y2", a_hco3_y2).attr("class", "grid-line");
 
-          // Rejilla interna del Rombo Central
+          // REJILLA DEL ROMBO CENTRAL EN TRIÁNGULOS EQUILÁTEROS (3 FAMILIAS):
           // Familia 1: pendiente -sqrt(3) (desde borde inferior-izquierdo a superior-derecho)
           const p1_x = x_d_bot + (x_d_left - x_d_bot) * f;
           const p1_y = y_d_bot + (y_d_left - y_d_bot) * f;
@@ -262,55 +281,161 @@ def generar_diagrama_piper_d3(df_procesado):
           const q2_x = x_d_left + (x_d_top - x_d_left) * f;
           const q2_y = y_d_left + (y_d_top - y_d_left) * f;
           gDiamond.append("line").attr("x1", q1_x).attr("y1", q1_y).attr("x2", q2_x).attr("y2", q2_y).attr("class", "grid-line-diamond");
+
+          // Familia 3: LÍNEAS HORIZONTALES (Forman triángulos equiláteros internos exactos)
+          // Mitad inferior
+          gDiamond.append("line")
+            .attr("x1", p1_x).attr("y1", p1_y)
+            .attr("x2", q1_x).attr("y2", q1_y)
+            .attr("class", "grid-line-diamond");
+
+          // Mitad superior
+          const u1_x = x_d_left + (x_d_top - x_d_left) * f;
+          const u1_y = y_d_left + (y_d_top - y_d_left) * f;
+          const u2_x = x_d_right + (x_d_top - x_d_right) * f;
+          const u2_y = y_d_right + (y_d_top - y_d_right) * f;
+          gDiamond.append("line")
+            .attr("x1", u1_x).attr("y1", u1_y)
+            .attr("x2", u2_x).attr("y2", u2_y)
+            .attr("class", "grid-line-diamond");
         }}
 
-        // 3. Bordes Exteriores de Polígonos
-        // Triángulo Cationes
+        // Línea horizontal ecuatorial central del rombo
+        gDiamond.append("line")
+          .attr("x1", x_d_left).attr("y1", y_d_left)
+          .attr("x2", x_d_right).attr("y2", y_d_right)
+          .attr("class", "grid-line-diamond");
+
+        // 3. Contornos de Triángulos y Rombo
         gTriangles.append("polygon")
           .attr("points", `${{x_c_left}},${{y_base}} ${{x_c_right}},${{y_base}} ${{x_c_top}},${{y_c_top}}`)
-          .attr("class", "boundary-line");
+          .attr("class", "axis-line");
 
-        // Triángulo Aniones
         gTriangles.append("polygon")
           .attr("points", `${{x_a_left}},${{y_base}} ${{x_a_right}},${{y_base}} ${{x_a_top}},${{y_a_top}}`)
-          .attr("class", "boundary-line");
+          .attr("class", "axis-line");
 
-        // Rombo Central
         gDiamond.append("polygon")
           .attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_right}},${{y_d_right}} ${{x_d_top}},${{y_d_top}} ${{x_d_left}},${{y_d_left}}`)
-          .attr("class", "boundary-line");
+          .attr("class", "axis-line");
 
-        // Ejes divisorios de facies al 50%
-        gDiamond.append("line")
-          .attr("x1", x_d_left).attr("y1", y_d_left).attr("x2", x_d_right).attr("y2", y_d_right)
-          .attr("stroke", "#64748b").attr("stroke-width", 1.2).attr("stroke-dasharray", "4,3");
-        gDiamond.append("line")
-          .attr("x1", x_d_top).attr("y1", y_d_top).attr("x2", x_d_bot).attr("y2", y_d_bot)
-          .attr("stroke", "#64748b").attr("stroke-width", 1.2).attr("stroke-dasharray", "4,3");
+        // 4. TICKS Y ETIQUETAS NUMÉRICAS EN TRIÁNGULOS (10, 20, 30... 100)
+        const gTicks = zoomGroup.append("g").attr("id", "ticks-group");
 
-        // 4. Rótulos de Facies Canónicos en los 4 cuadrantes
+        const norm_lx = -Math.sqrt(3) / 2.0; // -0.866
+        const norm_ly = -0.5;
+        const norm_rx = Math.sqrt(3) / 2.0;  // +0.866
+        const norm_ry = -0.5;
+
+        for (let s = 1; s <= 9; s++) {{
+          const frac = s / 10.0;
+          const val = s * 10;
+          const isMajor = (s % 2 === 0);
+          const tickLen = isMajor ? 5.5 : 3.2;
+
+          // --- CATIONES: Base (Ca decrece de 100 a 0 hacia Na+K) ---
+          const c_bx = x_c_left + frac * L;
+          gTicks.append("line").attr("x1", c_bx).attr("y1", y_base).attr("x2", c_bx).attr("y2", y_base + tickLen).attr("class", "tick-line");
+          gTicks.append("text").attr("x", c_bx).attr("y", y_base + 13).attr("class", "tick-label-piper").attr("text-anchor", "middle").text(100 - val);
+
+          // --- CATIONES: Lado Izquierdo (Mg crece de 0 a 100 hacia ápice) ---
+          const c_lx = x_c_left + 0.5 * frac * L;
+          const c_ly = y_base - frac * H;
+          gTicks.append("line").attr("x1", c_lx).attr("y1", c_ly).attr("x2", c_lx + norm_lx * tickLen).attr("y2", c_ly + norm_ly * tickLen).attr("class", "tick-line");
+          gTicks.append("text").attr("x", c_lx - 7).attr("y", c_ly + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(val);
+
+          // --- CATIONES: Lado Derecho (Na+K crece de 0 a 100 hacia base) ---
+          const c_rx = x_c_top + 0.5 * frac * L;
+          const c_ry = y_c_top + frac * H;
+          gTicks.append("line").attr("x1", c_rx).attr("y1", c_ry).attr("x2", c_rx + norm_rx * tickLen).attr("y2", c_ry + norm_ry * tickLen).attr("class", "tick-line");
+          gTicks.append("text").attr("x", c_rx + 7).attr("y", c_ry + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(val);
+
+          // --- ANIONES: Base (Cl crece de 0 a 100) ---
+          const a_bx = x_a_left + frac * L;
+          gTicks.append("line").attr("x1", a_bx).attr("y1", y_base).attr("x2", a_bx).attr("y2", y_base + tickLen).attr("class", "tick-line");
+          gTicks.append("text").attr("x", a_bx).attr("y", y_base + 13).attr("class", "tick-label-piper").attr("text-anchor", "middle").text(val);
+
+          // --- ANIONES: Lado Izquierdo (HCO3 decrece de 100 a 0 hacia ápice) ---
+          const a_lx = x_a_left + 0.5 * frac * L;
+          const a_ly = y_base - frac * H;
+          gTicks.append("line").attr("x1", a_lx).attr("y1", a_ly).attr("x2", a_lx + norm_lx * tickLen).attr("y2", a_ly + norm_ly * tickLen).attr("class", "tick-line");
+          gTicks.append("text").attr("x", a_lx - 7).attr("y", a_ly + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(100 - val);
+
+          // --- ANIONES: Lado Derecho (SO4 decrece de 100 a 0 hacia base) ---
+          const a_rx = x_a_top + 0.5 * frac * L;
+          const a_ry = y_a_top + frac * H;
+          gTicks.append("line").attr("x1", a_rx).attr("y1", a_ry).attr("x2", a_rx + norm_rx * tickLen).attr("y2", a_ry + norm_ry * tickLen).attr("class", "tick-line");
+          gTicks.append("text").attr("x", a_rx + 7).attr("y", a_ry + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(100 - val);
+        }}
+
+        // Marcas y valores en vértices (100 y 100%)
+        gTicks.append("text").attr("x", x_c_left).attr("y", y_base + 14).attr("class", "tick-label-100").attr("text-anchor", "middle").text("100");
+        gTicks.append("text").attr("x", x_c_top - 12).attr("y", y_c_top).attr("class", "tick-label-100").attr("text-anchor", "end").text("100");
+        gTicks.append("text").attr("x", x_c_right + 5).attr("y", y_base - 8).attr("class", "tick-label-100").attr("text-anchor", "start").text("100%");
+
+        gTicks.append("text").attr("x", x_a_left - 5).attr("y", y_base - 8).attr("class", "tick-label-100").attr("text-anchor", "end").text("100%");
+        gTicks.append("text").attr("x", x_a_top + 12).attr("y", y_a_top).attr("class", "tick-label-100").attr("text-anchor", "start").text("100");
+        gTicks.append("text").attr("x", x_a_right).attr("y", y_base + 14).attr("class", "tick-label-100").attr("text-anchor", "middle").text("100");
+
+        // 5. RÓTULOS DE FACIES EN LOS COSTADOS EXTERIORES DEL ROMBO (SIN ESTORBAR AL CENTRO)
         const gFacies = zoomGroup.append("g").attr("id", "facies-group");
-        // Cuadrante Izquierdo (Ca-HCO3): Alcalinotérreas débiles / Bicarbonatada Cálcica
-        gFacies.append("text").attr("x", 397.5).attr("y", 373.8).attr("class", "facies-label").attr("fill", "#15803d").text("Bicarbonatada Cálcica");
-        // Cuadrante Derecho (Na-Cl): Salina / Clorurada Sódica
-        gFacies.append("text").attr("x", 562.5).attr("y", 373.8).attr("class", "facies-label").attr("fill", "#991b1b").text("Clorurada Sódica");
-        // Cuadrante Superior (Ca-SO4 / Sulfatada Cálcica / Clorurada Cálcica)
-        gFacies.append("text").attr("x", 480.0).attr("y", 230.9).attr("class", "facies-label").attr("fill", "#92400e").text("Sulfatada Cálcica");
-        // Cuadrante Inferior (Na-HCO3 / Bicarbonatada Sódica)
-        gFacies.append("text").attr("x", 480.0).attr("y", 516.7).attr("class", "facies-label").attr("fill", "#6b21a8").text("Bicarbonatada Sódica");
 
-        // 5. Rótulos de Ejes e Iones
+        // Costado Superior-Izquierdo (Left -> Top): Sulfatada Cálcica
+        const mid_ul_x = (x_d_left + x_d_top) / 2.0;
+        const mid_ul_y = (y_d_left + y_d_top) / 2.0;
+        gFacies.append("text")
+          .attr("x", mid_ul_x)
+          .attr("y", mid_ul_y)
+          .attr("transform", `rotate(-60, ${{mid_ul_x}}, ${{mid_ul_y}}) translate(0, -22)`)
+          .attr("class", "facies-label-side")
+          .attr("fill", "#92400e")
+          .text("Sulfatada Cálcica");
+
+        // Costado Superior-Derecho (Top -> Right): Clorurada Sódica
+        const mid_ur_x = (x_d_top + x_d_right) / 2.0;
+        const mid_ur_y = (y_d_top + y_d_right) / 2.0;
+        gFacies.append("text")
+          .attr("x", mid_ur_x)
+          .attr("y", mid_ur_y)
+          .attr("transform", `rotate(60, ${{mid_ur_x}}, ${{mid_ur_y}}) translate(0, -22)`)
+          .attr("class", "facies-label-side")
+          .attr("fill", "#991b1b")
+          .text("Clorurada Sódica");
+
+        // Costado Inferior-Izquierdo (Left -> Bot): Bicarbonatada Cálcica
+        const mid_ll_x = (x_d_left + x_d_bot) / 2.0;
+        const mid_ll_y = (y_d_left + y_d_bot) / 2.0;
+        gFacies.append("text")
+          .attr("x", mid_ll_x)
+          .attr("y", mid_ll_y)
+          .attr("transform", `rotate(60, ${{mid_ll_x}}, ${{mid_ll_y}}) translate(0, 20)`)
+          .attr("class", "facies-label-side")
+          .attr("fill", "#15803d")
+          .text("Bicarbonatada Cálcica");
+
+        // Costado Inferior-Derecho (Bot -> Right): Bicarbonatada Sódica
+        const mid_lr_x = (x_d_bot + x_d_right) / 2.0;
+        const mid_lr_y = (y_d_bot + y_d_right) / 2.0;
+        gFacies.append("text")
+          .attr("x", mid_lr_x)
+          .attr("y", mid_lr_y)
+          .attr("transform", `rotate(-60, ${{mid_lr_x}}, ${{mid_lr_y}}) translate(0, 20)`)
+          .attr("class", "facies-label-side")
+          .attr("fill", "#6b21a8")
+          .text("Bicarbonatada Sódica");
+
+        // 6. Rótulos de Ejes e Iones Canónicos
         // Cationes
-        gLabels.append("text").attr("x", x_c_top).attr("y", y_base + 38).attr("class", "axis-label-piper").text("CATIONES (% meq/L)");
-        gLabels.append("text").attr("x", x_c_left).attr("y", y_base + 18).attr("class", "tick-label-piper").text("100% Ca²⁺");
-        gLabels.append("text").attr("x", x_c_right).attr("y", y_base + 18).attr("class", "tick-label-piper").text("100% Na⁺+K⁺");
-        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_top - 12).attr("class", "tick-label-piper").text("100% Mg²⁺");
+        gLabels.append("text").attr("x", x_c_top).attr("y", y_base + 46).attr("class", "axis-label-piper").text("CATIONES (% meq/L)");
+        gLabels.append("text").attr("x", x_c_left - 24).attr("y", y_base + 4).attr("class", "ion-label").attr("text-anchor", "end").text("Ca²⁺");
+        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_top - 20).attr("class", "ion-label").attr("text-anchor", "middle").text("Mg²⁺");
+        gLabels.append("text").attr("x", x_c_right - 4).attr("y", y_base + 32).attr("class", "ion-label").attr("text-anchor", "end").text("Na⁺ + K⁺");
 
         // Aniones
-        gLabels.append("text").attr("x", x_a_top).attr("y", y_base + 38).attr("class", "axis-label-piper").text("ANIONES (% meq/L)");
-        gLabels.append("text").attr("x", x_a_left).attr("y", y_base + 18).attr("class", "tick-label-piper").text("100% HCO₃⁻");
-        gLabels.append("text").attr("x", x_a_right).attr("y", y_base + 18).attr("class", "tick-label-piper").text("100% Cl⁻");
-        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_top - 12).attr("class", "tick-label-piper").text("100% SO₄²⁻");
+        gLabels.append("text").attr("x", x_a_top).attr("y", y_base + 46).attr("class", "axis-label-piper").text("ANIONES (% meq/L)");
+        gLabels.append("text").attr("x", x_a_left + 4).attr("y", y_base + 32).attr("class", "ion-label").attr("text-anchor", "start").text("HCO₃⁻ + CO₃²⁻");
+        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_top - 20).attr("class", "ion-label").attr("text-anchor", "middle").text("SO₄²⁻");
+        gLabels.append("text").attr("x", x_a_right + 24).attr("y", y_base + 4).attr("class", "ion-label").attr("text-anchor", "start").text("Cl⁻");
 
         // Tooltip reactivo
         const tooltip = d3.select("#piper-tooltip");
