@@ -586,16 +586,16 @@ with tab_piper:
             st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Guía de Cuadrantes del Diamante Central:</p>", unsafe_allow_html=True)
             st.markdown("""
             <div style='font-size:11px; color:#475569; line-height:1.5;'>
-                • <b style='color:#166534;'>Sur (Bicarbonatada Cálcica):</b> Aguas jóvenes de recarga reciente en zonas de montaña/infiltración. Baja mineralización.<br>
-                • <b style='color:#6b21a8;'>Oeste (Bicarbonatada Sódica):</b> Aguas sujetas a intercambio catiónico natural (ablandamiento en arcillas).<br>
-                • <b style='color:#92400e;'>Este (Sulfatada Cálcica):</b> Disolución de formaciones yesíferas/anhidrita o contaminación antrópica.<br>
-                • <b style='color:#991b1b;'>Norte (Clorurada Sódica):</b> Aguas evolucionadas, de largo tiempo de residencia, salinas o intrusión marina.
+                • <b style='color:#166534;'>Oeste (Bicarbonatada Cálcica/Magnésica):</b> Aguas jóvenes de recarga reciente en zonas de infiltración. Predominio de disolución carbonatada.<br>
+                • <b style='color:#6b21a8;'>Sur (Bicarbonatada Sódica):</b> Aguas sujetas a intercambio catiónico natural (ablandamiento natural en medios arcillosos).<br>
+                • <b style='color:#92400e;'>Norte (Sulfatada/Clorurada Cálcica):</b> Disolución de evaporitas (yeso, anhidrita) o dureza permanente no carbónica.<br>
+                • <b style='color:#991b1b;'>Este (Clorurada/Sulfatada Sódica):</b> Aguas altamente evolucionadas, largo tiempo de residencia, salinas o intrusión marina.
             </div>
             """, unsafe_allow_html=True)
 
     with st.expander("📋 Tabla Detallada de Parámetros Trilineales, Balance Iónico e Índice de Revelle", expanded=False):
         cols_piper_tab = [
-            'Muestra', 'Tipo_Fuente', 'Facies_Piper', 'CBE_pct', 'CBE_Calidad',
+            'Muestra', 'Tipo_Fuente', 'Facies_Piper', 'Cuadrante_Piper', 'CBE_pct', 'CBE_Calidad',
             'Suma_Cationes_meq', 'Suma_Aniones_meq', 'pct_Ca', 'pct_Mg', 'pct_Na_K',
             'pct_HCO3_CO3', 'pct_SO4', 'pct_Cl', 'Indice_Revelle', 'Clasif_Revelle'
         ]

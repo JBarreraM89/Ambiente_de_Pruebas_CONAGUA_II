@@ -360,49 +360,94 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
 
     df['CBE_Calidad'] = df['CBE_pct'].apply(clasificar_cbe)
 
-    # 4. Porcentajes para Piper
+    # 4. Porcentajes para Piper (Normalización Ternaria Estricta)
     cat_tot = df['Suma_Cationes_meq']
     df['pct_Ca'] = np.where(cat_tot > 0, (df['Ca_meq_L'] / cat_tot) * 100.0, 0.0)
     df['pct_Mg'] = np.where(cat_tot > 0, (df['Mg_meq_L'] / cat_tot) * 100.0, 0.0)
     df['pct_Na_K'] = np.where(cat_tot > 0, ((df['Na_meq_L'] + df['K_meq_L']) / cat_tot) * 100.0, 0.0)
 
-    an_tot = df['Suma_Aniones_meq']
-    df['pct_HCO3_CO3'] = np.where(an_tot > 0, ((df['HCO3_meq_L'] + df['CO3_meq_L']) / an_tot) * 100.0, 0.0)
-    df['pct_SO4'] = np.where(an_tot > 0, (df['SO4_meq_L'] / an_tot) * 100.0, 0.0)
-    df['pct_Cl'] = np.where(an_tot > 0, (df['Cl_meq_L'] / an_tot) * 100.0, 0.0)
+    # Nota hidrogeoquímica estándar (Piper 1944 / Back 1966):
+    # La proyección trilineal aniónica se normaliza estrictamente sobre la tríada canónica (HCO3+CO3, SO4, Cl).
+    # El ion NO3- se excluye de la base ternaria para garantizar que la suma sume exactamente 100.0%.
+    an_piper_tot = (df['HCO3_meq_L'] + df['CO3_meq_L']) + df['SO4_meq_L'] + df['Cl_meq_L']
+    df['pct_HCO3_CO3'] = np.where(an_piper_tot > 0, ((df['HCO3_meq_L'] + df['CO3_meq_L']) / an_piper_tot) * 100.0, 0.0)
+    df['pct_SO4'] = np.where(an_piper_tot > 0, (df['SO4_meq_L'] / an_piper_tot) * 100.0, 0.0)
+    df['pct_Cl'] = np.where(an_piper_tot > 0, (df['Cl_meq_L'] / an_piper_tot) * 100.0, 0.0)
 
-    # 5. Determinación de Facies Hidroquímica
+    # 5. Determinación Jerárquica Dinámica de Facies Hidroquímica (Back 1966 / Custodio & Llamas)
     def clasificar_facies(row):
-        if row['Suma_Cationes_meq'] == 0 or row['Suma_Aniones_meq'] == 0:
+        if row.get('Suma_Cationes_meq', 0) <= 0 or an_piper_tot.loc[row.name] <= 0:
             return "Indeterminada (Sin Iones Mayores)"
 
-        # Catión dominante
-        ca = row['pct_Ca']
-        mg = row['pct_Mg']
-        na_k = row['pct_Na_K']
+        # Catión dominante jerárquico
+        ca = float(row.get('pct_Ca', 0.0))
+        mg = float(row.get('pct_Mg', 0.0))
+        na_k = float(row.get('pct_Na_K', 0.0))
 
-        if ca >= 50: cat_dom = "Cálcica"
-        elif mg >= 50: cat_dom = "Magnésica"
-        elif na_k >= 50: cat_dom = "Sódica"
-        elif ca >= mg and ca >= na_k: cat_dom = "Cálcica-Magnésica"
-        elif na_k >= ca and na_k >= mg: cat_dom = "Sódica-Cálcica"
-        else: cat_dom = "Mixta Catiónica"
+        cationes = sorted([
+            (ca, "Cálcica"),
+            (mg, "Magnésica"),
+            (na_k, "Sódica")
+        ], key=lambda x: x[0], reverse=True)
 
-        # Anión dominante
-        hco3 = row['pct_HCO3_CO3']
-        so4 = row['pct_SO4']
-        cl = row['pct_Cl']
+        val1_c, nom1_c = cationes[0]
+        val2_c, nom2_c = cationes[1]
+        val3_c, nom3_c = cationes[2]
 
-        if hco3 >= 50: an_dom = "Bicarbonatada"
-        elif so4 >= 50: an_dom = "Sulfatada"
-        elif cl >= 50: an_dom = "Clorurada"
-        elif hco3 >= so4 and hco3 >= cl: an_dom = "Bicarbonatada-Sulfatada"
-        elif cl >= hco3 and cl >= so4: an_dom = "Clorurada-Sulfatada"
-        else: an_dom = "Mixta Aniónica"
+        if val1_c >= 50.0:
+            cat_dom = nom1_c
+        elif (val1_c - val3_c) < 5.0 and (val1_c - val2_c) < 3.0:
+            cat_dom = "Mixta Catiónica"
+        else:
+            cat_dom = f"{nom1_c}-{nom2_c}"
+
+        # Anión dominante jerárquico
+        hco3 = float(row.get('pct_HCO3_CO3', 0.0))
+        so4 = float(row.get('pct_SO4', 0.0))
+        cl = float(row.get('pct_Cl', 0.0))
+
+        aniones = sorted([
+            (hco3, "Bicarbonatada"),
+            (so4, "Sulfatada"),
+            (cl, "Clorurada")
+        ], key=lambda x: x[0], reverse=True)
+
+        val1_a, nom1_a = aniones[0]
+        val2_a, nom2_a = aniones[1]
+        val3_a, nom3_a = aniones[2]
+
+        if val1_a >= 50.0:
+            an_dom = nom1_a
+        elif (val1_a - val3_a) < 5.0 and (val1_a - val2_a) < 3.0:
+            an_dom = "Mixta Aniónica"
+        else:
+            an_dom = f"{nom1_a}-{nom2_a}"
 
         return f"{an_dom} {cat_dom}"
 
     df['Facies_Piper'] = df.apply(clasificar_facies, axis=1)
+
+    # 5b. Cuadrante del Rombo Central de Piper (Langguth 1966 / Piper 1944)
+    def clasificar_rombo_piper(row):
+        if row.get('Suma_Cationes_meq', 0) <= 0:
+            return "Indeterminado"
+        ca_mg = float(row.get('pct_Ca', 0.0)) + float(row.get('pct_Mg', 0.0))
+        na_k = float(row.get('pct_Na_K', 0.0))
+        hco3_co3 = float(row.get('pct_HCO3_CO3', 0.0))
+        so4_cl = float(row.get('pct_SO4', 0.0)) + float(row.get('pct_Cl', 0.0))
+
+        if ca_mg >= 50.0 and hco3_co3 >= 50.0:
+            return "Oeste - Bicarbonatada Cálcica/Magnésica (Recarga Reciente)"
+        elif na_k >= 50.0 and so4_cl >= 50.0:
+            return "Este - Clorurada/Sulfatada Sódica (Evolucionada / Salina)"
+        elif na_k >= 50.0 and hco3_co3 >= 50.0:
+            return "Sur - Bicarbonatada Sódica (Intercambio Catiónico / Ablandamiento)"
+        elif ca_mg >= 50.0 and so4_cl >= 50.0:
+            return "Norte - Sulfatada/Clorurada Cálcica (Dureza Permanente / Yesos)"
+        else:
+            return "Centro - Transición / Mezcla Hidroquímica"
+
+    df['Cuadrante_Piper'] = df.apply(clasificar_rombo_piper, axis=1)
 
     # 6. Índices para Uso Agrícola y Riego
     # Relación de Adsorción de Sodio (RAS / SAR)
@@ -1364,6 +1409,7 @@ def generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria=None, nombre_ba
         'CBE_pct': 'CBE_PCT',
         'CBE_Calidad': 'CBE_CALID',
         'Facies_Piper': 'FACIES_PIP',
+        'Cuadrante_Piper': 'CUAD_PIPER',
         'RAS': 'RAS_SAR',
         'Clasif_RAS': 'CLASIF_RAS',
         'Pct_Na_Riego': 'PCT_NA_RIE',
@@ -1417,7 +1463,7 @@ def generar_reporte_excel_hidrogeoquimico(df_procesado, df_auditoria=None, clave
             df_auditoria.to_excel(writer, sheet_name='Auditoria_NOM127', index=False)
         df_procesado.to_excel(writer, sheet_name='Resultados_Completos', index=False)
 
-        cols_meq = ['Muestra', 'Tipo_Fuente', 'Facies_Piper', 'CBE_pct', 'CBE_Calidad',
+        cols_meq = ['Muestra', 'Tipo_Fuente', 'Facies_Piper', 'Cuadrante_Piper', 'CBE_pct', 'CBE_Calidad',
                     'Ca_meq_L', 'Mg_meq_L', 'Na_meq_L', 'K_meq_L', 'Suma_Cationes_meq',
                     'HCO3_meq_L', 'CO3_meq_L', 'Cl_meq_L', 'SO4_meq_L', 'NO3_meq_L', 'Suma_Aniones_meq']
         c_meq_pres = [c for c in cols_meq if c in df_procesado.columns]

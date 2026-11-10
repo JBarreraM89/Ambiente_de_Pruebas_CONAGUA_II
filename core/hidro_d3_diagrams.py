@@ -48,6 +48,7 @@ def generar_diagrama_piper_d3(df_procesado):
             "id": id_m,
             "fuente": str(r.get('Tipo_Fuente', 'Fuente')),
             "facies": str(r.get('Facies_Piper', 'N/D')),
+            "cuadrante": str(r.get('Cuadrante_Piper', 'N/D')),
             "cbe": float(r.get('CBE_pct', 0.0)),
             "cbe_calidad": str(r.get('Calidad_CBE', 'N/D')),
             "sdt": float(r.get('SDT_mg_L', 0.0)),
