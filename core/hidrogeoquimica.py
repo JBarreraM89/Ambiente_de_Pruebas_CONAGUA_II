@@ -417,11 +417,19 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
     # CSR = (HCO3 + CO3) - (Ca + Mg)
     df['CSR'] = (df['HCO3_meq_L'] + df['CO3_meq_L']) - (df['Ca_meq_L'] + df['Mg_meq_L'])
 
-    def clasificar_ras(val):
+    def clasificar_ras(val, ce=None):
         if pd.isna(val): return "N/D"
-        if val < 10.0: return "S1 - Bajo Riesgo (Excelente)"
-        elif val < 18.0: return "S2 - Riesgo Medio (Bueno)"
-        elif val < 26.0: return "S3 - Riesgo Alto (Dudoso)"
+        if ce is not None and pd.notna(ce) and float(ce) > 0:
+            log_c = np.log10(max(100.0, min(5000.0, float(ce))))
+            s1_lim = max(1.0, 18.87 - 4.44 * log_c)
+            s2_lim = max(2.0, 31.31 - 6.66 * log_c)
+            s3_lim = max(3.0, 43.75 - 8.87 * log_c)
+        else:
+            s1_lim, s2_lim, s3_lim = 10.0, 18.0, 26.0
+
+        if val < s1_lim: return "S1 - Bajo Riesgo (Excelente)"
+        elif val < s2_lim: return "S2 - Riesgo Medio (Bueno)"
+        elif val < s3_lim: return "S3 - Riesgo Alto (Dudoso)"
         else: return "S4 - Muy Alto (Inadecuado)"
 
     def clasificar_csr(val):
@@ -430,17 +438,28 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
         elif val <= 2.50: return "Marginal (Requiere manejo)"
         else: return "Inadecuado (Peligro de sodificación)"
 
-    df['Clasif_RAS'] = df['RAS'].apply(clasificar_ras)
+    # Clasificación RAS con ajuste semilogarítmico Richards USSL
+    if 'CE_uS_cm' in df.columns:
+        df['Clasif_RAS'] = df.apply(lambda r: clasificar_ras(r.get('RAS'), r.get('CE_uS_cm')), axis=1)
+    else:
+        df['Clasif_RAS'] = df['RAS'].apply(clasificar_ras)
     df['Clasif_CSR'] = df['CSR'].apply(clasificar_csr)
 
-    # 7. Diagrama de Gibbs
-    # Cationes: (Na + K) / (Na + K + Ca)
-    denom_gibbs_cat = df['Na_meq_L'] + df['K_meq_L'] + df['Ca_meq_L']
-    df['Gibbs_Cationes'] = np.where(denom_gibbs_cat > 0, (df['Na_meq_L'] + df['K_meq_L']) / denom_gibbs_cat, np.nan)
+    # 7. Diagrama de Gibbs (Ratios en peso mg/L según Gibbs 1970, con fallback a meq/L)
+    if 'Na_mg_L' in df.columns and 'Ca_mg_L' in df.columns:
+        k_mg = df['K_mg_L'] if 'K_mg_L' in df.columns else 0.0
+        denom_gibbs_cat_mg = df['Na_mg_L'] + k_mg + df['Ca_mg_L']
+        df['Gibbs_Cationes'] = np.where(denom_gibbs_cat_mg > 0, (df['Na_mg_L'] + k_mg) / denom_gibbs_cat_mg, np.nan)
+    else:
+        denom_gibbs_cat = df['Na_meq_L'] + df['K_meq_L'] + df['Ca_meq_L']
+        df['Gibbs_Cationes'] = np.where(denom_gibbs_cat > 0, (df['Na_meq_L'] + df['K_meq_L']) / denom_gibbs_cat, np.nan)
 
-    # Aniones: Cl / (Cl + HCO3)
-    denom_gibbs_an = df['Cl_meq_L'] + df['HCO3_meq_L']
-    df['Gibbs_Aniones'] = np.where(denom_gibbs_an > 0, df['Cl_meq_L'] / denom_gibbs_an, np.nan)
+    if 'Cl_mg_L' in df.columns and 'HCO3_mg_L' in df.columns:
+        denom_gibbs_an_mg = df['Cl_mg_L'] + df['HCO3_mg_L']
+        df['Gibbs_Aniones'] = np.where(denom_gibbs_an_mg > 0, df['Cl_mg_L'] / denom_gibbs_an_mg, np.nan)
+    else:
+        denom_gibbs_an = df['Cl_meq_L'] + df['HCO3_meq_L']
+        df['Gibbs_Aniones'] = np.where(denom_gibbs_an > 0, df['Cl_meq_L'] / denom_gibbs_an, np.nan)
 
     # 8. Relaciones Molares / Iónicas e Indicadores Geoquímicos (en meq/meq)
     df['rNa_rCl'] = np.where(df['Cl_meq_L'] > 0, df['Na_meq_L'] / df['Cl_meq_L'], np.nan)
