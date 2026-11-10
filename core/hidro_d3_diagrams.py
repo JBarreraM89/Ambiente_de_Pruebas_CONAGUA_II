@@ -176,14 +176,18 @@ def generar_diagrama_piper_d3(df_procesado):
 
         const defs = svg.append("defs");
         defs.append("style").text(`
-          .grid-line {{ stroke: #94a3b8; stroke-width: 0.75; stroke-dasharray: 2.5, 2.5; fill: none; opacity: 0.65; }}
-          .grid-line-diamond {{ stroke: #94a3b8; stroke-width: 0.75; stroke-dasharray: 2.5, 2.5; fill: none; opacity: 0.65; }}
-          .boundary-line {{ stroke: #1e293b; stroke-width: 2.0; fill: none; stroke-linejoin: round; }}
-          .axis-label-piper {{ font-size: 11px; font-weight: 700; fill: #334155; text-anchor: middle; font-family: sans-serif; }}
-          .tick-label-piper {{ font-size: 8.5px; fill: #64748b; font-family: sans-serif; text-anchor: middle; }}
-          .sample-pt {{ cursor: pointer; transition: transform 0.15s ease; }}
-          .connection-line {{ opacity: 0.75; transition: stroke-width 0.15s ease, opacity 0.15s ease; }}
-          .connection-line.highlight {{ stroke-width: 2.5 !important; opacity: 1.0 !important; }}
+          polygon, path {{ fill: none; }}
+          .axis-line {{ stroke: #0f172a !important; stroke-width: 1.8 !important; fill: none !important; stroke-linejoin: round; }}
+          .grid-line {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
+          .grid-line-diamond {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
+          .tick-line {{ stroke: #0f172a !important; stroke-width: 1.1 !important; fill: none !important; }}
+          .axis-label-piper {{ font-size: 11px !important; font-weight: 800 !important; fill: #1e293b !important; text-anchor: middle !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+          .ion-label {{ font-size: 13px !important; font-weight: 800 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+          .diamond-axis-label {{ font-size: 11px !important; font-weight: 800 !important; text-anchor: middle !important; dominant-baseline: middle !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; paint-order: stroke fill; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }}
+          .tick-label-piper {{ font-size: 8px !important; font-weight: 600 !important; fill: #475569 !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+          .tick-label-100 {{ font-size: 9.5px !important; font-weight: 700 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+          .sample-pt {{ stroke: #ffffff !important; stroke-width: 1.8 !important; cursor: pointer; }}
+          .connection-line {{ opacity: 0.75 !important; fill: none !important; }}
         `);
 
         // 1. Constantes geométricas canónicas (OMM / UNESCO / A.M. Piper 1944)
@@ -306,17 +310,26 @@ def generar_diagrama_piper_d3(df_procesado):
           .attr("x2", x_d_right).attr("y2", y_d_right)
           .attr("class", "grid-line-diamond");
 
-        // 3. Contornos de Triángulos y Rombo
+        // 3. Contornos de Triángulos y Rombo (con fill="none" explícito)
         gTriangles.append("polygon")
           .attr("points", `${{x_c_left}},${{y_base}} ${{x_c_right}},${{y_base}} ${{x_c_top}},${{y_c_top}}`)
+          .attr("fill", "none")
+          .attr("stroke", "#0f172a")
+          .attr("stroke-width", 1.8)
           .attr("class", "axis-line");
 
         gTriangles.append("polygon")
           .attr("points", `${{x_a_left}},${{y_base}} ${{x_a_right}},${{y_base}} ${{x_a_top}},${{y_a_top}}`)
+          .attr("fill", "none")
+          .attr("stroke", "#0f172a")
+          .attr("stroke-width", 1.8)
           .attr("class", "axis-line");
 
         gDiamond.append("polygon")
           .attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_right}},${{y_d_right}} ${{x_d_top}},${{y_d_top}} ${{x_d_left}},${{y_d_left}}`)
+          .attr("fill", "none")
+          .attr("stroke", "#0f172a")
+          .attr("stroke-width", 1.8)
           .attr("class", "axis-line");
 
         // 4. TICKS Y ETIQUETAS NUMÉRICAS EN TRIÁNGULOS (10, 20, 30... 100)
@@ -377,7 +390,8 @@ def generar_diagrama_piper_d3(df_procesado):
         gTicks.append("text").attr("x", x_a_top + 12).attr("y", y_a_top).attr("class", "tick-label-100").attr("text-anchor", "start").text("100");
         gTicks.append("text").attr("x", x_a_right).attr("y", y_base + 14).attr("class", "tick-label-100").attr("text-anchor", "middle").text("100");
 
-        // 5. TICKS Y ETIQUETAS NUMÉRICAS EN EL ROMBO (10, 20, 30... 100)
+        // 5. TICKS Y ESCALAS NUMÉRICAS SIMÉTRICAS EN EL ROMBO SOLICITADAS POR EL USUARIO:
+        // "los dos vertices que van hacia arriba van de 0 a 90 y los dos de abajo de 0 a 90"
         const d_norm_ul_x = -Math.sqrt(3) / 2.0;
         const d_norm_ul_y = -0.5;
         const d_norm_ur_x = Math.sqrt(3) / 2.0;
@@ -393,25 +407,25 @@ def generar_diagrama_piper_d3(df_procesado):
           const isMajor = (s % 2 === 0);
           const tickLen = isMajor ? 5.0 : 3.0;
 
-          // 5a. Borde Superior-Izquierdo: SO4 + Cl crece de 0 (izq) a 100 (arriba)
+          // 5a. Lado Superior-Izquierdo: sube de left a top (10 a 90 hacia arriba)
           const ul_x = x_d_left + frac * (x_d_top - x_d_left);
           const ul_y = y_d_left + frac * (y_d_top - y_d_left);
           gTicks.append("line").attr("x1", ul_x).attr("y1", ul_y).attr("x2", ul_x + d_norm_ul_x * tickLen).attr("y2", ul_y + d_norm_ul_y * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", ul_x + d_norm_ul_x * 7).attr("y", ul_y + d_norm_ul_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(val);
 
-          // 5b. Borde Superior-Derecho: Na + K crece de 0 (arriba) a 100 (der)
-          const ur_x = x_d_top + frac * (x_d_right - x_d_top);
-          const ur_y = y_d_top + frac * (y_d_right - y_d_top);
+          // 5b. Lado Superior-Derecho: sube de right a top (10 a 90 hacia arriba)
+          const ur_x = x_d_right + frac * (x_d_top - x_d_right);
+          const ur_y = y_d_right + frac * (y_d_top - y_d_right);
           gTicks.append("line").attr("x1", ur_x).attr("y1", ur_y).attr("x2", ur_x + d_norm_ur_x * tickLen).attr("y2", ur_y + d_norm_ur_y * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", ur_x + d_norm_ur_x * 7).attr("y", ur_y + d_norm_ur_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(val);
 
-          // 5c. Borde Inferior-Izquierdo: Ca + Mg crece de 0 (abajo) a 100 (izq)
-          const ll_x = x_d_bot + frac * (x_d_left - x_d_bot);
-          const ll_y = y_d_bot + frac * (y_d_left - y_d_bot);
+          // 5c. Lado Inferior-Izquierdo: baja de left a bot (10 a 90 hacia abajo)
+          const ll_x = x_d_left + frac * (x_d_bot - x_d_left);
+          const ll_y = y_d_left + frac * (y_d_bot - y_d_left);
           gTicks.append("line").attr("x1", ll_x).attr("y1", ll_y).attr("x2", ll_x + d_norm_ll_x * tickLen).attr("y2", ll_y + d_norm_ll_y * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", ll_x + d_norm_ll_x * 7).attr("y", ll_y + d_norm_ll_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(val);
 
-          // 5d. Borde Inferior-Derecho: CO3 + HCO3 crece de 0 (der) a 100 (abajo)
+          // 5d. Lado Inferior-Derecho: baja de right a bot (10 a 90 hacia abajo)
           const lr_x = x_d_right + frac * (x_d_bot - x_d_right);
           const lr_y = y_d_right + frac * (y_d_bot - y_d_right);
           gTicks.append("line").attr("x1", lr_x).attr("y1", lr_y).attr("x2", lr_x + d_norm_lr_x * tickLen).attr("y2", lr_y + d_norm_lr_y * tickLen).attr("class", "tick-line");
@@ -422,7 +436,7 @@ def generar_diagrama_piper_d3(df_procesado):
         // SO4 + Cl, Ca + Mg, Na + K, CO3 + HCO3
         const gDiamondLabels = zoomGroup.append("g").attr("id", "diamond-labels-group");
 
-        // Costado Superior-Izquierdo: SO₄ + Cl
+        // Costado Superior-Izquierdo: SO₄ + Cl (apunta hacia arriba / top)
         const mid_ul_x = (x_d_left + x_d_top) / 2.0;
         const mid_ul_y = (y_d_left + y_d_top) / 2.0;
         gDiamondLabels.append("text")
@@ -432,7 +446,7 @@ def generar_diagrama_piper_d3(df_procesado):
           .attr("class", "diamond-axis-label")
           .text("SO₄ + Cl  →");
 
-        // Costado Superior-Derecho: Na + K
+        // Costado Superior-Derecho: Na + K (apunta hacia arriba / top)
         const mid_ur_x = (x_d_top + x_d_right) / 2.0;
         const mid_ur_y = (y_d_top + y_d_right) / 2.0;
         gDiamondLabels.append("text")
@@ -440,9 +454,9 @@ def generar_diagrama_piper_d3(df_procesado):
           .attr("y", mid_ur_y)
           .attr("transform", `rotate(60, ${{mid_ur_x}}, ${{mid_ur_y}}) translate(0, -28)`)
           .attr("class", "diamond-axis-label")
-          .text("Na + K  →");
+          .text("←  Na + K");
 
-        // Costado Inferior-Izquierdo: Ca + Mg
+        // Costado Inferior-Izquierdo: Ca + Mg (apunta hacia abajo / bot)
         const mid_ll_x = (x_d_left + x_d_bot) / 2.0;
         const mid_ll_y = (y_d_left + y_d_bot) / 2.0;
         gDiamondLabels.append("text")
@@ -450,9 +464,9 @@ def generar_diagrama_piper_d3(df_procesado):
           .attr("y", mid_ll_y)
           .attr("transform", `rotate(60, ${{mid_ll_x}}, ${{mid_ll_y}}) translate(0, 22)`)
           .attr("class", "diamond-axis-label")
-          .text("←  Ca + Mg");
+          .text("Ca + Mg  →");
 
-        // Costado Inferior-Derecho: CO₃ + HCO₃
+        // Costado Inferior-Derecho: CO₃ + HCO₃ (apunta hacia abajo / bot)
         const mid_lr_x = (x_d_bot + x_d_right) / 2.0;
         const mid_lr_y = (y_d_bot + y_d_right) / 2.0;
         gDiamondLabels.append("text")
@@ -657,20 +671,57 @@ def generar_diagrama_piper_d3(df_procesado):
         function zoomOut() {{ svg.transition().duration(250).call(zoom.scaleBy, 0.8); }}
         function resetZoom() {{ svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity); }}
 
-        function descargarSVG() {{
+        function getCleanStandaloneSVG() {{
           const svgEl = document.getElementById("svg-piper");
-          const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", "translate(0,0) scale(1)");
-          if (lupaActive) lensGroup.style("display", "none");
+          const clone = svgEl.cloneNode(true);
+          
+          const cloneLens = clone.querySelector("#lens-group");
+          if (cloneLens) cloneLens.remove();
+
+          const cloneZoom = clone.querySelector("#zoom-group");
+          if (cloneZoom) cloneZoom.setAttribute("transform", "translate(0,0) scale(1)");
+
+          let defs = clone.querySelector("defs");
+          if (!defs) {{
+            defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+            clone.insertBefore(defs, clone.firstChild);
+          }}
+          const styleEl = document.createElementNS("http://www.w3.org/2000/svg", "style");
+          styleEl.textContent = `
+            polygon, path {{ fill: none; }}
+            .axis-line {{ stroke: #0f172a !important; stroke-width: 1.8 !important; fill: none !important; stroke-linejoin: round; }}
+            .grid-line {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
+            .grid-line-diamond {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
+            .tick-line {{ stroke: #0f172a !important; stroke-width: 1.1 !important; fill: none !important; }}
+            .axis-label-piper {{ font-size: 11px !important; font-weight: 800 !important; fill: #1e293b !important; text-anchor: middle !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+            .ion-label {{ font-size: 13px !important; font-weight: 800 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+            .diamond-axis-label {{ font-size: 11px !important; font-weight: 800 !important; text-anchor: middle !important; dominant-baseline: middle !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; paint-order: stroke fill; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }}
+            .tick-label-piper {{ font-size: 8px !important; font-weight: 600 !important; fill: #475569 !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+            .tick-label-100 {{ font-size: 9.5px !important; font-weight: 700 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
+            .sample-pt {{ stroke: #ffffff !important; stroke-width: 1.8 !important; }}
+            .connection-line {{ opacity: 0.75 !important; fill: none !important; }}
+          `;
+          defs.appendChild(styleEl);
+
+          const polys = clone.querySelectorAll("polygon");
+          polys.forEach(p => {{
+            if (!p.classList.contains("sample-pt")) {{
+              p.setAttribute("fill", "none");
+              p.setAttribute("stroke", "#0f172a");
+              p.setAttribute("stroke-width", "1.8");
+            }}
+          }});
 
           const serializer = new XMLSerializer();
-          let source = serializer.serializeToString(svgEl);
+          let source = serializer.serializeToString(clone);
           if (!source.includes("xmlns=")) {{
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
+          return source;
+        }}
 
-          zoomGroup.attr("transform", prevTransform);
-
+        function descargarSVG() {{
+          const source = getCleanStandaloneSVG();
           const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="no"?> ';
           const blob = new Blob([xmlHeader + source], {{type: "image/svg+xml;charset=utf-8"}});
           const url = URL.createObjectURL(blob);
@@ -684,19 +735,7 @@ def generar_diagrama_piper_d3(df_procesado):
         }}
 
         function descargarPNG() {{
-          const svgEl = document.getElementById("svg-piper");
-          const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", "translate(0,0) scale(1)");
-          if (lupaActive) lensGroup.style("display", "none");
-
-          const serializer = new XMLSerializer();
-          let source = serializer.serializeToString(svgEl);
-          if (!source.includes("xmlns=")) {{
-            source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
-          }}
-
-          zoomGroup.attr("transform", prevTransform);
-
+          const source = getCleanStandaloneSVG();
           const canvas = document.createElement("canvas");
           const scale = 3.125;
           canvas.width = w * scale;
