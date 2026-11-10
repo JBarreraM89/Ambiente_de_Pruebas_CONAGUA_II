@@ -176,7 +176,6 @@ def generar_diagrama_piper_d3(df_procesado):
 
         const defs = svg.append("defs");
         defs.append("style").text(`
-          polygon, path {{ fill: none; }}
           .axis-line {{ stroke: #0f172a !important; stroke-width: 1.8 !important; fill: none !important; stroke-linejoin: round; }}
           .grid-line {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
           .grid-line-diamond {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
@@ -576,22 +575,31 @@ def generar_diagrama_piper_d3(df_procesado):
           // Punto Catiónico
           grp.append("circle")
             .attr("cx", xc).attr("cy", yc).attr("r", 5.5)
-            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
+            .attr("fill", m.color)
+            .attr("stroke", "#ffffff")
+            .attr("stroke-width", 1.8)
+            .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
             .attr("class", "sample-pt pt-cat")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
           // Punto Aniónico
           grp.append("circle")
             .attr("cx", xa).attr("cy", ya).attr("r", 5.5)
-            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
+            .attr("fill", m.color)
+            .attr("stroke", "#ffffff")
+            .attr("stroke-width", 1.8)
+            .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
             .attr("class", "sample-pt pt-an")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
-          // Punto Central en el Diamante
+          // Punto Central en el Diamante (Relleno de color asegurado con style !important)
           const rd = 7.0;
           grp.append("polygon")
             .attr("points", `${{xd}},${{yd - rd}} ${{xd + rd}},${{yd}} ${{xd}},${{yd + rd}} ${{xd - rd}},${{yd}}`)
-            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
+            .attr("fill", m.color)
+            .attr("stroke", "#ffffff")
+            .attr("stroke-width", 1.8)
+            .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
             .attr("class", "sample-pt pt-dia")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
         }});
@@ -688,7 +696,6 @@ def generar_diagrama_piper_d3(df_procesado):
           }}
           const styleEl = document.createElementNS("http://www.w3.org/2000/svg", "style");
           styleEl.textContent = `
-            polygon, path {{ fill: none; }}
             .axis-line {{ stroke: #0f172a !important; stroke-width: 1.8 !important; fill: none !important; stroke-linejoin: round; }}
             .grid-line {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
             .grid-line-diamond {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
