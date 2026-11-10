@@ -28,9 +28,12 @@ import pandas as pd
 def generar_diagrama_piper_d3(df_procesado):
     """
     Construye un Diagrama de Piper vectorial interactivo en D3.js / SVG puro:
-      - Cationes (Ca, Mg, Na+K) y Aniones (HCO3+CO3, SO4, Cl).
-      - Diamante central con las 4 facies hidrogeoquímicas sombreadas.
-      - Líneas de conexión trilineales dinámicas con hover interactivo.
+      - Geometría canónica oficial (OMM / UNESCO / A.M. Piper 1944).
+      - Triángulos equiláteros y rombo central en disposición armónica.
+      - Rejilla dashed cada 10% (0.1 a 0.9).
+      - Rótulos de facies centrados en cada cuadrante con halo protector (sin encimarse).
+      - Botón para alternar etiquetas de facies ON/OFF.
+      - Tooltip inteligente que detecta bordes y se invierte arriba del cursor cerca del borde inferior.
       - Controles de Zoom, Paneo, Lupa de Aumento (2.5x) y Descarga SVG/PNG 300 DPI.
     """
     muestras_data = []
@@ -98,11 +101,17 @@ def generar_diagrama_piper_d3(df_procesado):
         svg {{ width: 100%; height: 100%; display: block; }}
         #piper-tooltip {{
           position: absolute; display: none; z-index: 9999;
-          background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
+          background: rgba(255, 255, 255, 0.98); backdrop-filter: blur(8px);
           border: 1px solid #cbd5e1; border-top: 3px solid #691C32;
-          border-radius: 6px; box-shadow: 0 4px 18px rgba(0,0,0,0.18);
-          padding: 8px 12px; font-size: 11.5px; color: #1e293b;
-          pointer-events: none; max-width: 280px; line-height: 1.45;
+          border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,0.22);
+          padding: 9px 13px; font-size: 11.5px; color: #1e293b;
+          pointer-events: none; width: 280px; line-height: 1.45;
+        }}
+        .facies-label {{
+          font-size: 11px; font-weight: 700; text-anchor: middle; dominant-baseline: middle;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          paint-order: stroke fill; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round;
+          pointer-events: none; opacity: 0.92;
         }}
       </style>
     </head>
@@ -117,6 +126,9 @@ def generar_diagrama_piper_d3(df_procesado):
           <button class="btn-toolbar" onclick="resetZoom()" title="Restablecer tamaño original (100%)"><span>🔄</span> 1:1</button>
           <button class="btn-toolbar" id="btn-lupa" onclick="toggleLupa()" title="Activar/Desactivar Lupa de Aumento">
             <span>🔎</span> Lupa <span id="lupa-status" style="font-size:9.5px; opacity:0.85;">OFF</span>
+          </button>
+          <button class="btn-toolbar active" id="btn-facies" onclick="toggleFacies()" title="Alternar Etiquetas de Facies">
+            <span>🏷️</span> Facies
           </button>
           <span id="zoom-level" style="font-size:11px; font-weight:600; color:#64748b; margin: 0 4px;">100%</span>
           <div style="height: 18px; width: 1px; background: #cbd5e1; margin: 0 4px;"></div>
@@ -133,28 +145,34 @@ def generar_diagrama_piper_d3(df_procesado):
         const dataMuestras = {muestras_json_str};
 
         const width = 960;
-        const height = 780;
-        const L = 260.0;
-        const H = L * Math.sqrt(3) / 2.0;
+        const height = 800;
+        const y_base = 715.0;
+        const gap = 64.0;
+        const x_center = width / 2.0; // 480.0
+        const L = 330.0;
+        const H = L * Math.sqrt(3) / 2.0; // 285.79
 
-        const x_c_left = 110.0, y_c_base = 730.0;
-        const x_c_right = x_c_left + L, y_c_right = y_c_base;
-        const x_c_top = (x_c_left + x_c_right) / 2.0, y_c_top = y_c_base - H;
+        const x_c_right = x_center - gap / 2.0; // 448.0
+        const x_c_left = x_c_right - L;          // 118.0
+        const x_c_top = (x_c_left + x_c_right) / 2.0; // 283.0
+        const y_c_top = y_base - H;              // 429.21
 
-        const x_a_left = 590.0, y_a_base = 730.0;
-        const x_a_right = x_a_left + L, y_a_right = y_a_base;
-        const x_a_top = (x_a_left + x_a_right) / 2.0, y_a_top = y_a_base - H;
+        const x_a_left = x_center + gap / 2.0;   // 512.0
+        const x_a_right = x_a_left + L;          // 842.0
+        const x_a_top = (x_a_left + x_a_right) / 2.0; // 677.0
+        const y_a_top = y_base - H;              // 429.21
 
-        const x_d_bot = 480.0, y_d_bot = y_c_top;
-        const x_d_left = x_d_bot - L / 2.0, y_d_left = y_d_bot - H;
-        const x_d_right = x_d_bot + L / 2.0, y_d_right = y_d_bot - H;
-        const x_d_top = x_d_bot, y_d_top = y_d_bot - 2.0 * H;
-        const x_center = x_d_bot, y_center = y_d_left;
-
-        const x_m_bl = (x_d_bot + x_d_left) / 2.0, y_m_bl = y_d_bot - H / 2.0;
-        const x_m_br = (x_d_bot + x_d_right) / 2.0, y_m_br = y_d_bot - H / 2.0;
-        const x_m_tl = (x_d_left + x_d_top) / 2.0, y_m_tl = y_d_left - H / 2.0;
-        const x_m_tr = (x_d_right + x_d_top) / 2.0, y_m_tr = y_d_right - H / 2.0;
+        // Central Diamond (Rhombus)
+        const L_d = 310.0;
+        const H_d = L_d * Math.sqrt(3) / 2.0; // 268.47
+        const y_d_bot = 645.0;
+        const x_d_bot = x_center;             // 480.0
+        const x_d_left = x_center - L_d / 2.0; // 325.0
+        const y_d_left = y_d_bot - H_d;       // 376.53
+        const x_d_right = x_center + L_d / 2.0; // 635.0
+        const y_d_right = y_d_bot - H_d;      // 376.53
+        const x_d_top = x_center;             // 480.0
+        const y_d_top = y_d_bot - 2.0 * H_d;  // 108.06
 
         const svg = d3.select("#piper-svg-container")
           .append("svg")
@@ -175,108 +193,135 @@ def generar_diagrama_piper_d3(df_procesado):
 
         const defs = svg.append("defs");
         defs.append("style").text(`
-          .axis-label {{ font-size: 13px; font-weight: 700; fill: #0f172a; text-anchor: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-          .axis-title-cat, .axis-title-an {{ font-size: 11.5px; font-weight: 700; fill: #691C32; text-anchor: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-          .grid-line {{ stroke: #e2e8f0; stroke-width: 0.85; stroke-dasharray: 2, 2; fill: none; }}
-          .border-line {{ stroke: #1e293b; stroke-width: 2.2; fill: none; }}
+          .axis-label {{ font-size: 13px; font-weight: 700; fill: #0f172a; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+          .axis-title-cat, .axis-title-an {{ font-size: 12px; font-weight: 700; fill: #691C32; text-anchor: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+          .grid-line {{ stroke: #94a3b8; stroke-width: 0.75; stroke-dasharray: 2.5, 2.5; fill: none; }}
+          .border-line {{ stroke: #0f172a; stroke-width: 1.8; fill: none; }}
           .center-dash {{ stroke: #64748b; stroke-width: 1.1; stroke-dasharray: 4, 3; fill: none; }}
-          .tick-label {{ font-size: 9px; fill: #64748b; font-weight: 600; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-          .quad-label {{ font-size: 10.5px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-          .quad-sub {{ font-size: 8.5px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-          .sample-pt {{ cursor: pointer; }}
+          .tick-label {{ font-size: 9.5px; fill: #475569; font-weight: 600; text-anchor: middle; dominant-baseline: middle; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+          .sample-pt {{ cursor: pointer; transition: transform 0.15s ease; }}
           .connection-line {{ fill: none; stroke-dasharray: 3, 3; opacity: 0.65; }}
         `);
 
-        // Cuadrantes sombreados dentro de zoomGroup
-        zoomGroup.append("polygon").attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_m_bl}},${{y_m_bl}} ${{x_center}},${{y_center}} ${{x_m_br}},${{y_m_br}}`).attr("fill", "#0284c7").attr("fill-opacity", 0.08);
-        zoomGroup.append("polygon").attr("points", `${{x_center}},${{y_center}} ${{x_m_tl}},${{y_m_tl}} ${{x_d_top}},${{y_d_top}} ${{x_m_tr}},${{y_m_tr}}`).attr("fill", "#dc2626").attr("fill-opacity", 0.08);
-        zoomGroup.append("polygon").attr("points", `${{x_m_bl}},${{y_m_bl}} ${{x_d_left}},${{y_d_left}} ${{x_m_tl}},${{y_m_tl}} ${{x_center}},${{y_center}}`).attr("fill", "#7c3aed").attr("fill-opacity", 0.08);
-        zoomGroup.append("polygon").attr("points", `${{x_m_br}},${{y_m_br}} ${{x_center}},${{y_center}} ${{x_m_tr}},${{y_m_tr}} ${{x_d_right}},${{y_d_right}}`).attr("fill", "#d97706").attr("fill-opacity", 0.08);
+        // Cuadrantes sombreados con relleno muy suave
+        const gFaciesBg = zoomGroup.append("g").attr("class", "facies-bg");
+        gFaciesBg.append("polygon").attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_left}},${{y_d_left}} ${{x_center}},${{y_d_left}}`).attr("fill", "#0284c7").attr("fill-opacity", 0.05);
+        gFaciesBg.append("polygon").attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_right}},${{y_d_right}} ${{x_center}},${{y_d_left}}`).attr("fill", "#0284c7").attr("fill-opacity", 0.05);
+        gFaciesBg.append("polygon").attr("points", `${{x_center}},${{y_d_left}} ${{x_d_left}},${{y_d_left}} ${{x_d_top}},${{y_d_top}}`).attr("fill", "#dc2626").attr("fill-opacity", 0.05);
+        gFaciesBg.append("polygon").attr("points", `${{x_center}},${{y_d_left}} ${{x_d_right}},${{y_d_right}} ${{x_d_top}},${{y_d_top}}`).attr("fill", "#dc2626").attr("fill-opacity", 0.05);
 
-        // Rejillas internas
-        const pcts = [0.2, 0.4, 0.6, 0.8];
+        // Rejillas internas cada 10%
+        const pcts = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
         const gGrid = zoomGroup.append("g").attr("class", "grids");
 
+        // Cationes (Triángulo Izquierdo)
         pcts.forEach(pct => {{
-          const yh = y_c_base - pct * H;
+          const yh = y_base - pct * H;
           const x1 = x_c_left + pct * (L / 2.0);
           const x2 = x_c_right - pct * (L / 2.0);
-          gGrid.append("line").attr("x1", x1).attr("y1", yh).attr("x2", x2).attr("y2", yh).attr("class", "grid-line").attr("fill", "none");
-
-          const x_start = x_c_left + pct * L;
-          const x_end = x_c_left + L / 2.0 + pct * (L / 2.0);
-          const y_end = y_c_base - H * (1.0 - pct);
-          gGrid.append("line").attr("x1", x_start).attr("y1", y_c_base).attr("x2", x_end).attr("y2", y_end).attr("class", "grid-line").attr("fill", "none");
+          gGrid.append("line").attr("x1", x1).attr("y1", yh).attr("x2", x2).attr("y2", yh).attr("class", "grid-line");
 
           const x_start_ca = x_c_right - pct * L;
-          const x_end_ca = x_c_left + L / 2.0 - pct * (L / 2.0);
-          gGrid.append("line").attr("x1", x_start_ca).attr("y1", y_c_base).attr("x2", x_end_ca).attr("y2", y_end).attr("class", "grid-line").attr("fill", "none");
+          const x_end_ca = x_c_left + (1.0 - pct) * (L / 2.0);
+          const y_end_ca = y_base - (1.0 - pct) * H;
+          gGrid.append("line").attr("x1", x_start_ca).attr("y1", y_base).attr("x2", x_end_ca).attr("y2", y_end_ca).attr("class", "grid-line");
+
+          const x_start_nak = x_c_left + pct * L;
+          const x_end_nak = x_c_left + L / 2.0 + pct * (L / 2.0);
+          const y_end_nak = y_base - (1.0 - pct) * H;
+          gGrid.append("line").attr("x1", x_start_nak).attr("y1", y_base).attr("x2", x_end_nak).attr("y2", y_end_nak).attr("class", "grid-line");
         }});
 
+        // Aniones (Triángulo Derecho)
         pcts.forEach(pct => {{
-          const yh = y_a_base - pct * H;
+          const yh = y_base - pct * H;
           const x1 = x_a_left + pct * (L / 2.0);
           const x2 = x_a_right - pct * (L / 2.0);
-          gGrid.append("line").attr("x1", x1).attr("y1", yh).attr("x2", x2).attr("y2", yh).attr("class", "grid-line").attr("fill", "none");
-
-          const x_start = x_a_left + pct * L;
-          const x_end = x_a_left + L / 2.0 + pct * (L / 2.0);
-          const y_end = y_a_base - H * (1.0 - pct);
-          gGrid.append("line").attr("x1", x_start).attr("y1", y_a_base).attr("x2", x_end).attr("y2", y_end).attr("class", "grid-line").attr("fill", "none");
+          gGrid.append("line").attr("x1", x1).attr("y1", yh).attr("x2", x2).attr("y2", yh).attr("class", "grid-line");
 
           const x_start_hco3 = x_a_right - pct * L;
-          const x_end_hco3 = x_a_left + L / 2.0 - pct * (L / 2.0);
-          gGrid.append("line").attr("x1", x_start_hco3).attr("y1", y_a_base).attr("x2", x_end_hco3).attr("y2", y_end).attr("class", "grid-line").attr("fill", "none");
+          const x_end_hco3 = x_a_left + (1.0 - pct) * (L / 2.0);
+          const y_end_hco3 = y_base - (1.0 - pct) * H;
+          gGrid.append("line").attr("x1", x_start_hco3).attr("y1", y_base).attr("x2", x_end_hco3).attr("y2", y_end_hco3).attr("class", "grid-line");
+
+          const x_start_cl = x_a_left + pct * L;
+          const x_end_cl = x_a_left + L / 2.0 + pct * (L / 2.0);
+          const y_end_cl = y_base - (1.0 - pct) * H;
+          gGrid.append("line").attr("x1", x_start_cl).attr("y1", y_base).attr("x2", x_end_cl).attr("y2", y_end_cl).attr("class", "grid-line");
         }});
 
+        // Diamante Central
         pcts.forEach(pct => {{
-          const x1 = x_d_bot + pct * (x_d_right - x_d_bot);
-          const y1 = y_d_bot + pct * (y_d_right - y_d_bot);
-          const x2 = x_d_left + pct * (x_d_top - x_d_left);
-          const y2 = y_d_left + pct * (y_d_top - y_d_left);
-          gGrid.append("line").attr("x1", x1).attr("y1", y1).attr("x2", x2).attr("y2", y2).attr("class", "grid-line").attr("fill", "none");
+          const x1 = x_d_bot + pct * (x_d_left - x_d_bot);
+          const y1 = y_d_bot + pct * (y_d_left - y_d_bot);
+          const x2 = x_d_right + pct * (x_d_top - x_d_right);
+          const y2 = y_d_right + pct * (y_d_top - y_d_right);
+          gGrid.append("line").attr("x1", x1).attr("y1", y1).attr("x2", x2).attr("y2", y2).attr("class", "grid-line");
 
-          const x3 = x_d_bot + pct * (x_d_left - x_d_bot);
-          const y3 = y_d_bot + pct * (y_d_left - y_d_bot);
-          const x4 = x_d_right + pct * (x_d_top - x_d_right);
-          const y4 = y_d_right + pct * (y_d_top - y_d_right);
-          gGrid.append("line").attr("x1", x3).attr("y1", y3).attr("x2", x4).attr("y2", y4).attr("class", "grid-line").attr("fill", "none");
+          const x3 = x_d_bot + pct * (x_d_right - x_d_bot);
+          const y3 = y_d_bot + pct * (y_d_right - y_d_bot);
+          const x4 = x_d_left + pct * (x_d_top - x_d_left);
+          const y4 = y_d_left + pct * (y_d_top - y_d_left);
+          gGrid.append("line").attr("x1", x3).attr("y1", y3).attr("x2", x4).attr("y2", y4).attr("class", "grid-line");
         }});
 
-        // Bordes
+        // Bordes Sólidos
         const gBorders = zoomGroup.append("g").attr("class", "borders");
-        gBorders.append("polygon").attr("points", `${{x_c_left}},${{y_c_base}} ${{x_c_right}},${{y_c_base}} ${{x_c_top}},${{y_c_top}}`).attr("fill", "none").attr("stroke", "#1e293b").attr("stroke-width", 2.2).attr("class", "border-line");
-        gBorders.append("polygon").attr("points", `${{x_a_left}},${{y_a_base}} ${{x_a_right}},${{y_a_base}} ${{x_a_top}},${{y_a_top}}`).attr("fill", "none").attr("stroke", "#1e293b").attr("stroke-width", 2.2).attr("class", "border-line");
-        gBorders.append("polygon").attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_right}},${{y_d_right}} ${{x_d_top}},${{y_d_top}} ${{x_d_left}},${{y_d_left}}`).attr("fill", "none").attr("stroke", "#1e293b").attr("stroke-width", 2.2).attr("class", "border-line");
-        gBorders.append("line").attr("x1", x_d_left).attr("y1", y_d_left).attr("x2", x_d_right).attr("y2", y_d_right).attr("class", "center-dash").attr("fill", "none");
-        gBorders.append("line").attr("x1", x_d_bot).attr("y1", y_d_bot).attr("x2", x_d_top).attr("y2", y_d_top).attr("class", "center-dash").attr("fill", "none");
+        gBorders.append("polygon").attr("points", `${{x_c_left}},${{y_base}} ${{x_c_right}},${{y_base}} ${{x_c_top}},${{y_c_top}}`).attr("class", "border-line");
+        gBorders.append("polygon").attr("points", `${{x_a_left}},${{y_base}} ${{x_a_right}},${{y_base}} ${{x_a_top}},${{y_a_top}}`).attr("class", "border-line");
+        gBorders.append("polygon").attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_right}},${{y_d_right}} ${{x_d_top}},${{y_d_top}} ${{x_d_left}},${{y_d_left}}`).attr("class", "border-line");
+        gBorders.append("line").attr("x1", x_d_left).attr("y1", y_d_left).attr("x2", x_d_right).attr("y2", y_d_right).attr("class", "center-dash");
+        gBorders.append("line").attr("x1", x_d_bot).attr("y1", y_d_bot).attr("x2", x_d_top).attr("y2", y_d_top).attr("class", "center-dash");
 
-        // Rótulos
+        // Etiquetas y Ticks (Fiel a la geometría oficial de publicación)
         const gLabels = zoomGroup.append("g").attr("class", "labels");
-        gLabels.append("text").attr("x", x_c_left - 15).attr("y", y_c_base + 8).text("Ca²⁺").attr("class", "axis-label");
-        gLabels.append("text").attr("x", x_c_right + 25).attr("y", y_c_base + 8).text("Na⁺+K⁺").attr("class", "axis-label");
-        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_top - 12).text("Mg²⁺").attr("class", "axis-label");
-        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_base + 32).text("CATIONES (% meq/L) →").attr("class", "axis-title-cat");
 
-        gLabels.append("text").attr("x", x_a_left - 30).attr("y", y_a_base + 8).text("HCO₃⁻+CO₃²⁻").attr("class", "axis-label");
-        gLabels.append("text").attr("x", x_a_right + 18).attr("y", y_a_base + 8).text("Cl⁻").attr("class", "axis-label");
-        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_top - 12).text("SO₄²⁻").attr("class", "axis-label");
-        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_base + 32).text("← ANIONES (% meq/L)").attr("class", "axis-title-an");
+        // Cationes
+        gLabels.append("text").attr("x", x_c_left - 28).attr("y", y_base + 6).text("Ca²⁺").attr("class", "axis-label");
+        gLabels.append("text").attr("x", x_c_left).attr("y", y_base + 18).text("100").attr("class", "tick-label");
+        gLabels.append("text").attr("x", x_c_right).attr("y", y_base + 18).text("100%").attr("class", "tick-label");
+        gLabels.append("text").attr("x", x_c_right).attr("y", y_base + 32).text("Na⁺+K⁺").attr("class", "axis-label");
 
-        gLabels.append("text").attr("x", x_d_bot).attr("y", y_d_bot - 16).text("Bicarbonatada Cálcica").attr("class", "quad-label").attr("fill", "#166534");
-        gLabels.append("text").attr("x", x_d_bot).attr("y", y_d_bot - 4).text("Recarga Fresca de Montaña").attr("class", "quad-sub").attr("fill", "#166534");
+        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_top - 20).text("Mg²⁺").attr("class", "axis-label");
+        gLabels.append("text").attr("x", x_c_top - 16).attr("y", y_c_top - 6).text("100").attr("class", "tick-label");
+        gLabels.append("text").attr("x", x_c_top).attr("y", y_base + 46).text("CATIONES (% meq/L) →").attr("class", "axis-title-cat");
 
-        gLabels.append("text").attr("x", x_d_top).attr("y", y_d_top + 16).text("Clorurada Sódica").attr("class", "quad-label").attr("fill", "#991b1b");
-        gLabels.append("text").attr("x", x_d_top).attr("y", y_d_top + 28).text("Salina / Intrusión / Profunda").attr("class", "quad-sub").attr("fill", "#991b1b");
+        // Aniones
+        gLabels.append("text").attr("x", x_a_left).attr("y", y_base + 18).text("100%").attr("class", "tick-label");
+        gLabels.append("text").attr("x", x_a_left).attr("y", y_base + 32).text("HCO₃⁻").attr("class", "axis-label");
+        gLabels.append("text").attr("x", x_a_right).attr("y", y_base + 18).text("100").attr("class", "tick-label");
+        gLabels.append("text").attr("x", x_a_right + 28).attr("y", y_base + 6).text("Cl⁻").attr("class", "axis-label");
 
-        gLabels.append("text").attr("x", x_d_left - 8).attr("y", y_d_left).text("Bicarbonatada Sódica").attr("class", "quad-label").attr("fill", "#6b21a8").attr("transform", `rotate(-45, ${{x_d_left - 8}}, ${{y_d_left}})`);
-        gLabels.append("text").attr("x", x_d_right + 8).attr("y", y_d_right).text("Sulfatada Cálcica").attr("class", "quad-label").attr("fill", "#92400e").attr("transform", `rotate(45, ${{x_d_right + 8}}, ${{y_d_right}})`);
+        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_top - 20).text("SO₄²⁻").attr("class", "axis-label");
+        gLabels.append("text").attr("x", x_a_top + 16).attr("y", y_a_top - 6).text("100").attr("class", "tick-label");
+        gLabels.append("text").attr("x", x_a_top).attr("y", y_base + 46).text("← ANIONES (% meq/L)").attr("class", "axis-title-an");
 
-        pcts.forEach(pct => {{
-          const txt = Math.round(pct * 100);
-          gLabels.append("text").attr("x", x_c_left + pct * L).attr("y", y_c_base + 12).text(txt).attr("class", "tick-label");
-          gLabels.append("text").attr("x", x_a_left + pct * L).attr("y", y_a_base + 12).text(txt).attr("class", "tick-label");
+        // Ticks cada 20%
+        const tick_pcts = [0.2, 0.4, 0.6, 0.8];
+        tick_pcts.forEach(pct => {{
+          const val = Math.round(pct * 100);
+
+          // Base Cationes: Ca disminuye hacia la derecha
+          gLabels.append("text").attr("x", x_c_left + (1.0 - pct) * L).attr("y", y_base + 16).text(val).attr("class", "tick-label");
+          // Borde Izquierdo Cationes: Mg aumenta hacia arriba
+          gLabels.append("text").attr("x", x_c_left + pct * (L / 2.0) - 14).attr("y", y_base - pct * H).text(val).attr("class", "tick-label");
+          // Borde Derecho Cationes: Mg aumenta hacia arriba
+          gLabels.append("text").attr("x", x_c_right - pct * (L / 2.0) + 14).attr("y", y_base - pct * H).text(val).attr("class", "tick-label");
+
+          // Base Aniones: Cl aumenta hacia la derecha
+          gLabels.append("text").attr("x", x_a_left + pct * L).attr("y", y_base + 16).text(val).attr("class", "tick-label");
+          // Borde Izquierdo Aniones: SO4 aumenta hacia arriba
+          gLabels.append("text").attr("x", x_a_left + pct * (L / 2.0) - 14).attr("y", y_base - pct * H).text(val).attr("class", "tick-label");
+          // Borde Derecho Aniones: SO4 aumenta hacia arriba
+          gLabels.append("text").attr("x", x_a_right - pct * (L / 2.0) + 14).attr("y", y_base - pct * H).text(val).attr("class", "tick-label");
         }});
+
+        // Etiquetas de Tipos de Agua (Facies) centradas en cada cuadrante sin encimarse
+        const gFaciesLabels = zoomGroup.append("g").attr("id", "facies-labels-group");
+        gFaciesLabels.append("text").attr("x", x_center).attr("y", y_d_bot - H_d / 2.0).text("Bicarbonatada Cálcica").attr("class", "facies-label").attr("fill", "#166534");
+        gFaciesLabels.append("text").attr("x", x_center).attr("y", y_d_top + H_d / 2.0).text("Clorurada Sódica").attr("class", "facies-label").attr("fill", "#991b1b");
+        gFaciesLabels.append("text").attr("x", x_center - L_d / 4.0).attr("y", y_d_left).text("Bicarbonatada Sódica").attr("class", "facies-label").attr("fill", "#6b21a8");
+        gFaciesLabels.append("text").attr("x", x_center + L_d / 4.0).attr("y", y_d_right).text("Sulfatada Cálcica").attr("class", "facies-label").attr("fill", "#92400e");
 
         // Muestras y Conexiones
         const gConnections = zoomGroup.append("g").attr("class", "connections");
@@ -291,13 +336,13 @@ def generar_diagrama_piper_d3(df_procesado):
           const v_an = (m.cl_pct + m.so4_pct) / 100.0;
 
           const xc = x_c_left + u_cat * L + 0.5 * mg_val * L;
-          const yc = y_c_base - mg_val * H;
+          const yc = y_base - mg_val * H;
 
           const xa = x_a_left + cl_val * L + 0.5 * so4_val * L;
-          const ya = y_a_base - so4_val * H;
+          const ya = y_base - so4_val * H;
 
-          const xd = x_d_bot + 0.5 * (v_an - u_cat) * L;
-          const yd = y_d_bot - (u_cat + v_an) * H;
+          const xd = x_d_bot + 0.5 * (v_an - u_cat) * L_d;
+          const yd = y_d_bot - (u_cat + v_an) * H_d;
 
           const conn = gConnections.append("polyline")
             .attr("points", `${{xc}},${{yc}} ${{xd}},${{yd}} ${{xa}},${{ya}}`)
@@ -307,13 +352,13 @@ def generar_diagrama_piper_d3(df_procesado):
             .attr("class", `connection-line conn-${{i}}`);
 
           const showTip = (event) => {{
-            conn.classed("highlight", true).attr("stroke-width", 2.2).attr("stroke-opacity", 1.0);
+            conn.classed("highlight", true).attr("stroke-width", 2.4).attr("stroke-opacity", 1.0);
             d3.selectAll(`.pt-group-${{i}}`).raise().selectAll("circle, polygon").attr("stroke-width", 3.0);
 
             const tipHtml = `
               <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:12px;">🧪 ${{m.id}}</div>
               <div style="color:#475569; font-size:11px; margin-bottom:6px;"><b>Fuente:</b> ${{m.fuente}}</div>
-              <div style="background:#f1f5f9; padding:4px 8px; border-radius:4px; margin-bottom:6px;">
+              <div style="background:#f1f5f9; padding:5px 8px; border-radius:4px; margin-bottom:6px;">
                 <b>Facies:</b> <span style="color:${{m.color}}; font-weight:700;">${{m.facies}}</span><br>
                 <b>Error Balance (CBE):</b> ${{m.cbe >= 0 ? '+' : ''}}${{m.cbe.toFixed(2)}}% (${{m.cbe_calidad}})<br>
                 <b>SDT:</b> ${{m.sdt.toLocaleString()}} mg/L | <b>CE:</b> ${{m.ce.toLocaleString()}} µS/cm<br>
@@ -324,10 +369,32 @@ def generar_diagrama_piper_d3(df_procesado):
                 <b>Aniones:</b> HCO₃⁻=${{m.hco3_pct.toFixed(1)}}%, SO₄²⁻=${{m.so4_pct.toFixed(1)}}%, Cl⁻=${{m.cl_pct.toFixed(1)}}%
               </div>
             `;
-            tooltip.html(tipHtml)
-              .style("left", (event.pageX + 14) + "px")
-              .style("top", (event.pageY - 28) + "px")
-              .style("display", "block");
+            tooltip.html(tipHtml).style("display", "block");
+
+            // Control Inteligente de Posicionamiento: Evita recorte inferior o lateral
+            const container = document.getElementById("piper-svg-container");
+            const cRect = container.getBoundingClientRect();
+            const mouseX = event.clientX - cRect.left;
+            const mouseY = event.clientY - cRect.top;
+
+            const tipEl = tooltip.node();
+            const tipW = tipEl.offsetWidth || 280;
+            const tipH = tipEl.offsetHeight || 160;
+
+            let leftPos = mouseX + 16;
+            if (leftPos + tipW > cRect.width - 12) {{
+              leftPos = Math.max(10, mouseX - tipW - 16);
+            }}
+
+            let topPos = mouseY - 15;
+            if (topPos + tipH > cRect.height - 12) {{
+              // Invierte hacia ARRIBA del cursor cuando está cerca de la parte inferior
+              topPos = Math.max(10, mouseY - tipH - 12);
+            }}
+
+            tooltip
+              .style("left", leftPos + "px")
+              .style("top", topPos + "px");
           }};
 
           const hideTip = () => {{
@@ -341,22 +408,29 @@ def generar_diagrama_piper_d3(df_procesado):
           grp.append("circle")
             .attr("cx", xc).attr("cy", yc).attr("r", 5.5)
             .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
-            .attr("class", "sample-pt")
+            .attr("class", "sample-pt pt-cat")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
           grp.append("circle")
             .attr("cx", xa).attr("cy", ya).attr("r", 5.5)
             .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
-            .attr("class", "sample-pt")
+            .attr("class", "sample-pt pt-an")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
           const rd = 7.0;
           grp.append("polygon")
             .attr("points", `${{xd}},${{yd - rd}} ${{xd + rd}},${{yd}} ${{xd}},${{yd + rd}} ${{xd - rd}},${{yd}}`)
             .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
-            .attr("class", "sample-pt")
+            .attr("class", "sample-pt pt-diam")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
         }});
+
+        let faciesVisible = true;
+        function toggleFacies() {{
+          faciesVisible = !faciesVisible;
+          d3.select("#btn-facies").classed("active", faciesVisible);
+          d3.select("#facies-labels-group").style("display", faciesVisible ? "block" : "none");
+        }}
 
         // Componentes de la Lupa (Magnifier Lens)
         const lensGroup = svg.append("g").attr("id", "lens-group").style("display", "none").style("pointer-events", "none");
@@ -459,12 +533,7 @@ def generar_diagrama_piper_d3(df_procesado):
           if (!source.includes("xmlns=")) {{
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
-
-          zoomGroup.attr("transform", prevTransform);
-          if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
-
-          const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="no"?> ';
-          const blob = new Blob([xmlHeader + source], {{type: "image/svg+xml;charset=utf-8"}});
+          const blob = new Blob([source], {{ type: "image/svg+xml;charset=utf-8" }});
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
@@ -472,7 +541,8 @@ def generar_diagrama_piper_d3(df_procesado):
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
-          setTimeout(() => URL.revokeObjectURL(url), 1000);
+          URL.revokeObjectURL(url);
+          if (prevTransform) zoomGroup.attr("transform", prevTransform);
         }}
 
         function descargarPNG() {{
@@ -482,36 +552,31 @@ def generar_diagrama_piper_d3(df_procesado):
 
           const svgEl = document.getElementById("svg-piper");
           const serializer = new XMLSerializer();
-          let source = serializer.serializeToString(svgEl);
-          if (!source.includes("xmlns=")) {{
-            source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
-          }}
-
-          zoomGroup.attr("transform", prevTransform);
-          if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
-
+          const svgStr = serializer.serializeToString(svgEl);
           const img = new Image();
-          const svgBlob = new Blob([source], {{type: "image/svg+xml;charset=utf-8"}});
+          const svgBlob = new Blob([svgStr], {{ type: "image/svg+xml;charset=utf-8" }});
           const url = URL.createObjectURL(svgBlob);
+
           img.onload = function() {{
             const canvas = document.createElement("canvas");
-            const scale = 3.0;
+            const scale = 3.125; // 300 DPI (960 * 3.125 = 3000px)
             canvas.width = width * scale;
             canvas.height = height * scale;
             const ctx = canvas.getContext("2d");
-            ctx.scale(scale, scale);
             ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, width, height);
-            ctx.drawImage(img, 0, 0, width, height);
-            URL.revokeObjectURL(url);
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
-            const pngUrl = canvas.toDataURL("image/png");
-            const a = document.createElement("a");
-            a.href = pngUrl;
-            a.download = "Diagrama_Piper_300DPI_CONAGUA.png";
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            canvas.toBlob(function(blob) {{
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = "Diagrama_Piper_300DPI_CONAGUA.png";
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+              if (prevTransform) zoomGroup.attr("transform", prevTransform);
+            }}, "image/png");
           }};
           img.src = url;
         }}
@@ -523,7 +588,7 @@ def generar_diagrama_piper_d3(df_procesado):
 
 
 # =============================================================================
-# 2. DIAGRAMAS DE STIFF VECTORIAL D3.JS
+# 2. DIAGRAMA DE STIFF VECTORIAL D3.JS
 # =============================================================================
 def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
     """
@@ -1075,9 +1140,15 @@ def generar_diagrama_schoeller_d3(df_procesado):
           dots.on("mouseover", (event, d) => {{
             highlight();
             tooltip.html(`<b>${{m.id}}</b><br>${{d.label}}: ${{d.val.toFixed(2)}} meq/L<br>Facies: ${{m.facies}}`)
-              .style("left", (event.clientX + 12) + "px")
-              .style("top", (event.clientY - 24) + "px")
-              .style("display", "block");
+              ;
+            const tNode = tooltip.node();
+            const tW = tNode.offsetWidth || 180;
+            const tH = tNode.offsetHeight || 65;
+            let lPos = event.clientX + 12;
+            if (lPos + tW > window.innerWidth - 10) lPos = Math.max(10, event.clientX - tW - 12);
+            let tPos = event.clientY - 24;
+            if (tPos + tH > window.innerHeight - 10) tPos = Math.max(10, event.clientY - tH - 12);
+            tooltip.style("left", lPos + "px").style("top", tPos + "px").style("display", "block");
           }}).on("mouseout", () => {{
             unhighlight();
             tooltip.style("display", "none");
@@ -1397,7 +1468,15 @@ def generar_diagrama_wilcox_d3(df_procesado):
                 <b>% Sodio Soluble:</b> ${{m.pct_na.toFixed(1)}}%<br>
                 <b>RAS:</b> ${{m.ras.toFixed(2)}}<br>
                 <b>Facies:</b> ${{m.facies}}
-              `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+              );
+              const tNode = tooltip.node();
+              const tW = tNode.offsetWidth || 220;
+              const tH = tNode.offsetHeight || 110;
+              let lPos = event.clientX + 14;
+              if (lPos + tW > window.innerWidth - 10) lPos = Math.max(10, event.clientX - tW - 14);
+              let tPos = event.clientY - 20;
+              if (tPos + tH > window.innerHeight - 10) tPos = Math.max(10, event.clientY - tH - 12);
+              tooltip.style("left", lPos + "px").style("top", tPos + "px").style("display", "block");
             }})
             .on("mouseout", () => {{ tooltip.style("display", "none"); }});
         }});
@@ -1710,7 +1789,15 @@ def generar_diagrama_riverside_d3(df_procesado):
                 <b>RAS:</b> ${{m.ras.toFixed(2)}}<br>
                 <b>Diagnóstico:</b> ${{m.clasif}}<br>
                 <b>Facies:</b> ${{m.facies}}
-              `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+              );
+              const tNode = tooltip.node();
+              const tW = tNode.offsetWidth || 220;
+              const tH = tNode.offsetHeight || 110;
+              let lPos = event.clientX + 14;
+              if (lPos + tW > window.innerWidth - 10) lPos = Math.max(10, event.clientX - tW - 14);
+              let tPos = event.clientY - 20;
+              if (tPos + tH > window.innerHeight - 10) tPos = Math.max(10, event.clientY - tH - 12);
+              tooltip.style("left", lPos + "px").style("top", tPos + "px").style("display", "block");
             }})
             .on("mouseout", () => {{ tooltip.style("display", "none"); }});
         }});
@@ -2042,7 +2129,15 @@ def generar_diagrama_gibbs_d3(df_procesado):
                     <b>${{xLabel}}:</b> ${{xVal.toFixed(2)}}<br>
                     <b>SDT:</b> ${{m.sdt.toLocaleString()}} mg/L<br>
                     <b>Facies:</b> ${{m.facies}}
-                  `).style("left", (event.clientX + 14) + "px").style("top", (event.clientY - 20) + "px").style("display", "block");
+                  );
+                  const tNode = tooltip.node();
+                  const tW = tNode.offsetWidth || 200;
+                  const tH = tNode.offsetHeight || 95;
+                  let lPos = event.clientX + 14;
+                  if (lPos + tW > window.innerWidth - 10) lPos = Math.max(10, event.clientX - tW - 14);
+                  let tPos = event.clientY - 20;
+                  if (tPos + tH > window.innerHeight - 10) tPos = Math.max(10, event.clientY - tH - 12);
+                  tooltip.style("left", lPos + "px").style("top", tPos + "px").style("display", "block");
                 }})
                 .on("mouseout", () => {{ tooltip.style("display", "none"); }});
             }}
