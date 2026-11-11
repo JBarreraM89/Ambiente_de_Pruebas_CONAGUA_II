@@ -291,65 +291,94 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
             if vals and np.percentile(vals, 75) < 20.0 and np.median(vals) < 10.0:
                 es_meq = True
 
-    # 1. Conversión de concentraciones
+    # 1. Conversión de concentraciones (Estricto: SIN estimaciones ni fillna(0.0) arbitrarios)
     for ion, datos in PESOS_EQUIVALENTES.items():
         col_mg = f"{ion}_mg_L"
         col_meq = f"{ion}_meq_L"
         if es_meq:
             if col_mg in df.columns:
-                df[col_meq] = pd.to_numeric(df[col_mg], errors='coerce').fillna(0.0)
+                df[col_meq] = pd.to_numeric(df[col_mg], errors='coerce')
                 df[col_mg] = df[col_meq] * datos['eq_wt']
             else:
-                df[col_meq] = 0.0
-                df[col_mg] = 0.0
+                df[col_meq] = np.nan
+                df[col_mg] = np.nan
         else:
             if col_mg in df.columns:
-                df[col_meq] = pd.to_numeric(df[col_mg], errors='coerce').fillna(0.0) / datos['eq_wt']
+                df[col_meq] = pd.to_numeric(df[col_mg], errors='coerce') / datos['eq_wt']
             else:
-                df[col_meq] = 0.0
+                df[col_meq] = np.nan
+                df[col_mg] = np.nan
 
-    # Soporte para Na+K consolidado si no hay Na o K separados
-    if ('Na_meq_L' not in df.columns or df['Na_meq_L'].sum() == 0) and 'Na_K_meq_L' in df.columns:
-        nak = pd.to_numeric(df['Na_K_meq_L'], errors='coerce').fillna(0.0)
-        df['Na_meq_L'] = nak * 0.90
-        df['K_meq_L'] = nak * 0.10
-        df['Na_mg_L'] = df['Na_meq_L'] * PESOS_EQUIVALENTES['Na']['eq_wt']
-        df['K_mg_L'] = df['K_meq_L'] * PESOS_EQUIVALENTES['K']['eq_wt']
+    # Manejo de Na+K:
+    if 'Na_meq_L' in df.columns and 'K_meq_L' in df.columns and df['Na_meq_L'].notna().any():
+        df['Na_K_meq_L'] = df['Na_meq_L'] + df['K_meq_L'].fillna(0.0)
+    elif 'Na_meq_L' in df.columns and df['Na_meq_L'].notna().any() and 'Na_K_meq_L' not in df.columns:
+        df['Na_K_meq_L'] = df['Na_meq_L']
+    elif 'Na_K_meq_L' in df.columns:
+        df['Na_K_meq_L'] = pd.to_numeric(df['Na_K_meq_L'], errors='coerce')
 
-    # Soporte para HCO3+CO3 consolidado si no hay HCO3 o CO3 separados
-    if ('HCO3_meq_L' not in df.columns or df['HCO3_meq_L'].sum() == 0) and 'HCO3_CO3_meq_L' in df.columns:
-        hco3_co3 = pd.to_numeric(df['HCO3_CO3_meq_L'], errors='coerce').fillna(0.0)
-        df['HCO3_meq_L'] = hco3_co3
+    # Manejo de HCO3+CO3:
+    if 'HCO3_CO3_meq_L' in df.columns and ('HCO3_meq_L' not in df.columns or df['HCO3_meq_L'].isna().all()):
+        df['HCO3_meq_L'] = pd.to_numeric(df['HCO3_CO3_meq_L'], errors='coerce')
         df['CO3_meq_L'] = 0.0
-        df['HCO3_mg_L'] = df['HCO3_meq_L'] * PESOS_EQUIVALENTES['HCO3']['eq_wt']
-        df['CO3_mg_L'] = 0.0
 
-    # Si se reportó N-NO3 en lugar de NO3, convertir: NO3 = N-NO3 * 4.427
-    if 'NO3_mg_L' not in df.columns and 'N_NO3_mg_L' in df.columns:
+    # Conversión N-NO3 a NO3 si aplica
+    if ('NO3_mg_L' not in df.columns or df['NO3_mg_L'].isna().all()) and 'N_NO3_mg_L' in df.columns:
         df['NO3_mg_L'] = df['N_NO3_mg_L'] * 4.427
         df['NO3_meq_L'] = df['NO3_mg_L'] / PESOS_EQUIVALENTES['NO3']['eq_wt']
 
-    # Si no hay HCO3 pero hay alcalinidad o CO3
-    if 'HCO3_mg_L' not in df.columns and 'Alcalinidad_mg_L' in df.columns:
-        df['HCO3_mg_L'] = df['Alcalinidad_mg_L'] * 1.22
-        df['HCO3_meq_L'] = df['HCO3_mg_L'] / PESOS_EQUIVALENTES['HCO3']['eq_wt']
+    # Carbonato CO3 por defecto en 0.0 solo si HCO3 está medido (aguas naturales pH < 8.3)
+    if 'CO3_meq_L' not in df.columns or df['CO3_meq_L'].isna().all():
+        df['CO3_meq_L'] = np.where(df['HCO3_meq_L'].notna(), 0.0, np.nan)
+        df['CO3_mg_L'] = np.where(df['HCO3_meq_L'].notna(), 0.0, np.nan)
+    else:
+        df['CO3_meq_L'] = df['CO3_meq_L'].fillna(0.0)
 
-    # 2. Sumas iónicas
-    df['Suma_Cationes_meq'] = df['Ca_meq_L'] + df['Mg_meq_L'] + df['Na_meq_L'] + df['K_meq_L']
-    df['Suma_Aniones_meq'] = df['HCO3_meq_L'] + df['CO3_meq_L'] + df['Cl_meq_L'] + df['SO4_meq_L'] + (df['NO3_meq_L'] if 'NO3_meq_L' in df.columns else 0.0)
+    # Evaluación de completitud analítica para el Diagrama de Piper
+    # Requiere obligatoriamente: Ca²⁺, Mg²⁺, (Na⁺+K⁺), HCO₃⁻, SO₄²⁻, Cl⁻ (todos medidos >= 0)
+    has_ca = df['Ca_meq_L'].notna() & (df['Ca_meq_L'] >= 0)
+    has_mg = df['Mg_meq_L'].notna() & (df['Mg_meq_L'] >= 0)
+    has_nak = df['Na_K_meq_L'].notna() & (df['Na_K_meq_L'] >= 0)
+    has_hco3 = df['HCO3_meq_L'].notna() & (df['HCO3_meq_L'] >= 0)
+    has_so4 = df['SO4_meq_L'].notna() & (df['SO4_meq_L'] >= 0)
+    has_cl = df['Cl_meq_L'].notna() & (df['Cl_meq_L'] >= 0)
 
-    # Estimaciones físicas si no se reportaron CE o SDT (para diagramas de Wilcox, Riverside y Gibbs)
-    if 'CE_uS_cm' not in df.columns or df['CE_uS_cm'].isna().all() or (df['CE_uS_cm'] == 0).all():
-        df['CE_uS_cm'] = np.where(df['Suma_Aniones_meq'] > 0, (df['Suma_Aniones_meq'] * 100.0).round(1), 250.0)
-    if 'SDT_mg_L' not in df.columns or df['SDT_mg_L'].isna().all() or (df['SDT_mg_L'] == 0).all():
-        df['SDT_mg_L'] = (df['CE_uS_cm'] * 0.65).round(1)
-    if 'pH' not in df.columns or df['pH'].isna().all():
-        df['pH'] = 7.5
+    apta_piper = has_ca & has_mg & has_nak & has_hco3 & has_so4 & has_cl
+    df['Apta_Piper'] = apta_piper
+
+    def identificar_faltantes(r):
+        falt = []
+        if pd.isna(r.get('Ca_meq_L')): falt.append('Ca²⁺')
+        if pd.isna(r.get('Mg_meq_L')): falt.append('Mg²⁺')
+        if pd.isna(r.get('Na_K_meq_L')): falt.append('Na⁺/K⁺')
+        if pd.isna(r.get('HCO3_meq_L')): falt.append('HCO₃⁻')
+        if pd.isna(r.get('SO4_meq_L')): falt.append('SO₄²⁻')
+        if pd.isna(r.get('Cl_meq_L')): falt.append('Cl⁻')
+        return f"Faltan: {', '.join(falt)}" if falt else "Completo"
+
+    df['Iones_Faltantes'] = df.apply(identificar_faltantes, axis=1)
+
+    # 2. Sumas iónicas (Sólo si los iones requeridos están presentes; de lo contrario NaN)
+    df['Suma_Cationes_meq'] = np.where(
+        has_ca & has_mg & has_nak,
+        df['Ca_meq_L'] + df['Mg_meq_L'] + df['Na_K_meq_L'],
+        np.nan
+    )
+    
+    no3_val = df['NO3_meq_L'].fillna(0.0) if 'NO3_meq_L' in df.columns else 0.0
+    df['Suma_Aniones_meq'] = np.where(
+        has_hco3 & has_so4 & has_cl,
+        df['HCO3_meq_L'] + df['CO3_meq_L'].fillna(0.0) + df['Cl_meq_L'] + df['SO4_meq_L'] + no3_val,
+        np.nan
+    )
 
     # 3. Error de Balance Iónico (% CBE - Charge Balance Error)
-    # CBE = (Cationes - Aniones) / (Cationes + Aniones) * 100
     denom = df['Suma_Cationes_meq'] + df['Suma_Aniones_meq']
-    df['CBE_pct'] = np.where(denom > 0, ((df['Suma_Cationes_meq'] - df['Suma_Aniones_meq']) / denom) * 100.0, np.nan)
+    df['CBE_pct'] = np.where(
+        apta_piper & (denom > 0),
+        ((df['Suma_Cationes_meq'] - df['Suma_Aniones_meq']) / denom) * 100.0,
+        np.nan
+    )
 
     def clasificar_cbe(val):
         if pd.isna(val): return "Sin datos de iones mayores"
@@ -358,28 +387,29 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
         elif abs_v <= 10.0: return "Aceptable (5 - 10%)"
         else: return "Discrepancia Analítica (> 10%)"
 
-    df['CBE_Calidad'] = df['CBE_pct'].apply(clasificar_cbe)
+    df['CBE_Calidad'] = np.where(
+        apta_piper,
+        df['CBE_pct'].apply(clasificar_cbe),
+        "Incompleta (Faltan iones mayores)"
+    )
 
-    # 4. Porcentajes para Piper (Normalización Ternaria Estricta)
+    # 4. Porcentajes para Piper (Normalización Ternaria Estricta - Sólo muestras aptas)
     cat_tot = df['Suma_Cationes_meq']
-    df['pct_Ca'] = np.where(cat_tot > 0, (df['Ca_meq_L'] / cat_tot) * 100.0, 0.0)
-    df['pct_Mg'] = np.where(cat_tot > 0, (df['Mg_meq_L'] / cat_tot) * 100.0, 0.0)
-    df['pct_Na_K'] = np.where(cat_tot > 0, ((df['Na_meq_L'] + df['K_meq_L']) / cat_tot) * 100.0, 0.0)
+    df['pct_Ca'] = np.where(apta_piper & (cat_tot > 0), (df['Ca_meq_L'] / cat_tot) * 100.0, np.nan)
+    df['pct_Mg'] = np.where(apta_piper & (cat_tot > 0), (df['Mg_meq_L'] / cat_tot) * 100.0, np.nan)
+    df['pct_Na_K'] = np.where(apta_piper & (cat_tot > 0), (df['Na_K_meq_L'] / cat_tot) * 100.0, np.nan)
 
-    # Nota hidrogeoquímica estándar (Piper 1944 / Back 1966):
-    # La proyección trilineal aniónica se normaliza estrictamente sobre la tríada canónica (HCO3+CO3, SO4, Cl).
-    # El ion NO3- se excluye de la base ternaria para garantizar que la suma sume exactamente 100.0%.
-    an_piper_tot = (df['HCO3_meq_L'] + df['CO3_meq_L']) + df['SO4_meq_L'] + df['Cl_meq_L']
-    df['pct_HCO3_CO3'] = np.where(an_piper_tot > 0, ((df['HCO3_meq_L'] + df['CO3_meq_L']) / an_piper_tot) * 100.0, 0.0)
-    df['pct_SO4'] = np.where(an_piper_tot > 0, (df['SO4_meq_L'] / an_piper_tot) * 100.0, 0.0)
-    df['pct_Cl'] = np.where(an_piper_tot > 0, (df['Cl_meq_L'] / an_piper_tot) * 100.0, 0.0)
+    an_piper_tot = df['HCO3_meq_L'] + df['CO3_meq_L'].fillna(0.0) + df['SO4_meq_L'] + df['Cl_meq_L']
+    df['pct_HCO3_CO3'] = np.where(apta_piper & (an_piper_tot > 0), ((df['HCO3_meq_L'] + df['CO3_meq_L'].fillna(0.0)) / an_piper_tot) * 100.0, np.nan)
+    df['pct_SO4'] = np.where(apta_piper & (an_piper_tot > 0), (df['SO4_meq_L'] / an_piper_tot) * 100.0, np.nan)
+    df['pct_Cl'] = np.where(apta_piper & (an_piper_tot > 0), (df['Cl_meq_L'] / an_piper_tot) * 100.0, np.nan)
 
     # 5. Determinación Jerárquica Dinámica de Facies Hidroquímica (Back 1966 / Custodio & Llamas)
     def clasificar_facies(row):
-        if row.get('Suma_Cationes_meq', 0) <= 0 or an_piper_tot.loc[row.name] <= 0:
-            return "Indeterminada (Sin Iones Mayores)"
+        if not row.get('Apta_Piper', False):
+            falt = row.get('Iones_Faltantes', '')
+            return f"Análisis Incompleto ({falt})" if falt else "Análisis Incompleto"
 
-        # Catión dominante jerárquico
         ca = float(row.get('pct_Ca', 0.0))
         mg = float(row.get('pct_Mg', 0.0))
         na_k = float(row.get('pct_Na_K', 0.0))
@@ -401,7 +431,6 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
         else:
             cat_dom = f"{nom1_c}-{nom2_c}"
 
-        # Anión dominante jerárquico
         hco3 = float(row.get('pct_HCO3_CO3', 0.0))
         so4 = float(row.get('pct_SO4', 0.0))
         cl = float(row.get('pct_Cl', 0.0))
@@ -429,8 +458,8 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
 
     # 5b. Cuadrante del Rombo Central de Piper (Langguth 1966 / Piper 1944)
     def clasificar_rombo_piper(row):
-        if row.get('Suma_Cationes_meq', 0) <= 0:
-            return "Indeterminado"
+        if not row.get('Apta_Piper', False):
+            return "Incompleto"
         ca_mg = float(row.get('pct_Ca', 0.0)) + float(row.get('pct_Mg', 0.0))
         na_k = float(row.get('pct_Na_K', 0.0))
         hco3_co3 = float(row.get('pct_HCO3_CO3', 0.0))
@@ -448,7 +477,6 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
             return "Centro - Transición / Mezcla Hidroquímica"
 
     df['Cuadrante_Piper'] = df.apply(clasificar_rombo_piper, axis=1)
-
     # 6. Índices para Uso Agrícola y Riego
     # Relación de Adsorción de Sodio (RAS / SAR)
     ca_mg_half = (df['Ca_meq_L'] + df['Mg_meq_L']) / 2.0
@@ -1410,6 +1438,8 @@ def generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria=None, nombre_ba
         'CBE_Calidad': 'CBE_CALID',
         'Facies_Piper': 'FACIES_PIP',
         'Cuadrante_Piper': 'CUAD_PIPER',
+        'Apta_Piper': 'APTA_PIP',
+        'Iones_Faltantes': 'FALTANTES',
         'RAS': 'RAS_SAR',
         'Clasif_RAS': 'CLASIF_RAS',
         'Pct_Na_Riego': 'PCT_NA_RIE',
@@ -1463,7 +1493,7 @@ def generar_reporte_excel_hidrogeoquimico(df_procesado, df_auditoria=None, clave
             df_auditoria.to_excel(writer, sheet_name='Auditoria_NOM127', index=False)
         df_procesado.to_excel(writer, sheet_name='Resultados_Completos', index=False)
 
-        cols_meq = ['Muestra', 'Tipo_Fuente', 'Facies_Piper', 'Cuadrante_Piper', 'CBE_pct', 'CBE_Calidad',
+        cols_meq = ['Muestra', 'Tipo_Fuente', 'Apta_Piper', 'Iones_Faltantes', 'Facies_Piper', 'Cuadrante_Piper', 'CBE_pct', 'CBE_Calidad',
                     'Ca_meq_L', 'Mg_meq_L', 'Na_meq_L', 'K_meq_L', 'Suma_Cationes_meq',
                     'HCO3_meq_L', 'CO3_meq_L', 'Cl_meq_L', 'SO4_meq_L', 'NO3_meq_L', 'Suma_Aniones_meq']
         c_meq_pres = [c for c in cols_meq if c in df_procesado.columns]

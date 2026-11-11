@@ -555,11 +555,15 @@ with tab_piper:
         </div>
     """, unsafe_allow_html=True)
 
+    n_incomp = int((~df_procesado['Apta_Piper']).sum()) if 'Apta_Piper' in df_procesado.columns else 0
+    if n_incomp > 0:
+        st.warning(f"⚠️ **{n_incomp} muestra(s) no fueron proyectadas en el diagrama trilineal** por carecer de la serie analítica completa de iones mayores (Ca²⁺, Mg²⁺, Na⁺/K⁺, HCO₃⁻, SO₄²⁻, Cl⁻). Los valores ausentes no se estimaron para preservar el rigor analítico oficial.")
+
     col_p_plot, col_p_info = st.columns([7.5, 4.5], gap="large")
 
     with col_p_plot:
         html_piper_d3 = generar_diagrama_piper_d3(df_procesado)
-        st.iframe(html_piper_d3, height=820)
+        st.iframe(html_piper_d3, height=880)
 
     with col_p_info:
         with st.container(border=True):
@@ -595,7 +599,7 @@ with tab_piper:
 
     with st.expander("📋 Tabla Detallada de Parámetros Trilineales, Balance Iónico e Índice de Revelle", expanded=False):
         cols_piper_tab = [
-            'Muestra', 'Tipo_Fuente', 'Facies_Piper', 'Cuadrante_Piper', 'CBE_pct', 'CBE_Calidad',
+            'Muestra', 'Tipo_Fuente', 'Apta_Piper', 'Iones_Faltantes', 'Facies_Piper', 'Cuadrante_Piper', 'CBE_pct', 'CBE_Calidad',
             'Suma_Cationes_meq', 'Suma_Aniones_meq', 'pct_Ca', 'pct_Mg', 'pct_Na_K',
             'pct_HCO3_CO3', 'pct_SO4', 'pct_Cl', 'Indice_Revelle', 'Clasif_Revelle'
         ]

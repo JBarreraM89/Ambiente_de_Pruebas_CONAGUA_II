@@ -27,33 +27,56 @@ import pandas as pd
 # =============================================================================
 def generar_diagrama_piper_d3(df_procesado):
     """
-    Construye un Diagrama de Piper vectorial interactivo en D3.js / SVG puro:
-      - Geometría canónica oficial (OMM / UNESCO / A.M. Piper 1944).
-      - Triángulos equiláteros y rombo central en disposición armónica exacta.
-      - Intersección analítica cerrada exacta de los rayos a 60° (Cationes) y 120° (Aniones).
-      - Rejilla dashed cada 10% (0.1 a 0.9).
-      - Rótulos de facies canónicos centrados en cada cuadrante con halo protector (sin encimarse).
-      - Botón para alternar etiquetas de facies ON/OFF.
-      - Tooltip inteligente anti-recorte con detección de bordes inferior y lateral.
-      - Controles de Zoom, Paneo, Lupa de Aumento (2.5x) y Descarga SVG/PNG 300 DPI.
+    Genera el HTML + D3.js autónomo e interactivo para el Diagrama Trilineal de Piper.
+    Incluye:
+      - Normalización ternaria estricta OMM / UNESCO.
+      - Barra de herramientas con buscador/selector de MUESTRA INDIVIDUAL (con proyección automática de rayos).
+      - Conmutadores (pills) para ENCENDER/APAGAR familias de facies o AISLAR con doble clic.
+      - Alternancia entre Modo Fantasma (atenuado) y Modo Ocultar.
+      - Rótulos de ejes del rombo SO4+Cl, Ca+Mg, Na+K, CO3+HCO3.
+      - Tooltip inteligente anti-recorte.
+      - Controles de Zoom, Paneo, Lupa de Aumento (2.5x) y Descarga SVG/PNG 300 DPI respetando filtros activos.
     """
     muestras_data = []
     colores_paleta = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 
+    facies_paleta_base = {
+        "Bicarbonatada Magnésica-Sódica": "#0891b2",
+        "Bicarbonatada Sódica": "#7c3aed",
+        "Bicarbonatada Sódica-Magnésica": "#9333ea",
+        "Bicarbonatada Magnésica": "#16a34a",
+        "Bicarbonatada Magnésica-Cálcica": "#059669",
+        "Bicarbonatada Cálcica-Magnésica": "#0284c7",
+        "Bicarbonatada Sódica-Cálcica": "#c026d3",
+        "Bicarbonatada Cálcica": "#0369a1",
+        "Bicarbonatada Mixta Catiónica": "#64748b",
+        "Bicarbonatada Cálcica-Sódica": "#0ea5e9",
+        "Sulfatada Magnésica-Sódica": "#d97706",
+        "Clorurada Sódica": "#dc2626",
+        "Sulfatada Cálcica": "#b45309"
+    }
+
+    # Filtrar estrictamente muestras aptas con coordenadas completas
     for idx, r in df_procesado.iterrows():
+        if 'Apta_Piper' in df_procesado.columns and not r.get('Apta_Piper', True):
+            continue
+        if pd.isna(r.get('pct_Ca')) or pd.isna(r.get('pct_HCO3_CO3')):
+            continue
+
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
-        color_pt = colores_paleta[idx % len(colores_paleta)]
+        fac = str(r.get('Facies_Piper', 'N/D'))
+        color_pt = facies_paleta_base.get(fac, colores_paleta[idx % len(colores_paleta)])
 
         muestras_data.append({
             "id": id_m,
             "fuente": str(r.get('Tipo_Fuente', 'Fuente')),
-            "facies": str(r.get('Facies_Piper', 'N/D')),
+            "facies": fac,
             "cuadrante": str(r.get('Cuadrante_Piper', 'N/D')),
-            "cbe": float(r.get('CBE_pct', 0.0)),
-            "cbe_calidad": str(r.get('Calidad_CBE', 'N/D')),
-            "sdt": float(r.get('SDT_mg_L', 0.0)),
-            "ce": float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65)),
-            "revelle": float(r.get('Revelle_Index', 0.0)),
+            "cbe": float(r.get('CBE_pct', 0.0)) if pd.notna(r.get('CBE_pct')) else 0.0,
+            "cbe_calidad": str(r.get('CBE_Calidad', 'N/D')),
+            "sdt": float(r.get('SDT_mg_L', 0.0)) if pd.notna(r.get('SDT_mg_L')) else 0.0,
+            "ce": float(r.get('CE_uS_cm', 0.0)) if pd.notna(r.get('CE_uS_cm')) else 0.0,
+            "revelle": float(r.get('Indice_Revelle', 0.0)) if pd.notna(r.get('Indice_Revelle')) else 0.0,
             "ca_pct": float(r.get('pct_Ca', 0.0)),
             "mg_pct": float(r.get('pct_Mg', 0.0)),
             "nak_pct": float(r.get('pct_Na_K', 0.0)),
@@ -65,6 +88,39 @@ def generar_diagrama_piper_d3(df_procesado):
 
     muestras_json_str = json.dumps(muestras_data)
 
+    # Conteo por familia de facies
+    facies_counts = {}
+    for m in muestras_data:
+        f = m["facies"]
+        facies_counts[f] = facies_counts.get(f, 0) + 1
+
+    facies_list = sorted(list(facies_counts.keys()))
+    facies_list_json = json.dumps(facies_list)
+
+    # Generar opciones de select de muestras
+    options_muestras_html = "\n".join([
+        f'<option value="{m["id"]}">{m["id"]} ({m["fuente"]})</option>'
+        for m in muestras_data
+    ])
+
+    # Generar badges/pills de facies
+    badges_list = []
+    for f_nom in facies_list:
+        cnt = facies_counts[f_nom]
+        col = facies_paleta_base.get(f_nom, "#0284c7")
+        f_esc = f_nom.replace('"', '&quot;').replace("'", "\\'")
+        badges_list.append(f"""
+          <button class="facies-badge-btn active" data-facies="{f_esc}" onclick="toggleFacies('{f_esc}', event)" ondblclick="isolateFacies('{f_esc}')" title="Clic: Encender/Apagar | Doble clic: Aislar esta familia">
+            <span class="facies-dot" style="background:{col};"></span>
+            <span class="facies-name">{f_nom}</span>
+            <span class="facies-count">{cnt}</span>
+          </button>
+        """)
+    facies_badges_html = "".join(badges_list)
+
+    n_incomp = len(df_procesado) - len(muestras_data)
+    aviso_incomp_html = f'<span style="font-size:10px; color:#b91c1c; font-weight:700; background:#fee2e2; padding:3px 8px; border-radius:10px; margin-left:6px;">⚠️ {n_incomp} no proyectadas (faltan iones)</span>' if n_incomp > 0 else ''
+
     html_code = f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -75,11 +131,11 @@ def generar_diagrama_piper_d3(df_procesado):
       <style>
         body {{
           margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-          background: #ffffff; user-select: none; overflow: hidden;
+          background: #ffffff; user-select: none; display: flex; flex-direction: column; height: 100vh; overflow: hidden;
         }}
         .toolbar-piper {{
           display: flex; justify-content: space-between; align-items: center;
-          padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+          padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; flex-shrink: 0;
         }}
         .btn-toolbar {{
           background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px;
@@ -88,8 +144,59 @@ def generar_diagrama_piper_d3(df_procesado):
         }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
+        
+        /* Barra de Control Interactivo de Muestras y Facies */
+        .controls-bar-piper {{
+          display: flex; flex-direction: column; gap: 6px;
+          padding: 7px 16px; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; flex-shrink: 0;
+        }}
+        .ctrl-group-sample {{
+          display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+        }}
+        .ctrl-group-facies {{
+          display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+        }}
+        .ctrl-label {{
+          font-size: 11px; font-weight: 700; color: #334155; white-space: nowrap;
+        }}
+        .select-piper {{
+          background: #ffffff; border: 1px solid #94a3b8; border-radius: 4px;
+          padding: 4px 8px; font-size: 11px; font-weight: 600; color: #1e293b;
+          max-width: 290px; outline: none; cursor: pointer;
+        }}
+        .select-piper:focus {{ border-color: #691C32; }}
+        .btn-ctrl-tag {{
+          background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;
+          padding: 3px 8px; font-size: 10.5px; font-weight: 600; color: #475569;
+          cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 3px;
+        }}
+        .btn-ctrl-tag:hover {{ background: #e2e8f0; color: #0f172a; }}
+        .btn-ctrl-tag.active {{ background: #691C32; color: #ffffff; border-color: #691C32; }}
+        .facies-badges-scroll {{
+          display: flex; gap: 5px; align-items: center; flex-wrap: wrap;
+        }}
+        .facies-badge-btn {{
+          background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px;
+          padding: 2px 8px; font-size: 10.5px; font-weight: 600; color: #334155;
+          cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 4px;
+        }}
+        .facies-badge-btn:hover {{ border-color: #691C32; }}
+        .facies-badge-btn.active {{
+          background: #ffffff; border-color: #691C32; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }}
+        .facies-badge-btn.inactive {{
+          background: #f8fafc; border-color: #e2e8f0; color: #94a3b8; opacity: 0.55; text-decoration: line-through;
+        }}
+        .facies-dot {{
+          width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+        }}
+        .facies-count {{
+          background: #e2e8f0; color: #334155; padding: 1px 5px; border-radius: 8px; font-size: 9.5px; font-weight: 700;
+        }}
+        .facies-badge-btn.active .facies-count {{ background: #691C32; color: #ffffff; }}
+
         #piper-svg-container {{
-          width: 100%; height: 720px; position: relative; background: #ffffff; overflow: hidden;
+          flex: 1; width: 100%; position: relative; background: #ffffff; overflow: hidden;
           cursor: grab;
         }}
         #piper-svg-container.grabbing {{ cursor: grabbing; }}
@@ -132,8 +239,9 @@ def generar_diagrama_piper_d3(df_procesado):
     </head>
     <body>
       <div class="toolbar-piper">
-        <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap;">
+        <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap; display:flex; align-items:center;">
           🧪 Diagrama Trilineal de Piper (OMM / UNESCO)
+          {aviso_incomp_html}
         </div>
         <div style="display: flex; gap: 6px; align-items: center; flex-wrap: nowrap;">
           <button class="btn-toolbar" onclick="zoomIn()" title="Acercar (Zoom In)"><span>🔍+</span></button>
@@ -151,12 +259,39 @@ def generar_diagrama_piper_d3(df_procesado):
         </div>
       </div>
 
+      <!-- Barra de Control Interactivo -->
+      <div class="controls-bar-piper">
+        <div class="ctrl-group-sample">
+          <label for="sample-select-input" class="ctrl-label">📍 Muestra Individual:</label>
+          <select id="sample-select-input" class="select-piper" onchange="onSampleSelect(this.value)">
+            <option value="ALL">🔍 Todas las muestras ({len(muestras_data)})</option>
+            {options_muestras_html}
+          </select>
+          <button class="btn-ctrl-tag active" id="btn-ghost-toggle" onclick="toggleGhostMode()" title="Alternar entre desvanecer o esconder los puntos no seleccionados">
+            <span id="ghost-mode-icon">👻</span> <span id="ghost-mode-text">Modo Fantasma</span>
+          </button>
+          <button class="btn-ctrl-tag" onclick="resetAllFacies()" title="Encender todas las familias">
+            <span>✅ Todas</span>
+          </button>
+          <button class="btn-ctrl-tag" onclick="isolateNoneFacies()" title="Apagar todas las familias">
+            <span>⚪ Apagar</span>
+          </button>
+        </div>
+        <div class="ctrl-group-facies">
+          <span class="ctrl-label" style="margin-right: 2px;">🔬 Familias:</span>
+          <div class="facies-badges-scroll" id="facies-badges-container">
+            {facies_badges_html}
+          </div>
+        </div>
+      </div>
+
       <div id="piper-svg-container">
         <div id="piper-tooltip"></div>
       </div>
 
       <script>
         const samples = {muestras_json_str};
+        const allFacies = {facies_list_json};
 
         const w = 960, h = 800;
         const svg = d3.select("#piper-svg-container").append("svg")
@@ -186,159 +321,69 @@ def generar_diagrama_piper_d3(df_procesado):
           .diamond-axis-label {{ font-size: 11px !important; font-weight: 800 !important; text-anchor: middle !important; dominant-baseline: middle !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; paint-order: stroke fill; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }}
           .tick-label-piper {{ font-size: 8px !important; font-weight: 600 !important; fill: #475569 !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
           .tick-label-100 {{ font-size: 9.5px !important; font-weight: 700 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
-          .sample-pt {{ stroke: #ffffff !important; stroke-width: 1.8 !important; cursor: pointer; }}
+          .sample-pt {{ stroke: #ffffff !important; stroke-width: 1.8 !important; }}
           .connection-line {{ opacity: 0.75 !important; fill: none !important; }}
         `);
 
-        // 1. Constantes geométricas canónicas (OMM / UNESCO / A.M. Piper 1944)
         const L = 330.0;
-        const H = L * Math.sqrt(3) / 2.0; // 285.788
-        const gap = 100.0;
-        const y_base = 680.0;
+        const H = L * Math.sqrt(3) / 2.0;
 
-        // Triángulo de Cationes (Izquierda)
-        const x_c_left = 100.0;
-        const x_c_right = x_c_left + L;   // 430.0
-        const x_c_top = x_c_left + L / 2.0; // 265.0
-        const y_c_top = y_base - H;        // 394.21
+        const x_c_left = 65.0, y_base = 650.0;
+        const x_c_right = x_c_left + L, y_c_right = y_base;
+        const x_c_top = x_c_left + L / 2.0, y_c_top = y_base - H;
 
-        // Triángulo de Aniones (Derecha)
-        const x_a_left = x_c_right + gap; // 530.0
-        const x_a_right = x_a_left + L;   // 860.0
-        const x_a_top = x_a_left + L / 2.0; // 695.0
-        const y_a_top = y_c_top;           // 394.21
+        const x_a_left = 565.0, y_a_left = y_base;
+        const x_a_right = x_a_left + L, y_a_right = y_base;
+        const x_a_top = x_a_left + L / 2.0, y_a_top = y_base - H;
 
-        // Rombo Central Canónico (Exacta intersección analítica de rayos extremos)
-        const x_d_bot = 480.0;
-        const y_d_bot = y_base - Math.sqrt(3) * gap / 2.0; // 593.40
-        const x_d_left = (x_c_left + x_a_left) / 2.0;     // 315.0
-        const y_d_left = y_base - Math.sqrt(3) * (x_a_left - x_c_left) / 2.0; // 307.61
-        const x_d_right = (x_c_right + x_a_right) / 2.0;  // 645.0
-        const y_d_right = y_d_left;                       // 307.61
-        const x_d_top = 480.0;
-        const y_d_top = y_base - Math.sqrt(3) * (x_a_right - x_c_left) / 2.0; // 21.82
+        const x_d_left = x_c_right;
+        const y_d_left = y_c_top;
+        const x_d_top = (x_c_right + x_a_left) / 2.0;
+        const y_d_top = y_c_top - H;
+        const x_d_right = x_a_left;
+        const y_d_right = y_a_top;
+        const x_d_bot = x_d_top;
+        const y_d_bot = y_c_top + H;
 
         const gGrid = zoomGroup.append("g").attr("id", "grid-group");
-        const gDiamond = zoomGroup.append("g").attr("id", "diamond-group");
-        const gTriangles = zoomGroup.append("g").attr("id", "triangles-group");
+        const gAxes = zoomGroup.append("g").attr("id", "axes-group");
+        const gTicks = zoomGroup.append("g").attr("id", "ticks-group");
         const gLabels = zoomGroup.append("g").attr("id", "labels-group");
         const gConnections = zoomGroup.append("g").attr("id", "connections-group");
         const gSamples = zoomGroup.append("g").attr("id", "samples-group");
 
-        // 2. Rejillas internas cada 10%
-        for (let step = 1; step <= 9; step++) {{
-          const f = step / 10.0;
+        // Cuadrícula Ternaria Cationes y Aniones
+        for (let s = 1; s <= 9; s++) {{
+          const frac = s / 10.0;
+          gGrid.append("line").attr("x1", x_c_left + frac * L).attr("y1", y_base).attr("x2", x_c_left + frac * L / 2.0).attr("y2", y_base - frac * H).attr("class", "grid-line");
+          gGrid.append("line").attr("x1", x_c_left + frac * L).attr("y1", y_base).attr("x2", x_c_top + frac * L / 2.0).attr("y2", y_c_top + frac * H).attr("class", "grid-line");
+          gGrid.append("line").attr("x1", x_c_left + frac * L / 2.0).attr("y1", y_base - frac * H).attr("x2", x_c_right - frac * L / 2.0).attr("y2", y_base - frac * H).attr("class", "grid-line");
 
-          // Triángulo Cationes
-          // 1) Líneas paralelas a la base (Mg constante)
-          const c_y = y_base - f * H;
-          const c_x1 = x_c_left + 0.5 * f * L;
-          const c_x2 = x_c_right - 0.5 * f * L;
-          gGrid.append("line").attr("x1", c_x1).attr("y1", c_y).attr("x2", c_x2).attr("y2", c_y).attr("class", "grid-line");
-
-          // 2) Líneas paralelas al lado izquierdo (Na+K constante)
-          const c_na_x1 = x_c_left + f * L;
-          const c_na_y1 = y_base;
-          const c_na_x2 = x_c_top + 0.5 * f * L;
-          const c_na_y2 = y_c_top + f * H;
-          gGrid.append("line").attr("x1", c_na_x1).attr("y1", c_na_y1).attr("x2", c_na_x2).attr("y2", c_na_y2).attr("class", "grid-line");
-
-          // 3) Líneas paralelas al lado derecho (Ca constante)
-          const c_ca_x1 = x_c_right - f * L;
-          const c_ca_y1 = y_base;
-          const c_ca_x2 = x_c_top - 0.5 * f * L;
-          const c_ca_y2 = y_c_top + f * H;
-          gGrid.append("line").attr("x1", c_ca_x1).attr("y1", c_ca_y1).attr("x2", c_ca_x2).attr("y2", c_ca_y2).attr("class", "grid-line");
-
-          // Triángulo Aniones
-          // 1) Líneas paralelas a la base (SO4 constante)
-          const a_y = y_base - f * H;
-          const a_x1 = x_a_left + 0.5 * f * L;
-          const a_x2 = x_a_right - 0.5 * f * L;
-          gGrid.append("line").attr("x1", a_x1).attr("y1", a_y).attr("x2", a_x2).attr("y2", a_y).attr("class", "grid-line");
-
-          // 2) Líneas paralelas al lado izquierdo (Cl constante)
-          const a_cl_x1 = x_a_left + f * L;
-          const a_cl_y1 = y_base;
-          const a_cl_x2 = x_a_top + 0.5 * f * L;
-          const a_cl_y2 = y_a_top + f * H;
-          gGrid.append("line").attr("x1", a_cl_x1).attr("y1", a_cl_y1).attr("x2", a_cl_x2).attr("y2", a_cl_y2).attr("class", "grid-line");
-
-          // 3) Líneas paralelas al lado derecho (HCO3 constante)
-          const a_hco3_x1 = x_a_right - f * L;
-          const a_hco3_y1 = y_base;
-          const a_hco3_x2 = x_a_top - 0.5 * f * L;
-          const a_hco3_y2 = y_a_top + f * H;
-          gGrid.append("line").attr("x1", a_hco3_x1).attr("y1", a_hco3_y1).attr("x2", a_hco3_x2).attr("y2", a_hco3_y2).attr("class", "grid-line");
-
-          // REJILLA DEL ROMBO CENTRAL EN TRIÁNGULOS EQUILÁTEROS (3 FAMILIAS):
-          // Familia 1: pendiente -sqrt(3) (desde borde inferior-izquierdo a superior-derecho)
-          const p1_x = x_d_bot + (x_d_left - x_d_bot) * f;
-          const p1_y = y_d_bot + (y_d_left - y_d_bot) * f;
-          const p2_x = x_d_right + (x_d_top - x_d_right) * f;
-          const p2_y = y_d_right + (y_d_top - y_d_right) * f;
-          gDiamond.append("line").attr("x1", p1_x).attr("y1", p1_y).attr("x2", p2_x).attr("y2", p2_y).attr("class", "grid-line-diamond");
-
-          // Familia 2: pendiente +sqrt(3) (desde borde inferior-derecho a superior-izquierdo)
-          const q1_x = x_d_bot + (x_d_right - x_d_bot) * f;
-          const q1_y = y_d_bot + (y_d_right - y_d_bot) * f;
-          const q2_x = x_d_left + (x_d_top - x_d_left) * f;
-          const q2_y = y_d_left + (y_d_top - y_d_left) * f;
-          gDiamond.append("line").attr("x1", q1_x).attr("y1", q1_y).attr("x2", q2_x).attr("y2", q2_y).attr("class", "grid-line-diamond");
-
-          // Familia 3: LÍNEAS HORIZONTALES (Forman triángulos equiláteros internos exactos)
-          // Mitad inferior
-          gDiamond.append("line")
-            .attr("x1", p1_x).attr("y1", p1_y)
-            .attr("x2", q1_x).attr("y2", q1_y)
-            .attr("class", "grid-line-diamond");
-
-          // Mitad superior
-          const u1_x = x_d_left + (x_d_top - x_d_left) * f;
-          const u1_y = y_d_left + (y_d_top - y_d_left) * f;
-          const u2_x = x_d_right + (x_d_top - x_d_right) * f;
-          const u2_y = y_d_right + (y_d_top - y_d_right) * f;
-          gDiamond.append("line")
-            .attr("x1", u1_x).attr("y1", u1_y)
-            .attr("x2", u2_x).attr("y2", u2_y)
-            .attr("class", "grid-line-diamond");
+          gGrid.append("line").attr("x1", x_a_left + frac * L).attr("y1", y_base).attr("x2", x_a_left + frac * L / 2.0).attr("y2", y_base - frac * H).attr("class", "grid-line");
+          gGrid.append("line").attr("x1", x_a_left + frac * L).attr("y1", y_base).attr("x2", x_a_top + frac * L / 2.0).attr("y2", y_a_top + frac * H).attr("class", "grid-line");
+          gGrid.append("line").attr("x1", x_a_left + frac * L / 2.0).attr("y1", y_base - frac * H).attr("x2", x_a_right - frac * L / 2.0).attr("y2", y_base - frac * H).attr("class", "grid-line");
         }}
 
-        // Línea horizontal ecuatorial central del rombo
-        gDiamond.append("line")
-          .attr("x1", x_d_left).attr("y1", y_d_left)
-          .attr("x2", x_d_right).attr("y2", y_d_right)
-          .attr("class", "grid-line-diamond");
+        // Cuadrícula Diamante
+        for (let s = 1; s <= 9; s++) {{
+          const frac = s / 10.0;
+          const p1x = x_d_left + frac * (x_d_top - x_d_left), p1y = y_d_left + frac * (y_d_top - y_d_left);
+          const p2x = x_d_bot + frac * (x_d_right - x_d_bot), p2y = y_d_bot + frac * (y_d_right - y_d_bot);
+          gGrid.append("line").attr("x1", p1x).attr("y1", p1y).attr("x2", p2x).attr("y2", p2y).attr("class", "grid-line-diamond");
 
-        // 3. Contornos de Triángulos y Rombo (con fill="none" explícito)
-        gTriangles.append("polygon")
-          .attr("points", `${{x_c_left}},${{y_base}} ${{x_c_right}},${{y_base}} ${{x_c_top}},${{y_c_top}}`)
-          .attr("fill", "none")
-          .attr("stroke", "#0f172a")
-          .attr("stroke-width", 1.8)
-          .attr("class", "axis-line");
+          const p3x = x_d_left + frac * (x_d_bot - x_d_left), p3y = y_d_left + frac * (y_d_bot - y_d_left);
+          const p4x = x_d_top + frac * (x_d_right - x_d_top), p4y = y_d_top + frac * (y_d_right - y_d_top);
+          gGrid.append("line").attr("x1", p3x).attr("y1", p3y).attr("x2", p4x).attr("y2", p4y).attr("class", "grid-line-diamond");
+        }}
 
-        gTriangles.append("polygon")
-          .attr("points", `${{x_a_left}},${{y_base}} ${{x_a_right}},${{y_base}} ${{x_a_top}},${{y_a_top}}`)
-          .attr("fill", "none")
-          .attr("stroke", "#0f172a")
-          .attr("stroke-width", 1.8)
-          .attr("class", "axis-line");
+        // Ejes Principales
+        gAxes.append("polygon").attr("points", `${{x_c_left}},${{y_base}} ${{x_c_right}},${{y_c_right}} ${{x_c_top}},${{y_c_top}}`).attr("class", "axis-line");
+        gAxes.append("polygon").attr("points", `${{x_a_left}},${{y_base}} ${{x_a_right}},${{y_a_right}} ${{x_a_top}},${{y_a_top}}`).attr("class", "axis-line");
+        gAxes.append("polygon").attr("points", `${{x_d_left}},${{y_d_left}} ${{x_d_top}},${{y_d_top}} ${{x_d_right}},${{y_d_right}} ${{x_d_bot}},${{y_d_bot}}`).attr("class", "axis-line");
 
-        gDiamond.append("polygon")
-          .attr("points", `${{x_d_bot}},${{y_d_bot}} ${{x_d_right}},${{y_d_right}} ${{x_d_top}},${{y_d_top}} ${{x_d_left}},${{y_d_left}}`)
-          .attr("fill", "none")
-          .attr("stroke", "#0f172a")
-          .attr("stroke-width", 1.8)
-          .attr("class", "axis-line");
-
-        // 4. TICKS Y ETIQUETAS NUMÉRICAS EN TRIÁNGULOS (10, 20, 30... 100)
-        const gTicks = zoomGroup.append("g").attr("id", "ticks-group");
-
-        const norm_lx = -Math.sqrt(3) / 2.0; // -0.866
-        const norm_ly = -0.5;
-        const norm_rx = Math.sqrt(3) / 2.0;  // +0.866
-        const norm_ry = -0.5;
+        // Ticks Ternarios y Diamante
+        const norm_lx = -Math.sqrt(3)/2.0, norm_ly = -0.5;
+        const norm_rx = Math.sqrt(3)/2.0, norm_ry = -0.5;
 
         for (let s = 1; s <= 9; s++) {{
           const frac = s / 10.0;
@@ -346,178 +391,114 @@ def generar_diagrama_piper_d3(df_procesado):
           const isMajor = (s % 2 === 0);
           const tickLen = isMajor ? 5.5 : 3.2;
 
-          // --- CATIONES: Base (Ca decrece de 100 a 0 hacia Na+K) ---
           const c_bx = x_c_left + frac * L;
           gTicks.append("line").attr("x1", c_bx).attr("y1", y_base).attr("x2", c_bx).attr("y2", y_base + tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", c_bx).attr("y", y_base + 13).attr("class", "tick-label-piper").attr("text-anchor", "middle").text(100 - val);
 
-          // --- CATIONES: Lado Izquierdo (Mg crece de 0 a 100 hacia ápice) ---
-          const c_lx = x_c_left + 0.5 * frac * L;
-          const c_ly = y_base - frac * H;
+          const c_lx = x_c_left + 0.5 * frac * L, c_ly = y_base - frac * H;
           gTicks.append("line").attr("x1", c_lx).attr("y1", c_ly).attr("x2", c_lx + norm_lx * tickLen).attr("y2", c_ly + norm_ly * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", c_lx - 7).attr("y", c_ly + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(val);
 
-          // --- CATIONES: Lado Derecho (Na+K crece de 0 a 100 hacia base) ---
-          const c_rx = x_c_top + 0.5 * frac * L;
-          const c_ry = y_c_top + frac * H;
+          const c_rx = x_c_top + 0.5 * frac * L, c_ry = y_c_top + frac * H;
           gTicks.append("line").attr("x1", c_rx).attr("y1", c_ry).attr("x2", c_rx + norm_rx * tickLen).attr("y2", c_ry + norm_ry * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", c_rx + 7).attr("y", c_ry + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(val);
 
-          // --- ANIONES: Base (Cl crece de 0 a 100) ---
           const a_bx = x_a_left + frac * L;
           gTicks.append("line").attr("x1", a_bx).attr("y1", y_base).attr("x2", a_bx).attr("y2", y_base + tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", a_bx).attr("y", y_base + 13).attr("class", "tick-label-piper").attr("text-anchor", "middle").text(val);
 
-          // --- ANIONES: Lado Izquierdo (HCO3 decrece de 100 a 0 hacia ápice) ---
-          const a_lx = x_a_left + 0.5 * frac * L;
-          const a_ly = y_base - frac * H;
+          const a_lx = x_a_left + 0.5 * frac * L, a_ly = y_base - frac * H;
           gTicks.append("line").attr("x1", a_lx).attr("y1", a_ly).attr("x2", a_lx + norm_lx * tickLen).attr("y2", a_ly + norm_ly * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", a_lx - 7).attr("y", a_ly + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(100 - val);
 
-          // --- ANIONES: Lado Derecho (SO4 decrece de 100 a 0 hacia base) ---
-          const a_rx = x_a_top + 0.5 * frac * L;
-          const a_ry = y_a_top + frac * H;
+          const a_rx = x_a_top + 0.5 * frac * L, a_ry = y_a_top + frac * H;
           gTicks.append("line").attr("x1", a_rx).attr("y1", a_ry).attr("x2", a_rx + norm_rx * tickLen).attr("y2", a_ry + norm_ry * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", a_rx + 7).attr("y", a_ry + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(100 - val);
         }}
 
-        // Marcas y valores en vértices (100 y 100%)
-        gTicks.append("text").attr("x", x_c_left).attr("y", y_base + 14).attr("class", "tick-label-100").attr("text-anchor", "middle").text("100");
-        gTicks.append("text").attr("x", x_c_top - 12).attr("y", y_c_top).attr("class", "tick-label-100").attr("text-anchor", "end").text("100");
-        gTicks.append("text").attr("x", x_c_right + 5).attr("y", y_base - 8).attr("class", "tick-label-100").attr("text-anchor", "start").text("100%");
-
-        gTicks.append("text").attr("x", x_a_left - 5).attr("y", y_base - 8).attr("class", "tick-label-100").attr("text-anchor", "end").text("100%");
-        gTicks.append("text").attr("x", x_a_top + 12).attr("y", y_a_top).attr("class", "tick-label-100").attr("text-anchor", "start").text("100");
-        gTicks.append("text").attr("x", x_a_right).attr("y", y_base + 14).attr("class", "tick-label-100").attr("text-anchor", "middle").text("100");
-
-        // 5. TICKS Y ESCALAS NUMÉRICAS SIMÉTRICAS EN EL ROMBO SOLICITADAS POR EL USUARIO:
-        // "los dos vertices que van hacia arriba van de 0 a 90 y los dos de abajo de 0 a 90"
-        const d_norm_ul_x = -Math.sqrt(3) / 2.0;
-        const d_norm_ul_y = -0.5;
-        const d_norm_ur_x = Math.sqrt(3) / 2.0;
-        const d_norm_ur_y = -0.5;
-        const d_norm_ll_x = -Math.sqrt(3) / 2.0;
-        const d_norm_ll_y = 0.5;
-        const d_norm_lr_x = Math.sqrt(3) / 2.0;
-        const d_norm_lr_y = 0.5;
+        // Ticks Diamante
+        const d_norm_ul_x = -Math.sqrt(3)/2.0, d_norm_ul_y = -0.5;
+        const d_norm_ur_x = Math.sqrt(3)/2.0, d_norm_ur_y = -0.5;
+        const d_norm_ll_x = -Math.sqrt(3)/2.0, d_norm_ll_y = 0.5;
+        const d_norm_lr_x = Math.sqrt(3)/2.0, d_norm_lr_y = 0.5;
 
         for (let s = 1; s <= 9; s++) {{
           const frac = s / 10.0;
           const val = s * 10;
-          const isMajor = (s % 2 === 0);
-          const tickLen = isMajor ? 5.0 : 3.0;
+          const tickLen = (s % 2 === 0) ? 5.5 : 3.2;
 
-          // 5a. Lado Superior-Izquierdo: sube de left a top (10 a 90 hacia arriba)
-          const ul_x = x_d_left + frac * (x_d_top - x_d_left);
-          const ul_y = y_d_left + frac * (y_d_top - y_d_left);
+          const ul_x = x_d_left + frac * (x_d_top - x_d_left), ul_y = y_d_left + frac * (y_d_top - y_d_left);
           gTicks.append("line").attr("x1", ul_x).attr("y1", ul_y).attr("x2", ul_x + d_norm_ul_x * tickLen).attr("y2", ul_y + d_norm_ul_y * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", ul_x + d_norm_ul_x * 7).attr("y", ul_y + d_norm_ul_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(val);
 
-          // 5b. Lado Superior-Derecho: sube de right a top (10 a 90 hacia arriba)
-          const ur_x = x_d_right + frac * (x_d_top - x_d_right);
-          const ur_y = y_d_right + frac * (y_d_top - y_d_right);
+          const ur_x = x_d_top + frac * (x_d_right - x_d_top), ur_y = y_d_top + frac * (y_d_right - y_d_top);
           gTicks.append("line").attr("x1", ur_x).attr("y1", ur_y).attr("x2", ur_x + d_norm_ur_x * tickLen).attr("y2", ur_y + d_norm_ur_y * tickLen).attr("class", "tick-line");
-          gTicks.append("text").attr("x", ur_x + d_norm_ur_x * 7).attr("y", ur_y + d_norm_ur_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(val);
+          gTicks.append("text").attr("x", ur_x + d_norm_ur_x * 7).attr("y", ur_y + d_norm_ur_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(100 - val);
 
-          // 5c. Lado Inferior-Izquierdo: baja de left a bot (10 a 90 hacia abajo)
-          const ll_x = x_d_left + frac * (x_d_bot - x_d_left);
-          const ll_y = y_d_left + frac * (y_d_bot - y_d_left);
+          const ll_x = x_d_left + frac * (x_d_bot - x_d_left), ll_y = y_d_left + frac * (y_d_bot - y_d_left);
           gTicks.append("line").attr("x1", ll_x).attr("y1", ll_y).attr("x2", ll_x + d_norm_ll_x * tickLen).attr("y2", ll_y + d_norm_ll_y * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", ll_x + d_norm_ll_x * 7).attr("y", ll_y + d_norm_ll_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "end").text(val);
 
-          // 5d. Lado Inferior-Derecho: baja de right a bot (10 a 90 hacia abajo)
-          const lr_x = x_d_right + frac * (x_d_bot - x_d_right);
-          const lr_y = y_d_right + frac * (y_d_bot - y_d_right);
+          const lr_x = x_d_bot + frac * (x_d_right - x_d_bot), lr_y = y_d_bot + frac * (y_d_right - y_d_bot);
           gTicks.append("line").attr("x1", lr_x).attr("y1", lr_y).attr("x2", lr_x + d_norm_lr_x * tickLen).attr("y2", lr_y + d_norm_lr_y * tickLen).attr("class", "tick-line");
           gTicks.append("text").attr("x", lr_x + d_norm_lr_x * 7).attr("y", lr_y + d_norm_lr_y * 7 + 3).attr("class", "tick-label-piper").attr("text-anchor", "start").text(val);
         }}
 
-        // 6. ETIQUETAS DE EJES DEL ROMBO SOLICITADAS POR EL USUARIO:
-        // SO4 + Cl, Ca + Mg, Na + K, CO3 + HCO3
+        // Rótulos de Ejes del Rombo
         const gDiamondLabels = zoomGroup.append("g").attr("id", "diamond-labels-group");
+        const mid_ul_x = (x_d_left + x_d_top) / 2.0, mid_ul_y = (y_d_left + y_d_top) / 2.0;
+        gDiamondLabels.append("text").attr("x", mid_ul_x).attr("y", mid_ul_y).attr("transform", `rotate(-60, ${{mid_ul_x}}, ${{mid_ul_y}}) translate(0, -28)`).attr("class", "diamond-axis-label").text("SO₄ + Cl  →");
 
-        // Costado Superior-Izquierdo: SO₄ + Cl (apunta hacia arriba / top)
-        const mid_ul_x = (x_d_left + x_d_top) / 2.0;
-        const mid_ul_y = (y_d_left + y_d_top) / 2.0;
-        gDiamondLabels.append("text")
-          .attr("x", mid_ul_x)
-          .attr("y", mid_ul_y)
-          .attr("transform", `rotate(-60, ${{mid_ul_x}}, ${{mid_ul_y}}) translate(0, -28)`)
-          .attr("class", "diamond-axis-label")
-          .text("SO₄ + Cl  →");
+        const mid_ur_x = (x_d_top + x_d_right) / 2.0, mid_ur_y = (y_d_top + y_d_right) / 2.0;
+        gDiamondLabels.append("text").attr("x", mid_ur_x).attr("y", mid_ur_y).attr("transform", `rotate(60, ${{mid_ur_x}}, ${{mid_ur_y}}) translate(0, -28)`).attr("class", "diamond-axis-label").text("←  Na + K");
 
-        // Costado Superior-Derecho: Na + K (apunta hacia arriba / top)
-        const mid_ur_x = (x_d_top + x_d_right) / 2.0;
-        const mid_ur_y = (y_d_top + y_d_right) / 2.0;
-        gDiamondLabels.append("text")
-          .attr("x", mid_ur_x)
-          .attr("y", mid_ur_y)
-          .attr("transform", `rotate(60, ${{mid_ur_x}}, ${{mid_ur_y}}) translate(0, -28)`)
-          .attr("class", "diamond-axis-label")
-          .text("←  Na + K");
+        const mid_ll_x = (x_d_left + x_d_bot) / 2.0, mid_ll_y = (y_d_left + y_d_bot) / 2.0;
+        gDiamondLabels.append("text").attr("x", mid_ll_x).attr("y", mid_ll_y).attr("transform", `rotate(60, ${{mid_ll_x}}, ${{mid_ll_y}}) translate(0, 22)`).attr("class", "diamond-axis-label").text("Ca + Mg  →");
 
-        // Costado Inferior-Izquierdo: Ca + Mg (apunta hacia abajo / bot)
-        const mid_ll_x = (x_d_left + x_d_bot) / 2.0;
-        const mid_ll_y = (y_d_left + y_d_bot) / 2.0;
-        gDiamondLabels.append("text")
-          .attr("x", mid_ll_x)
-          .attr("y", mid_ll_y)
-          .attr("transform", `rotate(60, ${{mid_ll_x}}, ${{mid_ll_y}}) translate(0, 22)`)
-          .attr("class", "diamond-axis-label")
-          .text("Ca + Mg  →");
+        const mid_lr_x = (x_d_bot + x_d_right) / 2.0, mid_lr_y = (y_d_bot + y_d_right) / 2.0;
+        gDiamondLabels.append("text").attr("x", mid_lr_x).attr("y", mid_lr_y).attr("transform", `rotate(-60, ${{mid_lr_x}}, ${{mid_lr_y}}) translate(0, 22)`).attr("class", "diamond-axis-label").text("CO₃ + HCO₃  →");
 
-        // Costado Inferior-Derecho: CO₃ + HCO₃ (apunta hacia abajo / bot)
-        const mid_lr_x = (x_d_bot + x_d_right) / 2.0;
-        const mid_lr_y = (y_d_bot + y_d_right) / 2.0;
-        gDiamondLabels.append("text")
-          .attr("x", mid_lr_x)
-          .attr("y", mid_lr_y)
-          .attr("transform", `rotate(-60, ${{mid_lr_x}}, ${{mid_lr_y}}) translate(0, 22)`)
-          .attr("class", "diamond-axis-label")
-          .text("CO₃ + HCO₃  →");
-
-        // 6. Rótulos de Ejes e Iones Canónicos
-        // Cationes
+        // Rótulos Iones
         gLabels.append("text").attr("x", x_c_top).attr("y", y_base + 46).attr("class", "axis-label-piper").text("CATIONES (% meq/L)");
-        gLabels.append("text").attr("x", x_c_left - 24).attr("y", y_base + 4).attr("class", "ion-label").attr("text-anchor", "end").text("Ca²⁺");
-        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_top - 20).attr("class", "ion-label").attr("text-anchor", "middle").text("Mg²⁺");
-        gLabels.append("text").attr("x", x_c_right - 4).attr("y", y_base + 32).attr("class", "ion-label").attr("text-anchor", "end").text("Na⁺ + K⁺");
+        gLabels.append("text").attr("x", x_c_left - 10).attr("y", y_base + 20).attr("class", "ion-label").attr("text-anchor", "end").text("Ca²⁺");
+        gLabels.append("text").attr("x", x_c_right + 10).attr("y", y_base + 20).attr("class", "ion-label").attr("text-anchor", "start").text("Na⁺ + K⁺");
+        gLabels.append("text").attr("x", x_c_top).attr("y", y_c_top - 16).attr("class", "ion-label").attr("text-anchor", "middle").text("Mg²⁺");
 
-        // Aniones
         gLabels.append("text").attr("x", x_a_top).attr("y", y_base + 46).attr("class", "axis-label-piper").text("ANIONES (% meq/L)");
-        gLabels.append("text").attr("x", x_a_left + 4).attr("y", y_base + 32).attr("class", "ion-label").attr("text-anchor", "start").text("HCO₃⁻ + CO₃²⁻");
-        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_top - 20).attr("class", "ion-label").attr("text-anchor", "middle").text("SO₄²⁻");
-        gLabels.append("text").attr("x", x_a_right + 24).attr("y", y_base + 4).attr("class", "ion-label").attr("text-anchor", "start").text("Cl⁻");
+        gLabels.append("text").attr("x", x_a_left - 10).attr("y", y_base + 20).attr("class", "ion-label").attr("text-anchor", "end").text("CO₃²⁻ + HCO₃⁻");
+        gLabels.append("text").attr("x", x_a_right + 10).attr("y", y_base + 20).attr("class", "ion-label").attr("text-anchor", "start").text("Cl⁻");
+        gLabels.append("text").attr("x", x_a_top).attr("y", y_a_top - 16).attr("class", "ion-label").attr("text-anchor", "middle").text("SO₄²⁻");
 
-        // Tooltip reactivo
+        // Tooltip
         const tooltip = d3.select("#piper-tooltip");
 
-        // 6. Proyección de Muestras y Rayos Trilineales Canónicos
+        // Render de Muestras
         samples.forEach((m, i) => {{
-          const u_cat = m.nak_pct / 100.0;
-          const mg_val = m.mg_pct / 100.0;
-          const cl_val = m.cl_pct / 100.0;
-          const so4_val = m.so4_pct / 100.0;
+          const ca_frac = m.ca_pct / 100.0;
+          const mg_frac = m.mg_pct / 100.0;
+          const nak_frac = m.nak_pct / 100.0;
 
-          // Cationes (Ca izq, Na+K der, Mg arriba)
-          const xc = x_c_left + u_cat * L + 0.5 * mg_val * L;
-          const yc = y_base - mg_val * H;
+          const xc = x_c_left + 0.5 * (2.0 * nak_frac + mg_frac) * L;
+          const yc = y_base - mg_frac * H;
 
-          // Aniones (HCO3 izq, Cl der, SO4 arriba)
-          const xa = x_a_left + cl_val * L + 0.5 * so4_val * L;
-          const ya = y_base - so4_val * H;
+          const cl_frac = m.cl_pct / 100.0;
+          const so4_frac = m.so4_pct / 100.0;
+          const hco3_frac = m.hco3_pct / 100.0;
 
-          // Intersección analítica exacta de los rayos a 60° (pendiente -sqrt(3)) y 120° (pendiente +sqrt(3)):
+          const xa = x_a_left + 0.5 * (2.0 * cl_frac + so4_frac) * L;
+          const ya = y_base - so4_frac * H;
+
           const xd = (xc + xa) / 2.0 + (yc - ya) / (2.0 * Math.sqrt(3));
           const yd = (yc + ya) / 2.0 - Math.sqrt(3) * (xa - xc) / 2.0;
 
-          // Rayos trilineales directos continuos (chevron limpio a 60° y 120°)
           const conn = gConnections.append("polyline")
             .attr("points", `${{xc}},${{yc}} ${{xd}},${{yd}} ${{xa}},${{ya}}`)
             .attr("stroke", m.color)
             .attr("stroke-width", 1.2)
             .attr("fill", "none")
-            .attr("class", `connection-line conn-${{i}}`);
+            .attr("class", `connection-line conn-${{i}}`)
+            .attr("data-id", m.id)
+            .attr("data-facies", m.facies);
 
           const showTip = (event) => {{
             conn.classed("highlight", true).attr("stroke-width", 2.4).attr("stroke-opacity", 1.0);
@@ -528,9 +509,10 @@ def generar_diagrama_piper_d3(df_procesado):
               <div style="color:#475569; font-size:11px; margin-bottom:6px;"><b>Fuente:</b> ${{m.fuente}}</div>
               <div style="background:#f1f5f9; padding:5px 8px; border-radius:4px; margin-bottom:6px;">
                 <b>Facies:</b> <span style="color:${{m.color}}; font-weight:700;">${{m.facies}}</span><br>
+                <b>Cuadrante:</b> <span style="color:#0f172a; font-weight:600;">${{m.cuadrante}}</span><br>
                 <b>Error Balance (CBE):</b> ${{m.cbe >= 0 ? '+' : ''}}${{m.cbe.toFixed(2)}}% (${{m.cbe_calidad}})<br>
-                <b>SDT:</b> ${{m.sdt.toLocaleString()}} mg/L | <b>CE:</b> ${{m.ce.toLocaleString()}} µS/cm<br>
-                <b>Índice Revelle:</b> ${{m.revelle.toFixed(2)}}
+                <b>SDT:</b> ${{m.sdt > 0 ? m.sdt.toLocaleString() + ' mg/L' : 'N/D'}} | <b>CE:</b> ${{m.ce > 0 ? m.ce.toLocaleString() + ' µS/cm' : 'N/D'}}<br>
+                <b>Índice Revelle:</b> ${{m.revelle > 0 ? m.revelle.toFixed(2) : 'N/D'}}
               </div>
               <div style="font-size:10.5px; color:#334155;">
                 <b>Cationes:</b> Ca²⁺=${{m.ca_pct.toFixed(1)}}%, Mg²⁺=${{m.mg_pct.toFixed(1)}}%, Na⁺+K⁺=${{m.nak_pct.toFixed(1)}}%<br>
@@ -539,7 +521,6 @@ def generar_diagrama_piper_d3(df_procesado):
             `;
             tooltip.html(tipHtml).style("display", "block");
 
-            // Control Inteligente de Posicionamiento: Evita recorte inferior o lateral
             const container = document.getElementById("piper-svg-container");
             const cRect = container.getBoundingClientRect();
             const mouseX = event.clientX - cRect.left;
@@ -556,54 +537,208 @@ def generar_diagrama_piper_d3(df_procesado):
 
             let topPos = mouseY - 15;
             if (topPos + tipH > cRect.height - 12) {{
-              // Invierte hacia ARRIBA del cursor cuando está cerca de la parte inferior
               topPos = Math.max(10, mouseY - tipH - 12);
             }}
 
-            tooltip
-              .style("left", leftPos + "px")
-              .style("top", topPos + "px");
+            tooltip.style("left", leftPos + "px").style("top", topPos + "px");
           }};
 
           const hideTip = () => {{
-            conn.classed("highlight", false).attr("stroke-width", 1.2).attr("stroke-opacity", 0.65);
-            d3.selectAll(`.pt-group-${{i}}`).selectAll("circle, polygon").attr("stroke-width", 1.8);
+            if (selectedSampleId === "ALL") {{
+              conn.classed("highlight", false).attr("stroke-width", 1.2).attr("stroke-opacity", 0.65);
+              d3.selectAll(`.pt-group-${{i}}`).selectAll("circle, polygon").attr("stroke-width", 1.8);
+            }}
             tooltip.style("display", "none");
           }};
 
-          const grp = gSamples.append("g").attr("class", `pt-group-${{i}}`);
+          const grp = gSamples.append("g")
+            .attr("class", `pt-group-${{i}}`)
+            .attr("data-id", m.id)
+            .attr("data-facies", m.facies);
 
-          // Punto Catiónico
           grp.append("circle")
             .attr("cx", xc).attr("cy", yc).attr("r", 5.5)
-            .attr("fill", m.color)
-            .attr("stroke", "#ffffff")
-            .attr("stroke-width", 1.8)
+            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
             .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
             .attr("class", "sample-pt pt-cat")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
-          // Punto Aniónico
           grp.append("circle")
             .attr("cx", xa).attr("cy", ya).attr("r", 5.5)
-            .attr("fill", m.color)
-            .attr("stroke", "#ffffff")
-            .attr("stroke-width", 1.8)
+            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
             .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
             .attr("class", "sample-pt pt-an")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
-          // Punto Central en el Diamante (Relleno de color asegurado con style !important)
           const rd = 7.0;
           grp.append("polygon")
             .attr("points", `${{xd}},${{yd - rd}} ${{xd + rd}},${{yd}} ${{xd}},${{yd + rd}} ${{xd - rd}},${{yd}}`)
-            .attr("fill", m.color)
-            .attr("stroke", "#ffffff")
-            .attr("stroke-width", 1.8)
+            .attr("data-xd", xd)
+            .attr("data-yd", yd)
+            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
             .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
             .attr("class", "sample-pt pt-dia")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
         }});
+
+        // LÓGICA DE CONTROL INTERACTIVO DE FACIES Y MUESTRAS
+        let activeFacies = new Set(allFacies);
+        let selectedSampleId = "ALL";
+        let isGhostMode = true;
+
+        function updateVisibility() {{
+          const hasSingleSample = (selectedSampleId !== "ALL");
+
+          samples.forEach((m, i) => {{
+            const isFaciesActive = activeFacies.has(m.facies);
+            const isSampleMatch = (m.id === selectedSampleId);
+            const shouldBeVisible = hasSingleSample ? isSampleMatch : isFaciesActive;
+
+            const grp = d3.selectAll(`.pt-group-${{i}}`);
+            const conn = d3.selectAll(`.conn-${{i}}`);
+
+            if (shouldBeVisible) {{
+              grp.style("display", "block")
+                 .style("opacity", "1.0")
+                 .style("pointer-events", "all");
+
+              if (hasSingleSample) {{
+                grp.raise();
+                grp.selectAll("circle")
+                   .attr("r", 8.5)
+                   .attr("stroke", "#0f172a")
+                   .attr("stroke-width", 2.6);
+
+                const poly = grp.select("polygon");
+                if (!poly.empty()) {{
+                  const px = parseFloat(poly.attr("data-xd"));
+                  const py = parseFloat(poly.attr("data-yd"));
+                  const r_lg = 11.0;
+                  poly.attr("points", `${{px}},${{py - r_lg}} ${{px + r_lg}},${{py}} ${{px}},${{py + r_lg}} ${{px - r_lg}},${{py}}`)
+                      .attr("stroke", "#0f172a")
+                      .attr("stroke-width", 2.6);
+                }}
+
+                conn.style("display", "block")
+                    .classed("highlight", true)
+                    .attr("stroke-width", 2.4)
+                    .attr("stroke-dasharray", "4,3")
+                    .attr("stroke-opacity", 0.95);
+              }} else {{
+                grp.selectAll("circle")
+                   .attr("r", 5.5)
+                   .attr("stroke", "#ffffff")
+                   .attr("stroke-width", 1.8);
+
+                const poly = grp.select("polygon");
+                if (!poly.empty()) {{
+                  const px = parseFloat(poly.attr("data-xd"));
+                  const py = parseFloat(poly.attr("data-yd"));
+                  const r_norm = 7.0;
+                  poly.attr("points", `${{px}},${{py - r_norm}} ${{px + r_norm}},${{py}} ${{px}},${{py + r_norm}} ${{px - r_norm}},${{py}}`)
+                      .attr("stroke", "#ffffff")
+                      .attr("stroke-width", 1.8);
+                }}
+
+                conn.style("display", "none")
+                    .classed("highlight", false)
+                    .attr("stroke-width", 1.2)
+                    .attr("stroke-dasharray", null)
+                    .attr("stroke-opacity", 0.65);
+              }}
+            }} else {{
+              conn.style("display", "none");
+              if (isGhostMode) {{
+                grp.style("display", "block")
+                   .style("opacity", "0.08")
+                   .style("pointer-events", "none");
+                grp.selectAll("circle").attr("r", 4.5).attr("stroke", "#cbd5e1").attr("stroke-width", 1.0);
+              }} else {{
+                grp.style("display", "none");
+              }}
+            }}
+          }});
+        }}
+
+        function toggleFacies(facies, event) {{
+          if (event && (event.altKey || event.ctrlKey || event.metaKey)) {{
+            isolateFacies(facies);
+            return;
+          }}
+          if (activeFacies.has(facies)) {{
+            activeFacies.delete(facies);
+          }} else {{
+            activeFacies.add(facies);
+          }}
+          selectedSampleId = "ALL";
+          const sel = document.getElementById("sample-select-input");
+          if (sel) sel.value = "ALL";
+          syncFaciesButtons();
+          updateVisibility();
+        }}
+
+        function isolateFacies(facies) {{
+          activeFacies.clear();
+          activeFacies.add(facies);
+          selectedSampleId = "ALL";
+          const sel = document.getElementById("sample-select-input");
+          if (sel) sel.value = "ALL";
+          syncFaciesButtons();
+          updateVisibility();
+        }}
+
+        function resetAllFacies() {{
+          allFacies.forEach(f => activeFacies.add(f));
+          selectedSampleId = "ALL";
+          const sel = document.getElementById("sample-select-input");
+          if (sel) sel.value = "ALL";
+          syncFaciesButtons();
+          updateVisibility();
+        }}
+
+        function isolateNoneFacies() {{
+          activeFacies.clear();
+          selectedSampleId = "ALL";
+          const sel = document.getElementById("sample-select-input");
+          if (sel) sel.value = "ALL";
+          syncFaciesButtons();
+          updateVisibility();
+        }}
+
+        function toggleGhostMode() {{
+          isGhostMode = !isGhostMode;
+          const btn = document.getElementById("btn-ghost-toggle");
+          const icon = document.getElementById("ghost-mode-icon");
+          const text = document.getElementById("ghost-mode-text");
+          if (isGhostMode) {{
+            btn.classList.add("active");
+            icon.textContent = "👻";
+            text.textContent = "Modo Fantasma";
+          }} else {{
+            btn.classList.remove("active");
+            icon.textContent = "👁️";
+            text.textContent = "Modo Ocultar";
+          }}
+          updateVisibility();
+        }}
+
+        function onSampleSelect(val) {{
+          selectedSampleId = val;
+          updateVisibility();
+        }}
+
+        function syncFaciesButtons() {{
+          document.querySelectorAll(".facies-badge-btn").forEach(btn => {{
+            const f = btn.getAttribute("data-facies");
+            if (activeFacies.has(f)) {{
+              btn.classList.add("active");
+              btn.classList.remove("inactive");
+            }} else {{
+              btn.classList.remove("active");
+              btn.classList.add("inactive");
+            }}
+          }});
+        }}
 
         let diamondLabelsVisible = true;
         function toggleDiamondLabels() {{
@@ -662,16 +797,19 @@ def generar_diagrama_piper_d3(df_procesado):
           const [mx, my] = d3.pointer(event, svg.node());
           lensGroup.style("display", "block").attr("transform", `translate(${{mx}}, ${{my}})`);
           lensUse.attr("transform", `scale(${{lensMag}}) translate(${{-mx}}, ${{-my}})`);
-        }}).on("mouseleave", function() {{
+        }});
+
+        svg.on("mouseleave", function() {{
           if (lupaActive) lensGroup.style("display", "none");
         }});
 
-        // Controles de Zoom y Paneo
+        // Zoom y Paneo
         const zoom = d3.zoom()
-          .scaleExtent([0.6, 5.0])
+          .scaleExtent([0.5, 8])
           .on("zoom", (event) => {{
             zoomGroup.attr("transform", event.transform);
-            document.getElementById("zoom-level").textContent = Math.round(event.transform.k * 100) + "%";
+            const pct = Math.round(event.transform.k * 100);
+            document.getElementById("zoom-level").textContent = pct + "%";
           }});
 
         svg.call(zoom);
@@ -683,7 +821,7 @@ def generar_diagrama_piper_d3(df_procesado):
         function getCleanStandaloneSVG() {{
           const svgEl = document.getElementById("svg-piper");
           const clone = svgEl.cloneNode(true);
-          
+
           const cloneLens = clone.querySelector("#lens-group");
           if (cloneLens) cloneLens.remove();
 
@@ -710,6 +848,30 @@ def generar_diagrama_piper_d3(df_procesado):
             .connection-line {{ opacity: 0.75 !important; fill: none !important; }}
           `;
           defs.appendChild(styleEl);
+
+          // Preservar la visibilidad exacta de puntos y líneas en la exportación
+          samples.forEach((m, idx) => {{
+            const origGrp = svgEl.querySelector(`.pt-group-${{idx}}`);
+            const cloneGrp = clone.querySelector(`.pt-group-${{idx}}`);
+            if (origGrp && cloneGrp) {{
+              if (origGrp.style.display === "none") {{
+                cloneGrp.remove();
+              }} else if (origGrp.style.opacity) {{
+                cloneGrp.setAttribute("opacity", origGrp.style.opacity);
+              }}
+            }}
+            const origConn = svgEl.querySelector(`.conn-${{idx}}`);
+            const cloneConn = clone.querySelector(`.conn-${{idx}}`);
+            if (origConn && cloneConn) {{
+              if (origConn.style.display === "none") {{
+                cloneConn.remove();
+              }} else {{
+                cloneConn.setAttribute("stroke-opacity", "0.9");
+                cloneConn.setAttribute("stroke-dasharray", "4,3");
+                cloneConn.setAttribute("stroke-width", "2.2");
+              }}
+            }}
+          }});
 
           const polys = clone.querySelectorAll("polygon");
           polys.forEach(p => {{
@@ -761,16 +923,14 @@ def generar_diagrama_piper_d3(df_procesado):
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             URL.revokeObjectURL(url);
-            canvas.toBlob(function(blob) {{
-              const dlUrl = URL.createObjectURL(blob);
-              const a = document.createElement("a");
-              a.href = dlUrl;
-              a.download = "Diagrama_Piper_300DPI_CONAGUA.png";
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(dlUrl);
-            }}, "image/png");
+
+            const pngUrl = canvas.toDataURL("image/png");
+            const a = document.createElement("a");
+            a.href = pngUrl;
+            a.download = "Diagrama_Piper_Oficial_300DPI_CONAGUA.png";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
           }};
           img.src = url;
         }}
@@ -778,6 +938,9 @@ def generar_diagrama_piper_d3(df_procesado):
     </body>
     </html>
     """
+    return html_code
+
+
     return html_code
 
 def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
