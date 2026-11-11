@@ -310,11 +310,14 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
                 df[col_mg] = np.nan
 
     # Manejo de Na+K:
-    if 'Na_meq_L' in df.columns and 'K_meq_L' in df.columns and df['Na_meq_L'].notna().any():
-        df['Na_K_meq_L'] = df['Na_meq_L'] + df['K_meq_L'].fillna(0.0)
-    elif 'Na_meq_L' in df.columns and df['Na_meq_L'].notna().any() and 'Na_K_meq_L' not in df.columns:
-        df['Na_K_meq_L'] = df['Na_meq_L']
-    elif 'Na_K_meq_L' in df.columns:
+    if 'Na_K_meq_L' not in df.columns or df['Na_K_meq_L'].isna().all():
+        if 'Na_meq_L' in df.columns and 'K_meq_L' in df.columns and df['Na_meq_L'].notna().any():
+            df['Na_K_meq_L'] = df['Na_meq_L'] + df['K_meq_L'].fillna(0.0)
+        elif 'Na_meq_L' in df.columns and df['Na_meq_L'].notna().any():
+            df['Na_K_meq_L'] = df['Na_meq_L']
+        else:
+            df['Na_K_meq_L'] = np.nan
+    else:
         df['Na_K_meq_L'] = pd.to_numeric(df['Na_K_meq_L'], errors='coerce')
 
     # Manejo de HCO3+CO3:
@@ -326,6 +329,11 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
     if ('NO3_mg_L' not in df.columns or df['NO3_mg_L'].isna().all()) and 'N_NO3_mg_L' in df.columns:
         df['NO3_mg_L'] = df['N_NO3_mg_L'] * 4.427
         df['NO3_meq_L'] = df['NO3_mg_L'] / PESOS_EQUIVALENTES['NO3']['eq_wt']
+
+    # Asegurar presencia de columnas requeridas para evitar KeyErrors con datos incompletos
+    for col_req in ['Ca_meq_L', 'Mg_meq_L', 'Na_K_meq_L', 'HCO3_meq_L', 'SO4_meq_L', 'Cl_meq_L']:
+        if col_req not in df.columns:
+            df[col_req] = np.nan
 
     # Carbonato CO3 por defecto en 0.0 solo si HCO3 está medido (aguas naturales pH < 8.3)
     if 'CO3_meq_L' not in df.columns or df['CO3_meq_L'].isna().all():

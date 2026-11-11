@@ -25,17 +25,14 @@ import pandas as pd
 # =============================================================================
 # 1. DIAGRAMA TRILINEAL DE PIPER VECTORIAL D3.JS
 # =============================================================================
-def generar_diagrama_piper_d3(df_procesado):
+def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
     """
-    Genera el HTML + D3.js autónomo e interactivo para el Diagrama Trilineal de Piper.
-    Incluye:
-      - Normalización ternaria estricta OMM / UNESCO.
-      - Barra de herramientas con buscador/selector de MUESTRA INDIVIDUAL (con proyección automática de rayos).
-      - Conmutadores (pills) para ENCENDER/APAGAR familias de facies o AISLAR con doble clic.
-      - Alternancia entre Modo Fantasma (atenuado) y Modo Ocultar.
+    Genera el HTML + D3.js con presentación científica limpia y profesional:
+      - Geometría canónica oficial (OMM / UNESCO / A.M. Piper 1944).
+      - Cabecera limpia y sobria: título oficial, controles de Zoom, Lupa y Descarga SVG/PNG (300 DPI).
+      - Soporte para aislamiento de muestra individual (rayos proyectados automáticos hacia el diamante).
       - Rótulos de ejes del rombo SO4+Cl, Ca+Mg, Na+K, CO3+HCO3.
-      - Tooltip inteligente anti-recorte.
-      - Controles de Zoom, Paneo, Lupa de Aumento (2.5x) y Descarga SVG/PNG 300 DPI respetando filtros activos.
+      - Tooltip inteligente anti-recorte con detección de bordes.
     """
     muestras_data = []
     colores_paleta = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
@@ -87,39 +84,7 @@ def generar_diagrama_piper_d3(df_procesado):
         })
 
     muestras_json_str = json.dumps(muestras_data)
-
-    # Conteo por familia de facies
-    facies_counts = {}
-    for m in muestras_data:
-        f = m["facies"]
-        facies_counts[f] = facies_counts.get(f, 0) + 1
-
-    facies_list = sorted(list(facies_counts.keys()))
-    facies_list_json = json.dumps(facies_list)
-
-    # Generar opciones de select de muestras
-    options_muestras_html = "\n".join([
-        f'<option value="{m["id"]}">{m["id"]} ({m["fuente"]})</option>'
-        for m in muestras_data
-    ])
-
-    # Generar badges/pills de facies
-    badges_list = []
-    for f_nom in facies_list:
-        cnt = facies_counts[f_nom]
-        col = facies_paleta_base.get(f_nom, "#0284c7")
-        f_esc = f_nom.replace('"', '&quot;').replace("'", "\\'")
-        badges_list.append(f"""
-          <button class="facies-badge-btn active" data-facies="{f_esc}" onclick="toggleFacies('{f_esc}', event)" ondblclick="isolateFacies('{f_esc}')" title="Clic: Encender/Apagar | Doble clic: Aislar esta familia">
-            <span class="facies-dot" style="background:{col};"></span>
-            <span class="facies-name">{f_nom}</span>
-            <span class="facies-count">{cnt}</span>
-          </button>
-        """)
-    facies_badges_html = "".join(badges_list)
-
-    n_incomp = len(df_procesado) - len(muestras_data)
-    aviso_incomp_html = f'<span style="font-size:10px; color:#b91c1c; font-weight:700; background:#fee2e2; padding:3px 8px; border-radius:10px; margin-left:6px;">⚠️ {n_incomp} no proyectadas (faltan iones)</span>' if n_incomp > 0 else ''
+    muestra_aislada_json = json.dumps(str(muestra_aislada) if muestra_aislada else "")
 
     html_code = f"""
     <!DOCTYPE html>
@@ -144,57 +109,6 @@ def generar_diagrama_piper_d3(df_procesado):
         }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
-        
-        /* Barra de Control Interactivo de Muestras y Facies */
-        .controls-bar-piper {{
-          display: flex; flex-direction: column; gap: 6px;
-          padding: 7px 16px; background: #f1f5f9; border-bottom: 1px solid #cbd5e1; flex-shrink: 0;
-        }}
-        .ctrl-group-sample {{
-          display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
-        }}
-        .ctrl-group-facies {{
-          display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-        }}
-        .ctrl-label {{
-          font-size: 11px; font-weight: 700; color: #334155; white-space: nowrap;
-        }}
-        .select-piper {{
-          background: #ffffff; border: 1px solid #94a3b8; border-radius: 4px;
-          padding: 4px 8px; font-size: 11px; font-weight: 600; color: #1e293b;
-          max-width: 290px; outline: none; cursor: pointer;
-        }}
-        .select-piper:focus {{ border-color: #691C32; }}
-        .btn-ctrl-tag {{
-          background: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px;
-          padding: 3px 8px; font-size: 10.5px; font-weight: 600; color: #475569;
-          cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 3px;
-        }}
-        .btn-ctrl-tag:hover {{ background: #e2e8f0; color: #0f172a; }}
-        .btn-ctrl-tag.active {{ background: #691C32; color: #ffffff; border-color: #691C32; }}
-        .facies-badges-scroll {{
-          display: flex; gap: 5px; align-items: center; flex-wrap: wrap;
-        }}
-        .facies-badge-btn {{
-          background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px;
-          padding: 2px 8px; font-size: 10.5px; font-weight: 600; color: #334155;
-          cursor: pointer; transition: all 0.15s ease; display: inline-flex; align-items: center; gap: 4px;
-        }}
-        .facies-badge-btn:hover {{ border-color: #691C32; }}
-        .facies-badge-btn.active {{
-          background: #ffffff; border-color: #691C32; box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }}
-        .facies-badge-btn.inactive {{
-          background: #f8fafc; border-color: #e2e8f0; color: #94a3b8; opacity: 0.55; text-decoration: line-through;
-        }}
-        .facies-dot {{
-          width: 8px; height: 8px; border-radius: 50%; display: inline-block;
-        }}
-        .facies-count {{
-          background: #e2e8f0; color: #334155; padding: 1px 5px; border-radius: 8px; font-size: 9.5px; font-weight: 700;
-        }}
-        .facies-badge-btn.active .facies-count {{ background: #691C32; color: #ffffff; }}
-
         #piper-svg-container {{
           flex: 1; width: 100%; position: relative; background: #ffffff; overflow: hidden;
           cursor: grab;
@@ -239,9 +153,8 @@ def generar_diagrama_piper_d3(df_procesado):
     </head>
     <body>
       <div class="toolbar-piper">
-        <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap; display:flex; align-items:center;">
+        <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap;">
           🧪 Diagrama Trilineal de Piper (OMM / UNESCO)
-          {aviso_incomp_html}
         </div>
         <div style="display: flex; gap: 6px; align-items: center; flex-wrap: nowrap;">
           <button class="btn-toolbar" onclick="zoomIn()" title="Acercar (Zoom In)"><span>🔍+</span></button>
@@ -259,39 +172,13 @@ def generar_diagrama_piper_d3(df_procesado):
         </div>
       </div>
 
-      <!-- Barra de Control Interactivo -->
-      <div class="controls-bar-piper">
-        <div class="ctrl-group-sample">
-          <label for="sample-select-input" class="ctrl-label">📍 Muestra Individual:</label>
-          <select id="sample-select-input" class="select-piper" onchange="onSampleSelect(this.value)">
-            <option value="ALL">🔍 Todas las muestras ({len(muestras_data)})</option>
-            {options_muestras_html}
-          </select>
-          <button class="btn-ctrl-tag active" id="btn-ghost-toggle" onclick="toggleGhostMode()" title="Alternar entre desvanecer o esconder los puntos no seleccionados">
-            <span id="ghost-mode-icon">👻</span> <span id="ghost-mode-text">Modo Fantasma</span>
-          </button>
-          <button class="btn-ctrl-tag" onclick="resetAllFacies()" title="Encender todas las familias">
-            <span>✅ Todas</span>
-          </button>
-          <button class="btn-ctrl-tag" onclick="isolateNoneFacies()" title="Apagar todas las familias">
-            <span>⚪ Apagar</span>
-          </button>
-        </div>
-        <div class="ctrl-group-facies">
-          <span class="ctrl-label" style="margin-right: 2px;">🔬 Familias:</span>
-          <div class="facies-badges-scroll" id="facies-badges-container">
-            {facies_badges_html}
-          </div>
-        </div>
-      </div>
-
       <div id="piper-svg-container">
         <div id="piper-tooltip"></div>
       </div>
 
       <script>
         const samples = {muestras_json_str};
-        const allFacies = {facies_list_json};
+        const isolatedSampleId = {muestra_aislada_json};
 
         const w = 960, h = 800;
         const svg = d3.select("#piper-svg-container").append("svg")
@@ -472,8 +359,11 @@ def generar_diagrama_piper_d3(df_procesado):
         // Tooltip
         const tooltip = d3.select("#piper-tooltip");
 
+        const hasIsolation = (isolatedSampleId && isolatedSampleId.trim() !== "" && isolatedSampleId !== "ALL");
+
         // Render de Muestras
         samples.forEach((m, i) => {{
+          const isMatch = (m.id === isolatedSampleId);
           const ca_frac = m.ca_pct / 100.0;
           const mg_frac = m.mg_pct / 100.0;
           const nak_frac = m.nak_pct / 100.0;
@@ -494,14 +384,15 @@ def generar_diagrama_piper_d3(df_procesado):
           const conn = gConnections.append("polyline")
             .attr("points", `${{xc}},${{yc}} ${{xd}},${{yd}} ${{xa}},${{ya}}`)
             .attr("stroke", m.color)
-            .attr("stroke-width", 1.2)
+            .attr("stroke-width", isMatch ? 2.4 : 1.2)
+            .attr("stroke-dasharray", isMatch ? "4,3" : null)
+            .attr("stroke-opacity", isMatch ? 0.95 : 0.65)
             .attr("fill", "none")
-            .attr("class", `connection-line conn-${{i}}`)
-            .attr("data-id", m.id)
-            .attr("data-facies", m.facies);
+            .attr("style", hasIsolation && !isMatch ? "display: none;" : "")
+            .attr("class", `connection-line conn-${{i}}`);
 
           const showTip = (event) => {{
-            conn.classed("highlight", true).attr("stroke-width", 2.4).attr("stroke-opacity", 1.0);
+            conn.classed("highlight", true).attr("stroke-width", 2.4).attr("stroke-opacity", 1.0).style("display", "block");
             d3.selectAll(`.pt-group-${{i}}`).raise().selectAll("circle, polygon").attr("stroke-width", 3.0);
 
             const tipHtml = `
@@ -544,10 +435,11 @@ def generar_diagrama_piper_d3(df_procesado):
           }};
 
           const hideTip = () => {{
-            if (selectedSampleId === "ALL") {{
+            if (!hasIsolation || !isMatch) {{
               conn.classed("highlight", false).attr("stroke-width", 1.2).attr("stroke-opacity", 0.65);
-              d3.selectAll(`.pt-group-${{i}}`).selectAll("circle, polygon").attr("stroke-width", 1.8);
+              if (hasIsolation) conn.style("display", "none");
             }}
+            d3.selectAll(`.pt-group-${{i}}`).selectAll("circle, polygon").attr("stroke-width", isMatch ? 2.6 : 1.8);
             tooltip.style("display", "none");
           }};
 
@@ -556,189 +448,40 @@ def generar_diagrama_piper_d3(df_procesado):
             .attr("data-id", m.id)
             .attr("data-facies", m.facies);
 
+          if (hasIsolation && !isMatch) {{
+            grp.style("opacity", 0.12).style("pointer-events", "none");
+          }}
+
+          const r_circ = isMatch ? 8.5 : 5.5;
+          const stroke_c = isMatch ? "#0f172a" : "#ffffff";
+          const stroke_w = isMatch ? 2.6 : 1.8;
+
           grp.append("circle")
-            .attr("cx", xc).attr("cy", yc).attr("r", 5.5)
-            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
-            .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
+            .attr("cx", xc).attr("cy", yc).attr("r", r_circ)
+            .attr("fill", m.color).attr("stroke", stroke_c).attr("stroke-width", stroke_w)
+            .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: ${{stroke_w}}px !important;`)
             .attr("class", "sample-pt pt-cat")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
           grp.append("circle")
-            .attr("cx", xa).attr("cy", ya).attr("r", 5.5)
-            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
-            .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
+            .attr("cx", xa).attr("cy", ya).attr("r", r_circ)
+            .attr("fill", m.color).attr("stroke", stroke_c).attr("stroke-width", stroke_w)
+            .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: ${{stroke_w}}px !important;`)
             .attr("class", "sample-pt pt-an")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
-          const rd = 7.0;
+          const rd = isMatch ? 11.0 : 7.0;
           grp.append("polygon")
             .attr("points", `${{xd}},${{yd - rd}} ${{xd + rd}},${{yd}} ${{xd}},${{yd + rd}} ${{xd - rd}},${{yd}}`)
-            .attr("data-xd", xd)
-            .attr("data-yd", yd)
-            .attr("fill", m.color).attr("stroke", "#ffffff").attr("stroke-width", 1.8)
-            .attr("style", `fill: ${{m.color}} !important; stroke: #ffffff !important; stroke-width: 1.8px !important;`)
+            .attr("fill", m.color).attr("stroke", stroke_c).attr("stroke-width", stroke_w)
+            .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: ${{stroke_w}}px !important;`)
             .attr("class", "sample-pt pt-dia")
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
+
+          if (isMatch) {{
+            grp.raise();
+          }}
         }});
-
-        // LÓGICA DE CONTROL INTERACTIVO DE FACIES Y MUESTRAS
-        let activeFacies = new Set(allFacies);
-        let selectedSampleId = "ALL";
-        let isGhostMode = true;
-
-        function updateVisibility() {{
-          const hasSingleSample = (selectedSampleId !== "ALL");
-
-          samples.forEach((m, i) => {{
-            const isFaciesActive = activeFacies.has(m.facies);
-            const isSampleMatch = (m.id === selectedSampleId);
-            const shouldBeVisible = hasSingleSample ? isSampleMatch : isFaciesActive;
-
-            const grp = d3.selectAll(`.pt-group-${{i}}`);
-            const conn = d3.selectAll(`.conn-${{i}}`);
-
-            if (shouldBeVisible) {{
-              grp.style("display", "block")
-                 .style("opacity", "1.0")
-                 .style("pointer-events", "all");
-
-              if (hasSingleSample) {{
-                grp.raise();
-                grp.selectAll("circle")
-                   .attr("r", 8.5)
-                   .attr("stroke", "#0f172a")
-                   .attr("stroke-width", 2.6);
-
-                const poly = grp.select("polygon");
-                if (!poly.empty()) {{
-                  const px = parseFloat(poly.attr("data-xd"));
-                  const py = parseFloat(poly.attr("data-yd"));
-                  const r_lg = 11.0;
-                  poly.attr("points", `${{px}},${{py - r_lg}} ${{px + r_lg}},${{py}} ${{px}},${{py + r_lg}} ${{px - r_lg}},${{py}}`)
-                      .attr("stroke", "#0f172a")
-                      .attr("stroke-width", 2.6);
-                }}
-
-                conn.style("display", "block")
-                    .classed("highlight", true)
-                    .attr("stroke-width", 2.4)
-                    .attr("stroke-dasharray", "4,3")
-                    .attr("stroke-opacity", 0.95);
-              }} else {{
-                grp.selectAll("circle")
-                   .attr("r", 5.5)
-                   .attr("stroke", "#ffffff")
-                   .attr("stroke-width", 1.8);
-
-                const poly = grp.select("polygon");
-                if (!poly.empty()) {{
-                  const px = parseFloat(poly.attr("data-xd"));
-                  const py = parseFloat(poly.attr("data-yd"));
-                  const r_norm = 7.0;
-                  poly.attr("points", `${{px}},${{py - r_norm}} ${{px + r_norm}},${{py}} ${{px}},${{py + r_norm}} ${{px - r_norm}},${{py}}`)
-                      .attr("stroke", "#ffffff")
-                      .attr("stroke-width", 1.8);
-                }}
-
-                conn.style("display", "none")
-                    .classed("highlight", false)
-                    .attr("stroke-width", 1.2)
-                    .attr("stroke-dasharray", null)
-                    .attr("stroke-opacity", 0.65);
-              }}
-            }} else {{
-              conn.style("display", "none");
-              if (isGhostMode) {{
-                grp.style("display", "block")
-                   .style("opacity", "0.08")
-                   .style("pointer-events", "none");
-                grp.selectAll("circle").attr("r", 4.5).attr("stroke", "#cbd5e1").attr("stroke-width", 1.0);
-              }} else {{
-                grp.style("display", "none");
-              }}
-            }}
-          }});
-        }}
-
-        function toggleFacies(facies, event) {{
-          if (event && (event.altKey || event.ctrlKey || event.metaKey)) {{
-            isolateFacies(facies);
-            return;
-          }}
-          if (activeFacies.has(facies)) {{
-            activeFacies.delete(facies);
-          }} else {{
-            activeFacies.add(facies);
-          }}
-          selectedSampleId = "ALL";
-          const sel = document.getElementById("sample-select-input");
-          if (sel) sel.value = "ALL";
-          syncFaciesButtons();
-          updateVisibility();
-        }}
-
-        function isolateFacies(facies) {{
-          activeFacies.clear();
-          activeFacies.add(facies);
-          selectedSampleId = "ALL";
-          const sel = document.getElementById("sample-select-input");
-          if (sel) sel.value = "ALL";
-          syncFaciesButtons();
-          updateVisibility();
-        }}
-
-        function resetAllFacies() {{
-          allFacies.forEach(f => activeFacies.add(f));
-          selectedSampleId = "ALL";
-          const sel = document.getElementById("sample-select-input");
-          if (sel) sel.value = "ALL";
-          syncFaciesButtons();
-          updateVisibility();
-        }}
-
-        function isolateNoneFacies() {{
-          activeFacies.clear();
-          selectedSampleId = "ALL";
-          const sel = document.getElementById("sample-select-input");
-          if (sel) sel.value = "ALL";
-          syncFaciesButtons();
-          updateVisibility();
-        }}
-
-        function toggleGhostMode() {{
-          isGhostMode = !isGhostMode;
-          const btn = document.getElementById("btn-ghost-toggle");
-          const icon = document.getElementById("ghost-mode-icon");
-          const text = document.getElementById("ghost-mode-text");
-          if (isGhostMode) {{
-            btn.classList.add("active");
-            icon.textContent = "👻";
-            text.textContent = "Modo Fantasma";
-          }} else {{
-            btn.classList.remove("active");
-            icon.textContent = "👁️";
-            text.textContent = "Modo Ocultar";
-          }}
-          updateVisibility();
-        }}
-
-        function onSampleSelect(val) {{
-          selectedSampleId = val;
-          updateVisibility();
-        }}
-
-        function syncFaciesButtons() {{
-          document.querySelectorAll(".facies-badge-btn").forEach(btn => {{
-            const f = btn.getAttribute("data-facies");
-            if (activeFacies.has(f)) {{
-              btn.classList.add("active");
-              btn.classList.remove("inactive");
-            }} else {{
-              btn.classList.remove("active");
-              btn.classList.add("inactive");
-            }}
-          }});
-        }}
 
         let diamondLabelsVisible = true;
         function toggleDiamondLabels() {{
@@ -849,30 +592,6 @@ def generar_diagrama_piper_d3(df_procesado):
           `;
           defs.appendChild(styleEl);
 
-          // Preservar la visibilidad exacta de puntos y líneas en la exportación
-          samples.forEach((m, idx) => {{
-            const origGrp = svgEl.querySelector(`.pt-group-${{idx}}`);
-            const cloneGrp = clone.querySelector(`.pt-group-${{idx}}`);
-            if (origGrp && cloneGrp) {{
-              if (origGrp.style.display === "none") {{
-                cloneGrp.remove();
-              }} else if (origGrp.style.opacity) {{
-                cloneGrp.setAttribute("opacity", origGrp.style.opacity);
-              }}
-            }}
-            const origConn = svgEl.querySelector(`.conn-${{idx}}`);
-            const cloneConn = clone.querySelector(`.conn-${{idx}}`);
-            if (origConn && cloneConn) {{
-              if (origConn.style.display === "none") {{
-                cloneConn.remove();
-              }} else {{
-                cloneConn.setAttribute("stroke-opacity", "0.9");
-                cloneConn.setAttribute("stroke-dasharray", "4,3");
-                cloneConn.setAttribute("stroke-width", "2.2");
-              }}
-            }}
-          }});
-
           const polys = clone.querySelectorAll("polygon");
           polys.forEach(p => {{
             if (!p.classList.contains("sample-pt")) {{
@@ -940,8 +659,6 @@ def generar_diagrama_piper_d3(df_procesado):
     """
     return html_code
 
-
-    return html_code
 
 def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
     """

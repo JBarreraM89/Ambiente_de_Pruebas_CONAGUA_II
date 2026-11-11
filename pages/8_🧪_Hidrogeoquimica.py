@@ -561,28 +561,77 @@ with tab_piper:
 
     col_p_plot, col_p_info = st.columns([7.5, 4.5], gap="large")
 
-    with col_p_plot:
-        html_piper_d3 = generar_diagrama_piper_d3(df_procesado)
-        st.iframe(html_piper_d3, height=880)
+    facies_paleta_ui = {
+        "Bicarbonatada Magnésica-Sódica": "#0891b2",
+        "Bicarbonatada Sódica": "#7c3aed",
+        "Bicarbonatada Sódica-Magnésica": "#9333ea",
+        "Bicarbonatada Magnésica": "#16a34a",
+        "Bicarbonatada Magnésica-Cálcica": "#059669",
+        "Bicarbonatada Cálcica-Magnésica": "#0284c7",
+        "Bicarbonatada Sódica-Cálcica": "#c026d3",
+        "Bicarbonatada Cálcica": "#0369a1",
+        "Bicarbonatada Mixta Catiónica": "#64748b",
+        "Bicarbonatada Cálcica-Sódica": "#0ea5e9",
+        "Sulfatada Magnésica-Sódica": "#d97706",
+        "Clorurada Sódica": "#dc2626",
+        "Sulfatada Cálcica": "#b45309"
+    }
 
     with col_p_info:
         with st.container(border=True):
-            st.markdown("<h4 style='color:#691C32; margin:0 0 8px 0; font-size:14px;'>🔬 Interpretación de Facies y Génesis</h4>", unsafe_allow_html=True)
-            
-            # Distribución de facies
-            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Familias Identificadas en el Muestreo:</p>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:#691C32; margin:0 0 10px 0; font-size:13.5px; font-weight:700;'>🔬 Interpretación de Facies y Control</h4>", unsafe_allow_html=True)
+
+            # Selector para aislar muestra individual
+            muestras_aptas_list = sorted(df_procesado[df_procesado['Apta_Piper'] == True]['Muestra'].astype(str).tolist()) if 'Apta_Piper' in df_procesado.columns else sorted(df_procesado['Muestra'].astype(str).tolist())
+            opciones_muestra = ["🔍 Todas las fuentes ({})".format(len(muestras_aptas_list))] + muestras_aptas_list
+            muestra_enfocada = st.selectbox(
+                "Enfocar o Aislar Fuente Individual:",
+                options=opciones_muestra,
+                index=0,
+                key="sel_piper_muestra_aislada",
+                help="Seleccione una captación específica para proyectar sus rayos analíticos hacia el diamante central."
+            )
+
+            # Filtro interactivo de Familias
+            todas_familias = list(facies_counts.index)
+            familias_seleccionadas = st.multiselect(
+                "Filtrar Familias Activas:",
+                options=todas_familias,
+                default=todas_familias,
+                key="ms_piper_familias_activas",
+                help="Desmarque familias para ocultarlas del diagrama y de la tabla."
+            )
+
+            if not familias_seleccionadas:
+                familias_seleccionadas = todas_familias
+
+            # Ficha técnica si seleccionó una muestra individual
+            if muestra_enfocada != opciones_muestra[0]:
+                sub_sel = df_procesado[df_procesado['Muestra'].astype(str) == muestra_enfocada]
+                if not sub_sel.empty:
+                    r_sel = sub_sel.iloc[0]
+                    cbe_v = r_sel.get('CBE_pct', 0.0)
+                    cbe_str = f"{cbe_v:+.2f}%" if pd.notna(cbe_v) else "N/D"
+                    st.markdown(f"""
+                    <div style='background:#f1f5f9; border-left:3.5px solid #691C32; padding:7px 10px; border-radius:4px; margin:8px 0; font-size:11px; line-height:1.5;'>
+                        <span style='font-weight:700; color:#691C32;'>📍 Fuente Enfocada: {r_sel['Muestra']}</span><br>
+                        <span style='color:#334155;'><b>Facies:</b> {r_sel.get('Facies_Piper', 'N/D')}</span><br>
+                        <span style='color:#475569;'><b>Cuadrante:</b> {r_sel.get('Cuadrante_Piper', 'N/D')} | <b>CBE:</b> {cbe_str}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin:10px 0 6px 0;'>Familias Identificadas en el Muestreo:</p>", unsafe_allow_html=True)
             for fac_nom, c_cnt in facies_counts.items():
                 pct_val = (c_cnt / n_tot) * 100.0
-                if "Bicarbonatada Cálcica" in fac_nom: badge_col = "#0284c7"
-                elif "Bicarbonatada Sódica" in fac_nom: badge_col = "#7c3aed"
-                elif "Clorurada Sódica" in fac_nom: badge_col = "#dc2626"
-                elif "Sulfatada" in fac_nom: badge_col = "#d97706"
-                else: badge_col = "#059669"
+                is_active = (fac_nom in familias_seleccionadas)
+                badge_col = facies_paleta_ui.get(fac_nom, "#0284c7")
+                opacity_style = "opacity:1.0;" if is_active else "opacity:0.40; text-decoration:line-through;"
+                border_style = f"border-left:3px solid {badge_col};" if is_active else "border-left:3px solid #cbd5e1;"
 
                 st.markdown(f"""
-                <div style='display:flex; justify-content:space-between; align-items:center; padding:6px 10px; background:#f8fafc; border-left:3px solid {badge_col}; border-radius:4px; margin-bottom:6px; font-size:11.5px;'>
+                <div style='display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:#f8fafc; {border_style} border-radius:4px; margin-bottom:5px; font-size:11px; {opacity_style}'>
                     <span><b>{fac_nom}</b></span>
-                    <span style='background:{badge_col}; color:white; padding:2px 8px; border-radius:10px; font-size:10.5px; font-weight:bold;'>{c_cnt} fuentes ({pct_val:.0f}%)</span>
+                    <span style='background:{badge_col if is_active else "#94a3b8"}; color:white; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:bold;'>{c_cnt} fuentes ({pct_val:.0f}%)</span>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -596,6 +645,12 @@ with tab_piper:
                 • <b style='color:#991b1b;'>Este (Clorurada/Sulfatada Sódica):</b> Aguas altamente evolucionadas, largo tiempo de residencia, salinas o intrusión marina.
             </div>
             """, unsafe_allow_html=True)
+
+    with col_p_plot:
+        id_aislado = muestra_enfocada if muestra_enfocada != opciones_muestra[0] else None
+        df_piper_render = df_procesado[df_procesado['Facies_Piper'].isin(familias_seleccionadas)].copy()
+        html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
+        st.iframe(html_piper_d3, height=800)
 
     with st.expander("📋 Tabla Detallada de Parámetros Trilineales, Balance Iónico e Índice de Revelle", expanded=False):
         cols_piper_tab = [
