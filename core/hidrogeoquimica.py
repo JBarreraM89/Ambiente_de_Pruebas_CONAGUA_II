@@ -915,10 +915,10 @@ def generar_diagrama_piper(df_procesado):
 # =============================================================================
 # 5.1 DIAGRAMA DE PIPER VECTORIAL D3.js / SVG (ALTA DEFINICIÓN CIENTÍFICA)
 # =============================================================================
-def generar_diagrama_piper_d3(df_procesado):
-    """Genera el Diagrama de Piper vectorial D3.js con zoom, paneo y lupa."""
+def generar_diagrama_piper_d3(df_procesado, *args, **kwargs):
+    """Genera el Diagrama de Piper vectorial D3.js con zoom, paneo, lupa y soporte de aislamiento."""
     from core.hidro_d3_diagrams import generar_diagrama_piper_d3 as _impl
-    return _impl(df_procesado)
+    return _impl(df_procesado, *args, **kwargs)
 
 
 def hex_or_rgb_to_rgba(c, alpha=0.45):
@@ -938,16 +938,16 @@ def hex_or_rgb_to_rgba(c, alpha=0.45):
 # =============================================================================
 # 6.1 DIAGRAMAS DE STIFF VECTORIAL D3.js / SVG MULTIMUESTRA
 # =============================================================================
-def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
+def generar_diagrama_stiff_d3(df_procesado, *args, **kwargs):
     """Genera los diagramas poligonales de Stiff en D3.js con zoom de tarjetas."""
     from core.hidro_d3_diagrams import generar_diagrama_stiff_d3 as _impl
-    return _impl(df_procesado, muestra_sel)
+    return _impl(df_procesado, *args, **kwargs)
 
 
-def generar_diagrama_schoeller_d3(df_procesado):
+def generar_diagrama_schoeller_d3(df_procesado, *args, **kwargs):
     """Genera el Diagrama semilogarítmico de Schöeller en D3.js con zoom y lupa."""
     from core.hidro_d3_diagrams import generar_diagrama_schoeller_d3 as _impl
-    return _impl(df_procesado)
+    return _impl(df_procesado, *args, **kwargs)
 
 
 def generar_diagrama_schoeller(df_procesado):
@@ -1005,22 +1005,22 @@ def generar_diagrama_schoeller(df_procesado):
 # =============================================================================
 # 8.1 DIAGRAMA DE WILCOX VECTORIAL D3.js / SVG (APTITUD PARA RIEGO)
 # =============================================================================
-def generar_diagrama_wilcox_d3(df_procesado):
+def generar_diagrama_wilcox_d3(df_procesado, *args, **kwargs):
     """Genera el Diagrama de Wilcox en D3.js con zoom y lupa."""
     from core.hidro_d3_diagrams import generar_diagrama_wilcox_d3 as _impl
-    return _impl(df_procesado)
+    return _impl(df_procesado, *args, **kwargs)
 
 
-def generar_diagrama_riverside_d3(df_procesado):
+def generar_diagrama_riverside_d3(df_procesado, *args, **kwargs):
     """Genera el Diagrama de Riverside (USSL) en D3.js con zoom y lupa."""
     from core.hidro_d3_diagrams import generar_diagrama_riverside_d3 as _impl
-    return _impl(df_procesado)
+    return _impl(df_procesado, *args, **kwargs)
 
 
-def generar_diagrama_gibbs_d3(df_procesado):
+def generar_diagrama_gibbs_d3(df_procesado, *args, **kwargs):
     """Genera los Diagramas de Gibbs en D3.js con zoom y lupa."""
     from core.hidro_d3_diagrams import generar_diagrama_gibbs_d3 as _impl
-    return _impl(df_procesado)
+    return _impl(df_procesado, *args, **kwargs)
 
 
 def generar_diagrama_gibbs(df_procesado):

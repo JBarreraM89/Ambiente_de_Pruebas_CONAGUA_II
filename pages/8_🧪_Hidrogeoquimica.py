@@ -49,15 +49,17 @@ from core.hidrogeoquimica import (
     parse_concatenated_csv,
     generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
     procesar_muestras_hidroquimicas, auditar_norma_127,
+    generar_kmz_hidrogeoquimico, generar_shapefile_hidrogeoquimico,
+    generar_reporte_excel_hidrogeoquimico,
+    LIMITES_NOM_127_2021
+)
+from core.hidro_d3_diagrams import (
     generar_diagrama_piper_d3,
     generar_diagrama_stiff_d3,
     generar_diagrama_schoeller_d3,
     generar_diagrama_wilcox_d3,
     generar_diagrama_riverside_d3,
-    generar_diagrama_gibbs_d3,
-    generar_kmz_hidrogeoquimico, generar_shapefile_hidrogeoquimico,
-    generar_reporte_excel_hidrogeoquimico,
-    LIMITES_NOM_127_2021
+    generar_diagrama_gibbs_d3
 )
 
 # =============================================================================
