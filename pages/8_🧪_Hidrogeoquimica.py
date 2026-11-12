@@ -797,6 +797,9 @@ with tab_piper:
                     help=f"Clic para {'ocultar de' if is_active else 'mostrar en'} el diagrama y tabla: {fac_nom}"
                 )
 
+            if len(familias_activas) == 0:
+                st.info("ℹ️ Sin familias seleccionadas. Activa una familia o pulsa 'Mostrar Todas'.")
+
             st.markdown("---")
             st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Guía de Cuadrantes del Diamante Central:</p>", unsafe_allow_html=True)
             st.markdown("""
@@ -811,11 +814,7 @@ with tab_piper:
     with col_p_plot:
         id_aislado = muestra_enfocada if muestra_enfocada != opciones_muestra[0] else None
         df_piper_render = df_procesado[df_procesado['Facies_Piper'].isin(familias_activas)].copy()
-        if df_piper_render.empty:
-            st.info("ℹ️ No hay familias seleccionadas. Haga clic en los botones de familias para activarlas o pulse 'Mostrar Todas'.")
-            html_piper_d3 = generar_diagrama_piper_d3(df_procesado.iloc[0:0], muestra_aislada=id_aislado)
-        else:
-            html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
+        html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
         st.iframe(html_piper_d3, height=800)
 
     with st.expander("📋 Tabla Detallada de Parámetros Trilineales, Balance Iónico e Índice de Revelle", expanded=False):
