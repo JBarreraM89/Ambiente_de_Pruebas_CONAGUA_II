@@ -867,7 +867,10 @@ with tab_piper:
             'pct_Cl': '{:.1f}%',
             'Indice_Revelle': '{:.3f}'
         }
-        st.dataframe(df_tab_p.style.format({k: v for k, v in fmt_dict.items() if k in df_tab_p.columns}), use_container_width=True, hide_index=True)
+        for col_f, f_pat in fmt_dict.items():
+            if col_f in df_tab_p.columns:
+                df_tab_p[col_f] = df_tab_p[col_f].apply(lambda x: f_pat.format(x) if pd.notna(x) and isinstance(x, (int, float, np.floating, np.integer)) else ("" if pd.isna(x) else str(x)))
+        st.dataframe(df_tab_p, width="stretch", hide_index=True)
 
 # -----------------------------------------------------------------------------
 # TAB 2: HUELLA IÓNICA (STIFF / SCHÖELLER)
@@ -926,13 +929,17 @@ with tab_riego:
         cols_riego_tab = ['Muestra', 'Tipo_Fuente', 'CE_uS_cm', 'SDT_mg_L', 'RAS', 'Clasif_RAS', 'Pct_Na_Riego', 'CSR', 'Clasif_CSR']
         cols_r_pres = [c for c in cols_riego_tab if c in df_procesado.columns]
         df_riego_v = df_procesado[cols_r_pres].copy()
-        st.dataframe(df_riego_v.style.format({
+        fmt_riego = {
             'CE_uS_cm': '{:.0f}',
             'SDT_mg_L': '{:.1f}',
             'RAS': '{:.2f}',
             'Pct_Na_Riego': '{:.1f}%',
             'CSR': '{:+.2f}'
-        }), use_container_width=True, hide_index=True)
+        }
+        for col_f, f_pat in fmt_riego.items():
+            if col_f in df_riego_v.columns:
+                df_riego_v[col_f] = df_riego_v[col_f].apply(lambda x: f_pat.format(x) if pd.notna(x) and isinstance(x, (int, float, np.floating, np.integer)) else ("" if pd.isna(x) else str(x)))
+        st.dataframe(df_riego_v, width="stretch", hide_index=True)
 
         st.caption("ℹ️ **Nota Técnica sobre el Carbonato de Sodio Residual (CSR):** Valores negativos reflejan un exceso benéfico de calcio y magnesio sobre los aniones carbonatados ((Ca+Mg) > (HCO3+CO3)), garantizando nulo riesgo de sodificación alcalina y excelente estabilidad para la estructura del suelo.")
 
@@ -965,13 +972,17 @@ with tab_gibbs:
         cols_geoq = ['Muestra', 'Tipo_Fuente', 'rNa_rCl', 'rCa_rSO4', 'rCaMg_rHCO3', 'rMg_rCa', 'Indice_Revelle', 'Clasif_Revelle']
         c_g_pres = [c for c in cols_geoq if c in df_procesado.columns]
         df_geo_v = df_procesado[c_g_pres].copy()
-        st.dataframe(df_geo_v.style.format({
+        fmt_geo = {
             'rNa_rCl': '{:.2f}',
             'rCa_rSO4': '{:.2f}',
             'rCaMg_rHCO3': '{:.2f}',
             'rMg_rCa': '{:.2f}',
             'Indice_Revelle': '{:.3f}'
-        }), use_container_width=True, hide_index=True)
+        }
+        for col_f, f_pat in fmt_geo.items():
+            if col_f in df_geo_v.columns:
+                df_geo_v[col_f] = df_geo_v[col_f].apply(lambda x: f_pat.format(x) if pd.notna(x) and isinstance(x, (int, float, np.floating, np.integer)) else ("" if pd.isna(x) else str(x)))
+        st.dataframe(df_geo_v, width="stretch", hide_index=True)
 
 # -----------------------------------------------------------------------------
 # TAB 5: AUDITORÍA NORMATIVA NOM-127-SSA1-2021
@@ -1015,18 +1026,16 @@ with tab_nom:
         elif "Conforme" in str(val): return "color: #166534; font-weight: bold; background-color: #dcfce7;"
         return ""
 
-    st.dataframe(
-        df_aud_filtrado[['Muestra', 'Tipo_Fuente', 'Estatus_NOM127', 'Total_Evaluados', 'Conformes', 'Alertas', 'No_Conformes', 'Parametros_Excedidos', 'Parametros_Alerta']]
-        .style.map(color_estatus_nom, subset=['Estatus_NOM127']),
-        use_container_width=True, hide_index=True
-    )
+    cols_nom_show = ['Muestra', 'Tipo_Fuente', 'Estatus_NOM127', 'Total_Evaluados', 'Conformes', 'Alertas', 'No_Conformes', 'Parametros_Excedidos', 'Parametros_Alerta']
+    cols_nom_pres = [c for c in cols_nom_show if c in df_aud_filtrado.columns]
+    st.dataframe(df_aud_filtrado[cols_nom_pres], width="stretch", hide_index=True)
 
     with st.expander("📚 Catálogo Oficial de Límites Máximos Permisibles (NOM-127-SSA1-2021)", expanded=False):
         guia_norma = [
             {'Parámetro': v['nombre'], 'Categoría': v['categoria'], 'LMP': f"{v['lmp']} {v['unidad']}", 'Tipo': 'Máximo' if v['tipo'] == 'max' else 'Mínimo'}
             for v in LIMITES_NOM_127_2021.values()
         ]
-        st.dataframe(pd.DataFrame(guia_norma), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(guia_norma), width="stretch", hide_index=True)
 
 # -----------------------------------------------------------------------------
 # TAB 6: GEOVISOR ESPACIAL DE CALIDAD DEL AGUA
