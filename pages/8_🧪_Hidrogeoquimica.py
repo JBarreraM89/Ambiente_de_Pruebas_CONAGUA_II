@@ -611,20 +611,22 @@ with tab_piper:
 
             # Gestión interactiva de Familias mediante Botones de Leyenda
             todas_familias = list(facies_counts.index)
-            if 'piper_familias_activas' not in st.session_state:
+            familias_cache_key = tuple(sorted(todas_familias))
+
+            if ('piper_familias_dataset_cache' not in st.session_state 
+                or st.session_state.get('piper_familias_dataset_cache') != familias_cache_key
+                or 'piper_familias_activas' not in st.session_state):
+                st.session_state['piper_familias_dataset_cache'] = familias_cache_key
                 st.session_state['piper_familias_activas'] = set(todas_familias)
             else:
-                validas = st.session_state['piper_familias_activas'].intersection(set(todas_familias))
-                if not validas and len(todas_familias) > 0:
-                    st.session_state['piper_familias_activas'] = set(todas_familias)
-                else:
-                    st.session_state['piper_familias_activas'] = validas
+                # Mantener solo las que pertenezcan al dataset actual sin forzar rellenado si el usuario ocultó todas
+                st.session_state['piper_familias_activas'] = st.session_state['piper_familias_activas'].intersection(set(todas_familias))
 
             familias_activas = st.session_state['piper_familias_activas']
 
             def _toggle_fam(f_nombre):
                 if f_nombre in st.session_state['piper_familias_activas']:
-                    st.session_state['piper_familias_activas'].remove(f_nombre)
+                    st.session_state['piper_familias_activas'].discard(f_nombre)
                 else:
                     st.session_state['piper_familias_activas'].add(f_nombre)
 
@@ -810,7 +812,7 @@ with tab_piper:
         id_aislado = muestra_enfocada if muestra_enfocada != opciones_muestra[0] else None
         df_piper_render = df_procesado[df_procesado['Facies_Piper'].isin(familias_activas)].copy()
         if df_piper_render.empty:
-            st.info("ℹ️ No hay familias seleccionadas. Haga clic en los botones de familias para activarlas o pulse 'Activar Todas'.")
+            st.info("ℹ️ No hay familias seleccionadas. Haga clic en los botones de familias para activarlas o pulse 'Mostrar Todas'.")
             html_piper_d3 = generar_diagrama_piper_d3(df_procesado.iloc[0:0], muestra_aislada=id_aislado)
         else:
             html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
