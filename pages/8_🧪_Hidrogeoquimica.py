@@ -638,39 +638,145 @@ with tab_piper:
 
             col_btn_all, col_btn_none = st.columns(2)
             with col_btn_all:
-                st.button("✅ Activar Todas", key="btn_act_todas_fac", use_container_width=True, on_click=_activar_todas)
+                st.button("👁️ Mostrar Todas", key="btn_act_todas_fac", use_container_width=True, on_click=_activar_todas, help="Activar todas las familias hidrogeoquímicas")
             with col_btn_none:
-                st.button("❌ Desactivar Todas", key="btn_des_todas_fac", use_container_width=True, on_click=_limpiar_todas)
+                st.button("🚫 Ocultar Todas", key="btn_des_todas_fac", use_container_width=True, on_click=_limpiar_todas, help="Desactivar todas las familias para aislar una")
 
-            # Inyectar estilos CSS para transformar los botones en tarjetas de leyenda
-            css_buttons = "<style>\n"
+            # Inyectar estilos CSS maestros de alineación y tarjetas periciales
+            css_buttons = """
+            <style>
+            /* 1. Botones de acción rápida compactos */
+            .st-key-btn_act_todas_fac button, .st-key-btn_des_todas_fac button {
+                border: 1px solid #cbd5e1 !important;
+                background-color: #f8fafc !important;
+                color: #334155 !important;
+                font-size: 11px !important;
+                font-weight: 600 !important;
+                padding: 4px 6px !important;
+                min-height: 29px !important;
+                border-radius: 5px !important;
+                justify-content: center !important;
+                text-align: center !important;
+            }
+            .st-key-btn_act_todas_fac button:hover, .st-key-btn_des_todas_fac button:hover {
+                background-color: #f1f5f9 !important;
+                border-color: #94a3b8 !important;
+                color: #0f172a !important;
+            }
+
+            /* 2. Alineación milimétrica y retícula uniforme para tarjetas de familia */
+            div[class*="st-key-btn_fac_"] {
+                width: 100% !important;
+                margin-bottom: 3px !important;
+            }
+            div[class*="st-key-btn_fac_"] span[data-testid="stTooltipHoverTarget"] {
+                justify-content: flex-start !important;
+                width: 100% !important;
+            }
+            div[class*="st-key-btn_fac_"] button {
+                display: flex !important;
+                flex-direction: row !important;
+                justify-content: flex-start !important;
+                align-items: center !important;
+                text-align: left !important;
+                width: 100% !important;
+                padding: 6px 10px !important;
+                min-height: 35px !important;
+                border-radius: 6px !important;
+                border: 1px solid #e2e8f0 !important;
+                transition: all 0.15s ease-in-out !important;
+            }
+            div[class*="st-key-btn_fac_"] button > div,
+            div[class*="st-key-btn_fac_"] button span,
+            div[class*="st-key-btn_fac_"] button div[data-testid="stMarkdownContainer"] {
+                display: flex !important;
+                justify-content: flex-start !important;
+                align-items: center !important;
+                width: 100% !important;
+            }
+            div[class*="st-key-btn_fac_"] button p {
+                display: flex !important;
+                align-items: center !important;
+                justify-content: flex-start !important;
+                text-align: left !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                font-size: 11.5px !important;
+                line-height: 1.25 !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            }
+            """
+
             for i, fac_nom in enumerate(todas_familias):
                 col_hex = facies_paleta_ui.get(fac_nom, "#0284c7")
                 is_active = (fac_nom in familias_activas)
-                border_col = col_hex if is_active else "#cbd5e1"
-                bg_col = "#ffffff" if is_active else "#f8fafc"
-                opacity_val = "1.0" if is_active else "0.45"
-                box_shadow = "0 1px 3px rgba(0,0,0,0.08)" if is_active else "none"
 
-                css_buttons += f"""
-                .st-key-btn_fac_{i} button {{
-                    border-left: 5px solid {border_col} !important;
-                    background-color: {bg_col} !important;
-                    opacity: {opacity_val} !important;
-                    text-align: left !important;
-                    justify-content: flex-start !important;
-                    padding: 5px 9px !important;
-                    border-radius: 6px !important;
-                    font-size: 11px !important;
-                    margin-bottom: 2px !important;
-                    box-shadow: {box_shadow} !important;
-                }}
-                .st-key-btn_fac_{i} button:hover {{
-                    border-left: 5px solid {col_hex} !important;
-                    opacity: 1.0 !important;
-                    background-color: #f1f5f9 !important;
-                }}
-                """
+                if is_active:
+                    css_buttons += f"""
+                    .st-key-btn_fac_{i} button {{
+                        border-left: 4.5px solid {col_hex} !important;
+                        background-color: #ffffff !important;
+                        opacity: 1.0 !important;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.05) !important;
+                    }}
+                    .st-key-btn_fac_{i} button:hover {{
+                        border-color: #cbd5e1 !important;
+                        border-left: 4.5px solid {col_hex} !important;
+                        background-color: #f8fafc !important;
+                        box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
+                    }}
+                    .st-key-btn_fac_{i} button p {{
+                        color: #1e293b !important;
+                        font-weight: 500 !important;
+                    }}
+                    .st-key-btn_fac_{i} button p::before {{
+                        content: "" !important;
+                        display: inline-block !important;
+                        width: 10px !important;
+                        height: 10px !important;
+                        min-width: 10px !important;
+                        min-height: 10px !important;
+                        border-radius: 50% !important;
+                        background-color: {col_hex} !important;
+                        margin-right: 8px !important;
+                        box-shadow: 0 0 0 1.5px rgba(0,0,0,0.12) !important;
+                        flex-shrink: 0 !important;
+                    }}
+                    """
+                else:
+                    css_buttons += f"""
+                    .st-key-btn_fac_{i} button {{
+                        border-left: 4.5px solid #cbd5e1 !important;
+                        background-color: #f8fafc !important;
+                        opacity: 0.55 !important;
+                        box-shadow: none !important;
+                    }}
+                    .st-key-btn_fac_{i} button:hover {{
+                        opacity: 0.85 !important;
+                        background-color: #f1f5f9 !important;
+                    }}
+                    .st-key-btn_fac_{i} button p {{
+                        color: #94a3b8 !important;
+                        font-weight: 400 !important;
+                    }}
+                    .st-key-btn_fac_{i} button p::before {{
+                        content: "" !important;
+                        display: inline-block !important;
+                        width: 10px !important;
+                        height: 10px !important;
+                        min-width: 10px !important;
+                        min-height: 10px !important;
+                        border-radius: 50% !important;
+                        background-color: transparent !important;
+                        border: 2px solid #94a3b8 !important;
+                        margin-right: 8px !important;
+                        box-shadow: none !important;
+                        flex-shrink: 0 !important;
+                    }}
+                    """
 
             css_buttons += "</style>"
             st.markdown(css_buttons, unsafe_allow_html=True)
@@ -678,8 +784,7 @@ with tab_piper:
             for i, (fac_nom, c_cnt) in enumerate(facies_counts.items()):
                 pct_val = (c_cnt / n_tot) * 100.0
                 is_active = (fac_nom in familias_activas)
-                status_icon = "🟢" if is_active else "⚪"
-                label_txt = f"{status_icon} **{fac_nom}** · {c_cnt} fuentes ({pct_val:.0f}%)" if is_active else f"{status_icon} ~~{fac_nom}~~ · {c_cnt} fuentes ({pct_val:.0f}%)"
+                label_txt = f"{fac_nom} · {c_cnt} fuentes ({pct_val:.0f}%)"
 
                 st.button(
                     label_txt,
@@ -687,7 +792,7 @@ with tab_piper:
                     use_container_width=True,
                     on_click=_toggle_fam,
                     args=(fac_nom,),
-                    help=f"Clic para {'ocultar' if is_active else 'mostrar'} {fac_nom} en el diagrama"
+                    help=f"Clic para {'ocultar de' if is_active else 'mostrar en'} el diagrama y tabla: {fac_nom}"
                 )
 
             st.markdown("---")
