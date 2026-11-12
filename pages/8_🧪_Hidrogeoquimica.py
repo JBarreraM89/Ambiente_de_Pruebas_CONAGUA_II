@@ -594,19 +594,6 @@ with tab_piper:
                 help="Seleccione una captación específica para proyectar sus rayos analíticos hacia el diamante central."
             )
 
-            # Filtro interactivo de Familias
-            todas_familias = list(facies_counts.index)
-            familias_seleccionadas = st.multiselect(
-                "Filtrar Familias Activas:",
-                options=todas_familias,
-                default=todas_familias,
-                key="ms_piper_familias_activas",
-                help="Desmarque familias para ocultarlas del diagrama y de la tabla."
-            )
-
-            if not familias_seleccionadas:
-                familias_seleccionadas = todas_familias
-
             # Ficha técnica si seleccionó una muestra individual
             if muestra_enfocada != opciones_muestra[0]:
                 sub_sel = df_procesado[df_procesado['Muestra'].astype(str) == muestra_enfocada]
@@ -622,20 +609,86 @@ with tab_piper:
                     </div>
                     """, unsafe_allow_html=True)
 
-            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin:10px 0 6px 0;'>Familias Identificadas en el Muestreo:</p>", unsafe_allow_html=True)
-            for fac_nom, c_cnt in facies_counts.items():
-                pct_val = (c_cnt / n_tot) * 100.0
-                is_active = (fac_nom in familias_seleccionadas)
-                badge_col = facies_paleta_ui.get(fac_nom, "#0284c7")
-                opacity_style = "opacity:1.0;" if is_active else "opacity:0.40; text-decoration:line-through;"
-                border_style = f"border-left:3px solid {badge_col};" if is_active else "border-left:3px solid #cbd5e1;"
+            # Gestión interactiva de Familias mediante Botones de Leyenda
+            todas_familias = list(facies_counts.index)
+            if 'piper_familias_activas' not in st.session_state:
+                st.session_state['piper_familias_activas'] = set(todas_familias)
+            else:
+                validas = st.session_state['piper_familias_activas'].intersection(set(todas_familias))
+                if not validas and len(todas_familias) > 0:
+                    st.session_state['piper_familias_activas'] = set(todas_familias)
+                else:
+                    st.session_state['piper_familias_activas'] = validas
 
-                st.markdown(f"""
-                <div style='display:flex; justify-content:space-between; align-items:center; padding:5px 8px; background:#f8fafc; {border_style} border-radius:4px; margin-bottom:5px; font-size:11px; {opacity_style}'>
-                    <span><b>{fac_nom}</b></span>
-                    <span style='background:{badge_col if is_active else "#94a3b8"}; color:white; padding:2px 7px; border-radius:10px; font-size:10px; font-weight:bold;'>{c_cnt} fuentes ({pct_val:.0f}%)</span>
-                </div>
-                """, unsafe_allow_html=True)
+            familias_activas = st.session_state['piper_familias_activas']
+
+            def _toggle_fam(f_nombre):
+                if f_nombre in st.session_state['piper_familias_activas']:
+                    st.session_state['piper_familias_activas'].remove(f_nombre)
+                else:
+                    st.session_state['piper_familias_activas'].add(f_nombre)
+
+            def _activar_todas():
+                st.session_state['piper_familias_activas'] = set(todas_familias)
+
+            def _limpiar_todas():
+                st.session_state['piper_familias_activas'] = set()
+
+            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin:10px 0 4px 0;'>💧 Familias Hidroquímicas (Clic en leyenda para alternar):</p>", unsafe_allow_html=True)
+
+            col_btn_all, col_btn_none = st.columns(2)
+            with col_btn_all:
+                st.button("✅ Activar Todas", key="btn_act_todas_fac", use_container_width=True, on_click=_activar_todas)
+            with col_btn_none:
+                st.button("❌ Desactivar Todas", key="btn_des_todas_fac", use_container_width=True, on_click=_limpiar_todas)
+
+            # Inyectar estilos CSS para transformar los botones en tarjetas de leyenda
+            css_buttons = "<style>\n"
+            for i, fac_nom in enumerate(todas_familias):
+                col_hex = facies_paleta_ui.get(fac_nom, "#0284c7")
+                is_active = (fac_nom in familias_activas)
+                border_col = col_hex if is_active else "#cbd5e1"
+                bg_col = "#ffffff" if is_active else "#f8fafc"
+                opacity_val = "1.0" if is_active else "0.45"
+                box_shadow = "0 1px 3px rgba(0,0,0,0.08)" if is_active else "none"
+
+                css_buttons += f"""
+                .st-key-btn_fac_{i} button {{
+                    border-left: 5px solid {border_col} !important;
+                    background-color: {bg_col} !important;
+                    opacity: {opacity_val} !important;
+                    text-align: left !important;
+                    justify-content: flex-start !important;
+                    padding: 5px 9px !important;
+                    border-radius: 6px !important;
+                    font-size: 11px !important;
+                    margin-bottom: 2px !important;
+                    box-shadow: {box_shadow} !important;
+                }}
+                .st-key-btn_fac_{i} button:hover {{
+                    border-left: 5px solid {col_hex} !important;
+                    opacity: 1.0 !important;
+                    background-color: #f1f5f9 !important;
+                }}
+                """
+
+            css_buttons += "</style>"
+            st.markdown(css_buttons, unsafe_allow_html=True)
+
+            for i, (fac_nom, c_cnt) in enumerate(facies_counts.items()):
+                pct_val = (c_cnt / n_tot) * 100.0
+                is_active = (fac_nom in familias_activas)
+                status_icon = "🟢" if is_active else "⚪"
+                label_txt = f"{status_icon} **{fac_nom}** · {c_cnt} fuentes ({pct_val:.0f}%)" if is_active else f"{status_icon} ~~{fac_nom}~~ · {c_cnt} fuentes ({pct_val:.0f}%)"
+
+                st.button(
+                    label_txt,
+                    key=f"btn_fac_{i}",
+                    use_container_width=True,
+                    on_click=_toggle_fam,
+                    args=(fac_nom,),
+                    help=f"Clic para {'ocultar' if is_active else 'mostrar'} {fac_nom} en el diagrama"
+                )
 
             st.markdown("---")
             st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Guía de Cuadrantes del Diamante Central:</p>", unsafe_allow_html=True)
@@ -650,8 +703,12 @@ with tab_piper:
 
     with col_p_plot:
         id_aislado = muestra_enfocada if muestra_enfocada != opciones_muestra[0] else None
-        df_piper_render = df_procesado[df_procesado['Facies_Piper'].isin(familias_seleccionadas)].copy()
-        html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
+        df_piper_render = df_procesado[df_procesado['Facies_Piper'].isin(familias_activas)].copy()
+        if df_piper_render.empty:
+            st.info("ℹ️ No hay familias seleccionadas. Haga clic en los botones de familias para activarlas o pulse 'Activar Todas'.")
+            html_piper_d3 = generar_diagrama_piper_d3(df_procesado.iloc[0:0], muestra_aislada=id_aislado)
+        else:
+            html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
         st.iframe(html_piper_d3, height=800)
 
     with st.expander("📋 Tabla Detallada de Parámetros Trilineales, Balance Iónico e Índice de Revelle", expanded=False):
@@ -661,8 +718,7 @@ with tab_piper:
             'pct_HCO3_CO3', 'pct_SO4', 'pct_Cl', 'Indice_Revelle', 'Clasif_Revelle'
         ]
         cols_presentes = [c for c in cols_piper_tab if c in df_procesado.columns]
-        df_tab_p = df_procesado[cols_presentes].copy()
-        
+        df_tab_p = df_procesado[df_procesado['Facies_Piper'].isin(familias_activas)][cols_presentes].copy()        
         fmt_dict = {
             'CBE_pct': '{:+.2f}%',
             'Suma_Cationes_meq': '{:.2f}',
