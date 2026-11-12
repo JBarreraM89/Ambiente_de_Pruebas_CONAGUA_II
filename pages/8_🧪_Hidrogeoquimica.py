@@ -666,14 +666,41 @@ with tab_piper:
                 color: #0f172a !important;
             }
 
-            /* 2. Alineación milimétrica y retícula uniforme para tarjetas de familia */
+            /* 2. Alineación milimétrica, reducción de separación y retícula compacta */
+            div.st-key-lista_familias_piper {
+                gap: 3px !important;
+                row-gap: 3px !important;
+            }
+            .st-key-lista_familias_piper div[data-testid="stVerticalBlock"] {
+                gap: 3px !important;
+                row-gap: 3px !important;
+            }
+            .st-key-lista_familias_piper div.stElementContainer {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
             div[class*="st-key-btn_fac_"] {
                 width: 100% !important;
-                margin-bottom: 3px !important;
+                margin: 0 !important;
+                padding: 0 !important;
             }
-            div[class*="st-key-btn_fac_"] span[data-testid="stTooltipHoverTarget"] {
+            div[class*="st-key-btn_fac_"] div[data-testid="stButton"] {
+                height: auto !important;
+                min-height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            div[class*="st-key-btn_fac_"] span.stTooltipHoverTarget {
+                height: auto !important;
+                min-height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
                 justify-content: flex-start !important;
                 width: 100% !important;
+            }
+            div[class*="st-key-btn_fac_"] span,
+            div[class*="st-key-btn_fac_"] div {
+                margin: 0 !important;
             }
             div[class*="st-key-btn_fac_"] button {
                 display: flex !important;
@@ -682,11 +709,13 @@ with tab_piper:
                 align-items: center !important;
                 text-align: left !important;
                 width: 100% !important;
-                padding: 6px 10px !important;
-                min-height: 35px !important;
-                border-radius: 6px !important;
+                padding: 3px 8px !important;
+                margin: 0 !important;
+                min-height: 28px !important;
+                height: 29px !important;
+                border-radius: 5px !important;
                 border: 1px solid #e2e8f0 !important;
-                transition: all 0.15s ease-in-out !important;
+                transition: all 0.12s ease-in-out !important;
             }
             div[class*="st-key-btn_fac_"] button > div,
             div[class*="st-key-btn_fac_"] button span,
@@ -695,6 +724,7 @@ with tab_piper:
                 justify-content: flex-start !important;
                 align-items: center !important;
                 width: 100% !important;
+                margin: 0 !important;
             }
             div[class*="st-key-btn_fac_"] button p {
                 display: flex !important;
@@ -704,14 +734,13 @@ with tab_piper:
                 width: 100% !important;
                 margin: 0 !important;
                 padding: 0 !important;
-                font-size: 11.5px !important;
-                line-height: 1.25 !important;
+                font-size: 11px !important;
+                line-height: 1.15 !important;
                 white-space: nowrap !important;
                 overflow: hidden !important;
                 text-overflow: ellipsis !important;
             }
             """
-
             for i, fac_nom in enumerate(todas_familias):
                 col_hex = facies_paleta_ui.get(fac_nom, "#0284c7")
                 is_active = (fac_nom in familias_activas)
@@ -737,10 +766,10 @@ with tab_piper:
                     .st-key-btn_fac_{i} button p::before {{
                         content: "" !important;
                         display: inline-block !important;
-                        width: 10px !important;
-                        height: 10px !important;
-                        min-width: 10px !important;
-                        min-height: 10px !important;
+                        width: 9px !important;
+                        height: 9px !important;
+                        min-width: 9px !important;
+                        min-height: 9px !important;
                         border-radius: 50% !important;
                         background-color: {col_hex} !important;
                         margin-right: 8px !important;
@@ -767,10 +796,10 @@ with tab_piper:
                     .st-key-btn_fac_{i} button p::before {{
                         content: "" !important;
                         display: inline-block !important;
-                        width: 10px !important;
-                        height: 10px !important;
-                        min-width: 10px !important;
-                        min-height: 10px !important;
+                        width: 9px !important;
+                        height: 9px !important;
+                        min-width: 9px !important;
+                        min-height: 9px !important;
                         border-radius: 50% !important;
                         background-color: transparent !important;
                         border: 2px solid #94a3b8 !important;
@@ -783,19 +812,20 @@ with tab_piper:
             css_buttons += "</style>"
             st.markdown(css_buttons, unsafe_allow_html=True)
 
-            for i, (fac_nom, c_cnt) in enumerate(facies_counts.items()):
-                pct_val = (c_cnt / n_tot) * 100.0
-                is_active = (fac_nom in familias_activas)
-                label_txt = f"{fac_nom} · {c_cnt} fuentes ({pct_val:.0f}%)"
+            with st.container(key="lista_familias_piper", gap="xxsmall"):
+                for i, (fac_nom, c_cnt) in enumerate(facies_counts.items()):
+                    pct_val = (c_cnt / n_tot) * 100.0
+                    is_active = (fac_nom in familias_activas)
+                    label_txt = f"{fac_nom} · {c_cnt} fuentes ({pct_val:.0f}%)"
 
-                st.button(
-                    label_txt,
-                    key=f"btn_fac_{i}",
-                    use_container_width=True,
-                    on_click=_toggle_fam,
-                    args=(fac_nom,),
-                    help=f"Clic para {'ocultar de' if is_active else 'mostrar en'} el diagrama y tabla: {fac_nom}"
-                )
+                    st.button(
+                        label_txt,
+                        key=f"btn_fac_{i}",
+                        use_container_width=True,
+                        on_click=_toggle_fam,
+                        args=(fac_nom,),
+                        help=f"Clic para {'ocultar de' if is_active else 'mostrar en'} el diagrama y tabla: {fac_nom}"
+                    )
 
             if len(familias_activas) == 0:
                 st.info("ℹ️ Sin familias seleccionadas. Activa una familia o pulsa 'Mostrar Todas'.")
