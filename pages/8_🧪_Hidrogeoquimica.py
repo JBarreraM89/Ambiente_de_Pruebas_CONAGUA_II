@@ -40,11 +40,6 @@ from utils.styles import inyectar_css_oficial, banner_institucional
 from core.data_loader import (
     cargar_catalogo, cargar_datos_maestros, normalizar_clave
 )
-import importlib
-import core.hidrogeoquimica
-import core.hidro_d3_diagrams
-importlib.reload(core.hidro_d3_diagrams)
-importlib.reload(core.hidrogeoquimica)
 from core.hidrogeoquimica import (
     parse_concatenated_csv,
     generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
