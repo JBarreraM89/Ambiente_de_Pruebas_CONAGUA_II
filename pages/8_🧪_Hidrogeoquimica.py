@@ -831,7 +831,8 @@ with tab_piper:
                         help=f"Clic para {'ocultar de' if is_active else 'mostrar en'} el diagrama y tabla: {fac_nom}"
                     )
 
-            if len(familias_activas) == 0:
+            id_aislado = muestra_enfocada if muestra_enfocada != opciones_muestra[0] else None
+            if len(familias_activas) == 0 and not id_aislado:
                 st.info("ℹ️ Sin familias seleccionadas. Activa una familia o pulsa 'Mostrar Todas'.")
 
             st.markdown("---")
@@ -846,8 +847,10 @@ with tab_piper:
             """, unsafe_allow_html=True)
 
     with col_p_plot:
-        id_aislado = muestra_enfocada if muestra_enfocada != opciones_muestra[0] else None
-        df_piper_render = df_procesado[df_procesado['Facies_Piper'].isin(familias_activas)].copy()
+        mask_piper = df_procesado['Facies_Piper'].isin(familias_activas)
+        if id_aislado:
+            mask_piper = mask_piper | (df_procesado['Muestra'].astype(str) == str(id_aislado))
+        df_piper_render = df_procesado[mask_piper].copy()
         html_piper_d3 = generar_diagrama_piper_d3(df_piper_render, muestra_aislada=id_aislado)
         st.iframe(html_piper_d3, height=800)
 
@@ -858,7 +861,7 @@ with tab_piper:
             'pct_HCO3_CO3', 'pct_SO4', 'pct_Cl', 'Indice_Revelle', 'Clasif_Revelle'
         ]
         cols_presentes = [c for c in cols_piper_tab if c in df_procesado.columns]
-        df_tab_p = df_procesado[df_procesado['Facies_Piper'].isin(familias_activas)][cols_presentes].copy()        
+        df_tab_p = df_procesado[mask_piper][cols_presentes].copy()        
         fmt_dict = {
             'CBE_pct': '{:+.2f}%',
             'Suma_Cationes_meq': '{:.2f}',
