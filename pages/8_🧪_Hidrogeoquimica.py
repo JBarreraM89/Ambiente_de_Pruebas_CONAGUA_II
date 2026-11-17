@@ -915,6 +915,9 @@ with tab_riego:
         </div>
     """, unsafe_allow_html=True)
 
+    if not df_procesado.empty and df_procesado.get('CE_Estimada', pd.Series([False])).any():
+        st.info("ℹ️ **Estimación Hidrogeológica Automática:** El archivo cargado no incluye columnas directas de Conductividad Eléctrica (CE) ni Sólidos Disueltos Totales (SDT). Estos parámetros fueron estimados rigurosamente a partir de la suma de equivalentes catiónicos (1 meq/L ≈ 100 µS/cm y SDT ≈ CE × 0.65), permitiendo proyectar todas las muestras sobre los diagramas de Wilcox y Riverside.")
+
     r_col1, r_col2 = st.columns(2, gap="large")
     with r_col1:
         html_wilcox = generar_diagrama_wilcox_d3(df_procesado)
@@ -955,6 +958,9 @@ with tab_gibbs:
             </span>
         </div>
     """, unsafe_allow_html=True)
+
+    if not df_procesado.empty and df_procesado.get('SDT_Estimado', pd.Series([False])).any():
+        st.info("ℹ️ **Estimación de Sólidos Disueltos Totales (SDT):** La concentración de SDT fue estimada automáticamente a partir de la salinidad iónica total (SDT ≈ CE × 0.65) para su proyección en el eje logarítmico del Diagrama de Gibbs.")
 
     html_gibbs = generar_diagrama_gibbs_d3(df_procesado)
     st.iframe(html_gibbs, height=540)
