@@ -228,7 +228,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           .attr("height", h)
           .attr("fill", "#ffffff");
 
-        const zoomGroup = svg.append("g").attr("id", "zoom-group");
+        const zoomGroup = svg.append("g").attr("id", "zoom-group").style("will-change", "transform");
 
         const defs = svg.append("defs");
         defs.append("style").text(`
@@ -588,6 +588,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
             .attr("opacity", defaultGrpOp);
 
           const showTip = (event) => {{
+            if (isZooming) return;
             conn.classed("highlight", true)
               .attr("stroke-width", isMatch ? 1.8 : 1.5)
               .attr("stroke-opacity", 1.0);
@@ -713,7 +714,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
 
         const lensContent = lensGroup.append("g").attr("clip-path", "url(#piper-lens-clip)");
         lensContent.append("rect").attr("x", -lensRadius).attr("y", -lensRadius).attr("width", lensRadius * 2).attr("height", lensRadius * 2).attr("fill", "#ffffff");
-        const lensUse = lensContent.append("use").attr("href", "#zoom-group");
+        const lensUse = lensContent.append("use");
 
         lensGroup.append("circle")
           .attr("r", lensRadius)
@@ -735,10 +736,12 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
             btn.classList.add("active");
             status.textContent = "ON";
             container.classList.add("lupa-mode");
+            lensUse.attr("href", "#zoom-group");
           }} else {{
             btn.classList.remove("active");
             status.textContent = "OFF";
             container.classList.remove("lupa-mode");
+            lensUse.attr("href", null);
             lensGroup.style("display", "none");
           }}
         }}
@@ -752,19 +755,43 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           if (lupaActive) lensGroup.style("display", "none");
         }});
 
-        // Controles de Zoom y Paneo
+        // Controles de Zoom y Paneo (optimizado con rAF y suspensión de hover)
+        let isZooming = false;
+        let rafId = null;
+        let pendingTransform = null;
+        const zoomLevelEl = document.getElementById("zoom-level");
+        const containerEl = document.getElementById("piper-svg-container");
+
         const zoom = d3.zoom()
           .scaleExtent([0.6, 5.0])
+          .on("start", () => {{
+            isZooming = true;
+            containerEl.classList.add("grabbing");
+            zoomGroup.style("pointer-events", "none");
+            tooltip.style("display", "none");
+          }})
+          .on("end", () => {{
+            isZooming = false;
+            containerEl.classList.remove("grabbing");
+            zoomGroup.style("pointer-events", null);
+          }})
           .on("zoom", (event) => {{
-            zoomGroup.attr("transform", event.transform);
-            document.getElementById("zoom-level").textContent = Math.round(event.transform.k * 100) + "%";
+            pendingTransform = event.transform;
+            if (!rafId) {{
+              rafId = requestAnimationFrame(() => {{
+                rafId = null;
+                if (!pendingTransform) return;
+                zoomGroup.attr("transform", pendingTransform);
+                zoomLevelEl.textContent = Math.round(pendingTransform.k * 100) + "%";
+              }});
+            }}
           }});
 
         svg.call(zoom);
 
-        function zoomIn() {{ svg.transition().duration(250).call(zoom.scaleBy, 1.25); }}
-        function zoomOut() {{ svg.transition().duration(250).call(zoom.scaleBy, 0.8); }}
-        function resetZoom() {{ svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity); }}
+        function zoomIn() {{ svg.call(zoom.scaleBy, 1.25); }}
+        function zoomOut() {{ svg.call(zoom.scaleBy, 0.8); }}
+        function resetZoom() {{ svg.call(zoom.transform, d3.zoomIdentity); }}
 
         function getCleanStandaloneSVG() {{
           const svgEl = document.getElementById("svg-piper");
@@ -1433,7 +1460,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
           .attr("height", h)
           .attr("fill", "#ffffff");
 
-        const zoomGroup = svg.append("g").attr("id", "zoom-group");
+        const zoomGroup = svg.append("g").attr("id", "zoom-group").style("will-change", "transform");
 
         const defs = svg.append("defs");
         defs.append("style").text(`
@@ -1553,7 +1580,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
 
         const lensContent = lensGroup.append("g").attr("clip-path", "url(#schoeller-lens-clip)");
         lensContent.append("rect").attr("x", -lensRadius).attr("y", -lensRadius).attr("width", lensRadius * 2).attr("height", lensRadius * 2).attr("fill", "#ffffff");
-        const lensUse = lensContent.append("use").attr("href", "#zoom-group");
+        const lensUse = lensContent.append("use");
 
         lensGroup.append("circle")
           .attr("r", lensRadius)
@@ -1566,23 +1593,42 @@ def generar_diagrama_schoeller_d3(df_procesado):
 
         // Zoom y Paneo
         let currentTransform = d3.zoomIdentity;
+        let isZooming = false;
+        let rafId = null;
+        let pendingTransform = null;
         const zoom = d3.zoom()
           .scaleExtent([0.5, 12])
-          .on("start", () => d3.select("#schoeller-svg-container").classed("grabbing", true))
-          .on("end", () => d3.select("#schoeller-svg-container").classed("grabbing", false))
+          .on("start", () => {{
+            isZooming = true;
+            d3.select("#schoeller-svg-container").classed("grabbing", true);
+            zoomGroup.style("pointer-events", "none");
+            tooltip.style("display", "none");
+          }})
+          .on("end", () => {{
+            isZooming = false;
+            d3.select("#schoeller-svg-container").classed("grabbing", false);
+            zoomGroup.style("pointer-events", null);
+          }})
           .on("zoom", (event) => {{
+            pendingTransform = event.transform;
             currentTransform = event.transform;
-            zoomGroup.attr("transform", currentTransform);
-            const pct = Math.round(event.transform.k * 100);
-            d3.select("#zoom-level").text(pct + "%");
-            updateLens();
+            if (!rafId) {{
+              rafId = requestAnimationFrame(() => {{
+                rafId = null;
+                if (!pendingTransform) return;
+                zoomGroup.attr("transform", pendingTransform);
+                const pct = Math.round(pendingTransform.k * 100);
+                d3.select("#zoom-level").text(pct + "%");
+                if (lupaActiva) updateLens();
+              }});
+            }}
           }});
 
         svg.call(zoom);
 
-        function zoomIn() {{ svg.transition().duration(250).call(zoom.scaleBy, 1.35); }}
-        function zoomOut() {{ svg.transition().duration(250).call(zoom.scaleBy, 0.74); }}
-        function resetZoom() {{ svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity); }}
+        function zoomIn() {{ svg.call(zoom.scaleBy, 1.35); }}
+        function zoomOut() {{ svg.call(zoom.scaleBy, 0.74); }}
+        function resetZoom() {{ svg.call(zoom.transform, d3.zoomIdentity); }}
 
         let lupaActiva = false;
         let lastMouseSVG = null;
@@ -1592,7 +1638,10 @@ def generar_diagrama_schoeller_d3(df_procesado):
           d3.select("#btn-lupa").classed("active", lupaActiva);
           d3.select("#lupa-status").text(lupaActiva ? "ON" : "OFF");
           d3.select("#schoeller-svg-container").classed("lupa-mode", lupaActiva);
-          if (!lupaActiva) {{
+          if (lupaActiva) {{
+            lensUse.attr("href", "#zoom-group");
+          }} else {{
+            lensUse.attr("href", null);
             lensGroup.style("display", "none");
             lastMouseSVG = null;
           }}
@@ -1835,7 +1884,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
           .attr("height", h)
           .attr("fill", "#ffffff");
 
-        const zoomGroup = svg.append("g").attr("id", "zoom-group");
+        const zoomGroup = svg.append("g").attr("id", "zoom-group").style("will-change", "transform");
 
         const defs = svg.append("defs");
         defs.append("style").text(`
@@ -1920,7 +1969,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
 
         const lensContent = lensGroup.append("g").attr("clip-path", "url(#wilcox-lens-clip)");
         lensContent.append("rect").attr("x", -lensRadius).attr("y", -lensRadius).attr("width", lensRadius * 2).attr("height", lensRadius * 2).attr("fill", "#ffffff");
-        const lensUse = lensContent.append("use").attr("href", "#zoom-group");
+        const lensUse = lensContent.append("use");
 
         lensGroup.append("circle")
           .attr("r", lensRadius)
@@ -1933,23 +1982,42 @@ def generar_diagrama_wilcox_d3(df_procesado):
 
         // Zoom y Paneo
         let currentTransform = d3.zoomIdentity;
+        let isZooming = false;
+        let rafId = null;
+        let pendingTransform = null;
         const zoom = d3.zoom()
           .scaleExtent([0.5, 12])
-          .on("start", () => d3.select("#wilcox-svg-container").classed("grabbing", true))
-          .on("end", () => d3.select("#wilcox-svg-container").classed("grabbing", false))
+          .on("start", () => {{
+            isZooming = true;
+            d3.select("#wilcox-svg-container").classed("grabbing", true);
+            zoomGroup.style("pointer-events", "none");
+            tooltip.style("display", "none");
+          }})
+          .on("end", () => {{
+            isZooming = false;
+            d3.select("#wilcox-svg-container").classed("grabbing", false);
+            zoomGroup.style("pointer-events", null);
+          }})
           .on("zoom", (event) => {{
+            pendingTransform = event.transform;
             currentTransform = event.transform;
-            zoomGroup.attr("transform", currentTransform);
-            const pct = Math.round(event.transform.k * 100);
-            d3.select("#zoom-level").text(pct + "%");
-            updateLens();
+            if (!rafId) {{
+              rafId = requestAnimationFrame(() => {{
+                rafId = null;
+                if (!pendingTransform) return;
+                zoomGroup.attr("transform", pendingTransform);
+                const pct = Math.round(pendingTransform.k * 100);
+                d3.select("#zoom-level").text(pct + "%");
+                if (lupaActiva) updateLens();
+              }});
+            }}
           }});
 
         svg.call(zoom);
 
-        function zoomIn() {{ svg.transition().duration(250).call(zoom.scaleBy, 1.35); }}
-        function zoomOut() {{ svg.transition().duration(250).call(zoom.scaleBy, 0.74); }}
-        function resetZoom() {{ svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity); }}
+        function zoomIn() {{ svg.call(zoom.scaleBy, 1.35); }}
+        function zoomOut() {{ svg.call(zoom.scaleBy, 0.74); }}
+        function resetZoom() {{ svg.call(zoom.transform, d3.zoomIdentity); }}
 
         let lupaActiva = false;
         let lastMouseSVG = null;
@@ -1959,7 +2027,10 @@ def generar_diagrama_wilcox_d3(df_procesado):
           d3.select("#btn-lupa").classed("active", lupaActiva);
           d3.select("#lupa-status").text(lupaActiva ? "ON" : "OFF");
           d3.select("#wilcox-svg-container").classed("lupa-mode", lupaActiva);
-          if (!lupaActiva) {{
+          if (lupaActiva) {{
+            lensUse.attr("href", "#zoom-group");
+          }} else {{
+            lensUse.attr("href", null);
             lensGroup.style("display", "none");
             lastMouseSVG = null;
           }}
@@ -2200,7 +2271,7 @@ def generar_diagrama_riverside_d3(df_procesado):
           .attr("height", h)
           .attr("fill", "#ffffff");
 
-        const zoomGroup = svg.append("g").attr("id", "zoom-group");
+        const zoomGroup = svg.append("g").attr("id", "zoom-group").style("will-change", "transform");
 
         const defs = svg.append("defs");
         defs.append("style").text(`
@@ -2296,7 +2367,7 @@ def generar_diagrama_riverside_d3(df_procesado):
 
         const lensContent = lensGroup.append("g").attr("clip-path", "url(#riverside-lens-clip)");
         lensContent.append("rect").attr("x", -lensRadius).attr("y", -lensRadius).attr("width", lensRadius * 2).attr("height", lensRadius * 2).attr("fill", "#ffffff");
-        const lensUse = lensContent.append("use").attr("href", "#zoom-group");
+        const lensUse = lensContent.append("use");
 
         lensGroup.append("circle")
           .attr("r", lensRadius)
@@ -2309,23 +2380,42 @@ def generar_diagrama_riverside_d3(df_procesado):
 
         // Zoom y Paneo
         let currentTransform = d3.zoomIdentity;
+        let isZooming = false;
+        let rafId = null;
+        let pendingTransform = null;
         const zoom = d3.zoom()
           .scaleExtent([0.5, 12])
-          .on("start", () => d3.select("#riverside-svg-container").classed("grabbing", true))
-          .on("end", () => d3.select("#riverside-svg-container").classed("grabbing", false))
+          .on("start", () => {{
+            isZooming = true;
+            d3.select("#riverside-svg-container").classed("grabbing", true);
+            zoomGroup.style("pointer-events", "none");
+            tooltip.style("display", "none");
+          }})
+          .on("end", () => {{
+            isZooming = false;
+            d3.select("#riverside-svg-container").classed("grabbing", false);
+            zoomGroup.style("pointer-events", null);
+          }})
           .on("zoom", (event) => {{
+            pendingTransform = event.transform;
             currentTransform = event.transform;
-            zoomGroup.attr("transform", currentTransform);
-            const pct = Math.round(event.transform.k * 100);
-            d3.select("#zoom-level").text(pct + "%");
-            updateLens();
+            if (!rafId) {{
+              rafId = requestAnimationFrame(() => {{
+                rafId = null;
+                if (!pendingTransform) return;
+                zoomGroup.attr("transform", pendingTransform);
+                const pct = Math.round(pendingTransform.k * 100);
+                d3.select("#zoom-level").text(pct + "%");
+                if (lupaActiva) updateLens();
+              }});
+            }}
           }});
 
         svg.call(zoom);
 
-        function zoomIn() {{ svg.transition().duration(250).call(zoom.scaleBy, 1.35); }}
-        function zoomOut() {{ svg.transition().duration(250).call(zoom.scaleBy, 0.74); }}
-        function resetZoom() {{ svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity); }}
+        function zoomIn() {{ svg.call(zoom.scaleBy, 1.35); }}
+        function zoomOut() {{ svg.call(zoom.scaleBy, 0.74); }}
+        function resetZoom() {{ svg.call(zoom.transform, d3.zoomIdentity); }}
 
         let lupaActiva = false;
         let lastMouseSVG = null;
@@ -2335,7 +2425,10 @@ def generar_diagrama_riverside_d3(df_procesado):
           d3.select("#btn-lupa").classed("active", lupaActiva);
           d3.select("#lupa-status").text(lupaActiva ? "ON" : "OFF");
           d3.select("#riverside-svg-container").classed("lupa-mode", lupaActiva);
-          if (!lupaActiva) {{
+          if (lupaActiva) {{
+            lensUse.attr("href", "#zoom-group");
+          }} else {{
+            lensUse.attr("href", null);
             lensGroup.style("display", "none");
             lastMouseSVG = null;
           }}
@@ -2578,7 +2671,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
           .attr("height", h)
           .attr("fill", "#ffffff");
 
-        const zoomGroup = svg.append("g").attr("id", "zoom-group");
+        const zoomGroup = svg.append("g").attr("id", "zoom-group").style("will-change", "transform");
 
         const defs = svg.append("defs");
         defs.append("style").text(`
@@ -2701,7 +2794,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
 
         const lensContent = lensGroup.append("g").attr("clip-path", "url(#gibbs-lens-clip)");
         lensContent.append("rect").attr("x", -lensRadius).attr("y", -lensRadius).attr("width", lensRadius * 2).attr("height", lensRadius * 2).attr("fill", "#ffffff");
-        const lensUse = lensContent.append("use").attr("href", "#zoom-group");
+        const lensUse = lensContent.append("use");
 
         lensGroup.append("circle")
           .attr("r", lensRadius)
@@ -2714,23 +2807,42 @@ def generar_diagrama_gibbs_d3(df_procesado):
 
         // Zoom y Paneo
         let currentTransform = d3.zoomIdentity;
+        let isZooming = false;
+        let rafId = null;
+        let pendingTransform = null;
         const zoom = d3.zoom()
           .scaleExtent([0.5, 12])
-          .on("start", () => d3.select("#gibbs-svg-container").classed("grabbing", true))
-          .on("end", () => d3.select("#gibbs-svg-container").classed("grabbing", false))
+          .on("start", () => {{
+            isZooming = true;
+            d3.select("#gibbs-svg-container").classed("grabbing", true);
+            zoomGroup.style("pointer-events", "none");
+            tooltip.style("display", "none");
+          }})
+          .on("end", () => {{
+            isZooming = false;
+            d3.select("#gibbs-svg-container").classed("grabbing", false);
+            zoomGroup.style("pointer-events", null);
+          }})
           .on("zoom", (event) => {{
+            pendingTransform = event.transform;
             currentTransform = event.transform;
-            zoomGroup.attr("transform", currentTransform);
-            const pct = Math.round(event.transform.k * 100);
-            d3.select("#zoom-level").text(pct + "%");
-            updateLens();
+            if (!rafId) {{
+              rafId = requestAnimationFrame(() => {{
+                rafId = null;
+                if (!pendingTransform) return;
+                zoomGroup.attr("transform", pendingTransform);
+                const pct = Math.round(pendingTransform.k * 100);
+                d3.select("#zoom-level").text(pct + "%");
+                if (lupaActiva) updateLens();
+              }});
+            }}
           }});
 
         svg.call(zoom);
 
-        function zoomIn() {{ svg.transition().duration(250).call(zoom.scaleBy, 1.35); }}
-        function zoomOut() {{ svg.transition().duration(250).call(zoom.scaleBy, 0.74); }}
-        function resetZoom() {{ svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity); }}
+        function zoomIn() {{ svg.call(zoom.scaleBy, 1.35); }}
+        function zoomOut() {{ svg.call(zoom.scaleBy, 0.74); }}
+        function resetZoom() {{ svg.call(zoom.transform, d3.zoomIdentity); }}
 
         let lupaActiva = false;
         let lastMouseSVG = null;
@@ -2740,7 +2852,10 @@ def generar_diagrama_gibbs_d3(df_procesado):
           d3.select("#btn-lupa").classed("active", lupaActiva);
           d3.select("#lupa-status").text(lupaActiva ? "ON" : "OFF");
           d3.select("#gibbs-svg-container").classed("lupa-mode", lupaActiva);
-          if (!lupaActiva) {{
+          if (lupaActiva) {{
+            lensUse.attr("href", "#zoom-group");
+          }} else {{
+            lensUse.attr("href", null);
             lensGroup.style("display", "none");
             lastMouseSVG = null;
           }}
