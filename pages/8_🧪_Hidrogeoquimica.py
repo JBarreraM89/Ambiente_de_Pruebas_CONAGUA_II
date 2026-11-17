@@ -404,12 +404,21 @@ with st.sidebar:
             st.session_state["es_demostracion_hidro"] = False
             st.rerun()
 
+    st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size:11.5px; font-weight:700; color:#691C32; margin-bottom:2px;'>⚙️ CONFIGURACIÓN ANALÍTICA</p>", unsafe_allow_html=True)
+    estimar_ce_sdt = st.toggle(
+        "📐 Estimar CE y SDT si faltan",
+        value=True,
+        key="toggle_estimar_ce_sdt",
+        help="Si el archivo no contiene mediciones de laboratorio de Conductividad Eléctrica (CE) o Sólidos Disueltos Totales (SDT), calcula sus aproximaciones teóricas por balance iónico canónico según USGS (Hem, 1985) y Standard Methods 1030 E para permitir proyectar Wilcox, Riverside y Gibbs."
+    )
+
 # =============================================================================
 # 🚀 5. MOTOR DE PROCESAMIENTO
 # =============================================================================
 df_crudo = st.session_state.get("df_hidro_raw", pd.DataFrame())
 df_normalizado = mapear_dataframe_hidroquimico(df_crudo) if not df_crudo.empty else pd.DataFrame()
-df_procesado = procesar_muestras_hidroquimicas(df_normalizado) if not df_normalizado.empty else pd.DataFrame()
+df_procesado = procesar_muestras_hidroquimicas(df_normalizado, estimar_ce_sdt=estimar_ce_sdt) if not df_normalizado.empty else pd.DataFrame()
 resumen_nom127, df_auditoria = auditar_norma_127(df_procesado) if not df_procesado.empty else ({}, pd.DataFrame())
 
 # Obtener polígono oficial del acuífero (robusto, serialización limpia vía mapping sin Timestamp)
@@ -916,7 +925,7 @@ with tab_riego:
     """, unsafe_allow_html=True)
 
     if not df_procesado.empty and df_procesado.get('CE_Estimada', pd.Series([False])).any():
-        st.info("ℹ️ **Estimación Hidrogeológica Automática:** El archivo cargado no incluye columnas directas de Conductividad Eléctrica (CE) ni Sólidos Disueltos Totales (SDT). Estos parámetros fueron estimados rigurosamente a partir de la suma de equivalentes catiónicos (1 meq/L ≈ 100 µS/cm y SDT ≈ CE × 0.65), permitiendo proyectar todas las muestras sobre los diagramas de Wilcox y Riverside.")
+        st.info("ℹ️ **Estimación Teórica de Salinidad:** El archivo cargado no incluye mediciones directas de Conductividad Eléctrica (CE) ni Sólidos Disueltos Totales (SDT). Estos parámetros fueron calculados teóricamente a partir del balance iónico canónico según USGS (*Hem, J.D., 1985, Water-Supply Paper 2254, p. 67*) y *Standard Methods for the Examination of Water and Wastewater* (1030 E). En la tabla diagnóstica se identifican con asterisco (*).")
 
     r_col1, r_col2 = st.columns(2, gap="large")
     with r_col1:
@@ -942,9 +951,20 @@ with tab_riego:
         for col_f, f_pat in fmt_riego.items():
             if col_f in df_riego_v.columns:
                 df_riego_v[col_f] = df_riego_v[col_f].apply(lambda x: f_pat.format(x) if pd.notna(x) and isinstance(x, (int, float, np.floating, np.integer)) else ("" if pd.isna(x) else str(x)))
+
+        rename_riego = {}
+        if df_procesado.get('CE_Estimada', pd.Series([False])).any():
+            rename_riego['CE_uS_cm'] = 'CE (µS/cm)*'
+        if df_procesado.get('SDT_Estimado', pd.Series([False])).any():
+            rename_riego['SDT_mg_L'] = 'SDT (mg/L)*'
+        if rename_riego:
+            df_riego_v = df_riego_v.rename(columns=rename_riego)
+
         st.dataframe(df_riego_v, width="stretch", hide_index=True)
 
-        st.caption("ℹ️ **Nota Técnica sobre el Carbonato de Sodio Residual (CSR):** Valores negativos reflejan un exceso benéfico de calcio y magnesio sobre los aniones carbonatados ((Ca+Mg) > (HCO3+CO3)), garantizando nulo riesgo de sodificación alcalina y excelente estabilidad para la estructura del suelo.")
+        if df_procesado.get('CE_Estimada', pd.Series([False])).any():
+            st.caption("🔬 ***Nota Metodológica de Auditoría:** Los valores marcados con asterisco (*) fueron derivados por balance iónico teórico según Hem (1985) y Standard Methods 1030 E, y no corresponden a mediciones electrométricas o gravimétricas directas de laboratorio.")
+        st.caption("ℹ️ **Nota Técnica sobre el Carbonato de Sodio Residual (CSR):** Valores negativos reflejan un exceso benéfico de calcio y magnesio sobre los aniones carbonatados ((Ca+Mg) > (HCO3+CO3)), garantizando nulo riesgo de sodificación alcalina y excelente estabilidad para la estructura del suelo (Eaton, 1950; USDA Handbook 60).")
 
 # -----------------------------------------------------------------------------
 # TAB 4: GÉNESIS GEOQUÍMICA (GIBBS)
@@ -960,7 +980,7 @@ with tab_gibbs:
     """, unsafe_allow_html=True)
 
     if not df_procesado.empty and df_procesado.get('SDT_Estimado', pd.Series([False])).any():
-        st.info("ℹ️ **Estimación de Sólidos Disueltos Totales (SDT):** La concentración de SDT fue estimada automáticamente a partir de la salinidad iónica total (SDT ≈ CE × 0.65) para su proyección en el eje logarítmico del Diagrama de Gibbs.")
+        st.info("ℹ️ **Estimación Teórica de Sólidos Disueltos Totales (SDT):** La concentración de SDT fue estimada por suma iónica de residuo seco con pérdida térmica de bicarbonato a 180 °C (factor estequiométrico 0.4917) según USGS (*Hem, J.D., 1985, Water-Supply Paper 2254, p. 67*) y *Standard Methods* 1030 E para su proyección en el eje logarítmico del Diagrama de Gibbs (1970).")
 
     html_gibbs = generar_diagrama_gibbs_d3(df_procesado)
     st.iframe(html_gibbs, height=540)
