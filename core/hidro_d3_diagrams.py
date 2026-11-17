@@ -567,11 +567,11 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           const xd = (xc + xa) / 2.0 + (yc - ya) / (2.0 * Math.sqrt(3));
           const yd = (yc + ya) / 2.0 - Math.sqrt(3) * (xa - xc) / 2.0;
 
-          const defaultConnW = isMatch ? 1.8 : 1.0;
+          const defaultConnW = isMatch ? 1.4 : 0.85;
           const defaultConnOp = isMatch ? 1.0 : (hasIsolation ? 0.0 : 0.65);
           const defaultGrpOp = (hasIsolation && !isMatch) ? 0.15 : 1.0;
           const stroke_c = isMatch ? "#0f172a" : "#ffffff";
-          const stroke_w = isMatch ? 1.8 : 1.3;
+          const stroke_w = isMatch ? 1.4 : 1.0;
 
           // Rayos trilineales directos continuos (chevron limpio a 60° y 120°)
           const conn = gConnections.append("polyline")
@@ -589,12 +589,12 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
 
           const showTip = (event) => {{
             conn.classed("highlight", true)
-              .attr("stroke-width", isMatch ? 2.2 : 1.8)
+              .attr("stroke-width", isMatch ? 1.8 : 1.5)
               .attr("stroke-opacity", 1.0);
             grp.raise().attr("opacity", 1.0);
             grp.selectAll("circle, polygon")
-              .attr("stroke-width", 2.2)
-              .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: 2.2px !important;`);
+              .attr("stroke-width", 1.8)
+              .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: 1.8px !important;`);
 
             const tipHtml = `
               <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:12px;">🧪 ${{m.id}}</div>
@@ -653,7 +653,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
             tooltip.style("display", "none");
           }};
 
-          const r_circ = isMatch ? 5.2 : 4.2;
+          const r_circ = isMatch ? 3.8 : 3.0;
 
           // Punto Catiónico
           grp.append("circle")
@@ -676,7 +676,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
             .on("mouseover", showTip).on("mousemove", showTip).on("mouseout", hideTip);
 
           // Punto Central en el Diamante (Relleno de color asegurado con style !important)
-          const rd = isMatch ? 6.5 : 5.2;
+          const rd = isMatch ? 4.8 : 3.8;
           grp.append("polygon")
             .attr("points", `${{xd}},${{yd - rd}} ${{xd + rd}},${{yd}} ${{xd}},${{yd + rd}} ${{xd - rd}},${{yd}}`)
             .attr("fill", m.color)
