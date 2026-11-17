@@ -347,16 +347,16 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
         const defs = svg.append("defs");
         defs.append("style").text(`
           .axis-line {{ stroke: #0f172a !important; stroke-width: 1.8 !important; fill: none !important; stroke-linejoin: round; }}
-          .grid-line {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
-          .grid-line-diamond {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; }}
-          .tick-line {{ stroke: #0f172a !important; stroke-width: 1.1 !important; fill: none !important; }}
+          .grid-line {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; vector-effect: non-scaling-stroke; }}
+          .grid-line-diamond {{ stroke: #475569 !important; stroke-width: 0.85 !important; stroke-dasharray: 3,2.5 !important; opacity: 0.8 !important; fill: none !important; vector-effect: non-scaling-stroke; }}
+          .tick-line {{ stroke: #0f172a !important; stroke-width: 1.1 !important; fill: none !important; vector-effect: non-scaling-stroke; }}
           .axis-label-piper {{ font-size: 11px !important; font-weight: 800 !important; fill: #1e293b !important; text-anchor: middle !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
           .ion-label {{ font-size: 13px !important; font-weight: 800 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
           .diamond-axis-label {{ font-size: 11px !important; font-weight: 800 !important; text-anchor: middle !important; dominant-baseline: middle !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; paint-order: stroke fill; stroke: #ffffff; stroke-width: 4px; stroke-linejoin: round; }}
           .tick-label-piper {{ font-size: 8px !important; font-weight: 600 !important; fill: #475569 !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
           .tick-label-100 {{ font-size: 9.5px !important; font-weight: 700 !important; fill: #0f172a !important; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important; }}
-          .sample-pt {{ stroke: #ffffff !important; stroke-width: 1.8 !important; cursor: pointer; }}
-          .connection-line {{ opacity: 0.75 !important; fill: none !important; }}
+          .sample-pt {{ stroke: #ffffff !important; stroke-width: 1.8 !important; cursor: pointer; transform-box: fill-box; transform-origin: center; transform: scale(var(--pt-scale, 1)); }}
+          .connection-line {{ opacity: 0.75 !important; fill: none !important; vector-effect: non-scaling-stroke; }}
         `);
 
         // 1. Constantes geométricas canónicas (OMM / UNESCO / A.M. Piper 1944)
@@ -877,7 +877,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
         const containerEl = document.getElementById("piper-svg-container");
 
         const zoom = d3.zoom()
-          .scaleExtent([0.6, 5.0])
+          .scaleExtent([0.6, 15.0])
           .on("start", () => {{
             isZooming = true;
             containerEl.classList.add("grabbing");
@@ -896,6 +896,8 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
                 rafId = null;
                 if (!pendingTransform) return;
                 zoomGroup.attr("transform", pendingTransform);
+                const ptScale = pendingTransform.k > 1 ? Math.pow(pendingTransform.k, -0.78) : 1;
+                zoomGroup.style("--pt-scale", ptScale.toFixed(4));
                 zoomLevelEl.textContent = Math.round(pendingTransform.k * 100) + "%";
               }});
             }}
@@ -915,7 +917,10 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           if (cloneLens) cloneLens.remove();
 
           const cloneZoom = clone.querySelector("#zoom-group");
-          if (cloneZoom) cloneZoom.setAttribute("transform", "translate(0,0) scale(1)");
+          if (cloneZoom) {{
+            cloneZoom.setAttribute("transform", "translate(0,0) scale(1)");
+            cloneZoom.style.removeProperty("--pt-scale");
+          }}
 
           let defs = clone.querySelector("defs");
           if (!defs) {{
@@ -1506,11 +1511,11 @@ def generar_diagrama_schoeller_d3(df_procesado):
         #schoeller-svg-container.grabbing {{ cursor: grabbing; }}
         #schoeller-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
-        .schoeller-line {{ fill: none; stroke-width: 2.2; transition: all 0.2s; }}
+        .schoeller-line {{ fill: none; stroke-width: 2.2; transition: all 0.2s; vector-effect: non-scaling-stroke; }}
         .schoeller-line.faded {{ opacity: 0.18; stroke-width: 1.2; }}
         .schoeller-line.active {{ stroke-width: 3.5; opacity: 1; }}
-        .schoeller-dot {{ cursor: pointer; transition: r 0.2s; }}
-        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; fill: none; }}
+        .schoeller-dot {{ cursor: pointer; transition: r 0.2s; transform-box: fill-box; transform-origin: center; transform: scale(var(--pt-scale, 1)); }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; fill: none; vector-effect: non-scaling-stroke; }}
         .axis-text {{ font-size: 11px; fill: #475569; font-family: sans-serif; }}
         #schoeller-tooltip {{
           position: fixed; display: none; z-index: 9999;
@@ -1718,7 +1723,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
         let rafId = null;
         let pendingTransform = null;
         const zoom = d3.zoom()
-          .scaleExtent([0.5, 12])
+          .scaleExtent([0.5, 15])
           .on("start", () => {{
             isZooming = true;
             d3.select("#schoeller-svg-container").classed("grabbing", true);
@@ -1738,6 +1743,8 @@ def generar_diagrama_schoeller_d3(df_procesado):
                 rafId = null;
                 if (!pendingTransform) return;
                 zoomGroup.attr("transform", pendingTransform);
+                const ptScale = pendingTransform.k > 1 ? Math.pow(pendingTransform.k, -0.78) : 1;
+                zoomGroup.style("--pt-scale", ptScale.toFixed(4));
                 const pct = Math.round(pendingTransform.k * 100);
                 d3.select("#zoom-level").text(pct + "%");
                 if (lupaActiva) updateLens();
@@ -1798,7 +1805,8 @@ def generar_diagrama_schoeller_d3(df_procesado):
 
         function descargarSVG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-schoeller");
@@ -1808,7 +1816,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="no"?> ';
@@ -1822,7 +1830,8 @@ def generar_diagrama_schoeller_d3(df_procesado):
 
         function descargarPNG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-schoeller");
@@ -1832,7 +1841,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const img = new Image();
@@ -1956,11 +1965,11 @@ def generar_diagrama_wilcox_d3(df_procesado):
         #wilcox-svg-container.grabbing {{ cursor: grabbing; }}
         #wilcox-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
-        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; stroke-dasharray: 2, 2; fill: none; }}
-        .zone-boundary {{ stroke-width: 1.8; stroke-dasharray: 4, 3; fill: none; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; stroke-dasharray: 2, 2; fill: none; vector-effect: non-scaling-stroke; }}
+        .zone-boundary {{ stroke-width: 1.8; stroke-dasharray: 4, 3; fill: none; vector-effect: non-scaling-stroke; }}
         .axis-label {{ font-size: 11px; fill: #475569; font-weight: 600; font-family: sans-serif; }}
         .zone-text {{ font-size: 11px; font-weight: 700; text-anchor: middle; font-family: sans-serif; }}
-        .dot {{ cursor: pointer; transition: r 0.2s; }}
+        .dot {{ cursor: pointer; transition: r 0.2s; transform-box: fill-box; transform-origin: center; transform: scale(var(--pt-scale, 1)); }}
         #wilcox-tooltip {{
           position: fixed; display: none; z-index: 9999;
           background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
@@ -2111,7 +2120,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
         let rafId = null;
         let pendingTransform = null;
         const zoom = d3.zoom()
-          .scaleExtent([0.5, 12])
+          .scaleExtent([0.5, 15])
           .on("start", () => {{
             isZooming = true;
             d3.select("#wilcox-svg-container").classed("grabbing", true);
@@ -2131,6 +2140,8 @@ def generar_diagrama_wilcox_d3(df_procesado):
                 rafId = null;
                 if (!pendingTransform) return;
                 zoomGroup.attr("transform", pendingTransform);
+                const ptScale = pendingTransform.k > 1 ? Math.pow(pendingTransform.k, -0.78) : 1;
+                zoomGroup.style("--pt-scale", ptScale.toFixed(4));
                 const pct = Math.round(pendingTransform.k * 100);
                 d3.select("#zoom-level").text(pct + "%");
                 if (lupaActiva) updateLens();
@@ -2191,7 +2202,8 @@ def generar_diagrama_wilcox_d3(df_procesado):
 
         function descargarSVG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-wilcox");
@@ -2201,7 +2213,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="no"?> ';
@@ -2215,7 +2227,8 @@ def generar_diagrama_wilcox_d3(df_procesado):
 
         function descargarPNG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-wilcox");
@@ -2225,7 +2238,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const img = new Image();
@@ -2347,11 +2360,11 @@ def generar_diagrama_riverside_d3(df_procesado):
         #riverside-svg-container.grabbing {{ cursor: grabbing; }}
         #riverside-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
-        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; fill: none; }}
-        .c-boundary {{ stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 4, 3; fill: none; }}
-        .s-boundary {{ stroke-width: 1.2; stroke-dasharray: 3, 3; fill: none; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; fill: none; vector-effect: non-scaling-stroke; }}
+        .c-boundary {{ stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 4, 3; fill: none; vector-effect: non-scaling-stroke; }}
+        .s-boundary {{ stroke-width: 1.2; stroke-dasharray: 3, 3; fill: none; vector-effect: non-scaling-stroke; }}
         .axis-label {{ font-size: 11px; fill: #475569; font-weight: 600; font-family: sans-serif; }}
-        .dot {{ cursor: pointer; transition: r 0.2s; }}
+        .dot {{ cursor: pointer; transition: r 0.2s; transform-box: fill-box; transform-origin: center; transform: scale(var(--pt-scale, 1)); }}
         #riv-tooltip {{
           position: fixed; display: none; z-index: 9999;
           background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
@@ -2513,7 +2526,7 @@ def generar_diagrama_riverside_d3(df_procesado):
         let rafId = null;
         let pendingTransform = null;
         const zoom = d3.zoom()
-          .scaleExtent([0.5, 12])
+          .scaleExtent([0.5, 15])
           .on("start", () => {{
             isZooming = true;
             d3.select("#riverside-svg-container").classed("grabbing", true);
@@ -2533,6 +2546,8 @@ def generar_diagrama_riverside_d3(df_procesado):
                 rafId = null;
                 if (!pendingTransform) return;
                 zoomGroup.attr("transform", pendingTransform);
+                const ptScale = pendingTransform.k > 1 ? Math.pow(pendingTransform.k, -0.78) : 1;
+                zoomGroup.style("--pt-scale", ptScale.toFixed(4));
                 const pct = Math.round(pendingTransform.k * 100);
                 d3.select("#zoom-level").text(pct + "%");
                 if (lupaActiva) updateLens();
@@ -2593,7 +2608,8 @@ def generar_diagrama_riverside_d3(df_procesado):
 
         function descargarSVG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-riverside");
@@ -2603,7 +2619,7 @@ def generar_diagrama_riverside_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="no"?> ';
@@ -2617,7 +2633,8 @@ def generar_diagrama_riverside_d3(df_procesado):
 
         function descargarPNG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-riverside");
@@ -2627,7 +2644,7 @@ def generar_diagrama_riverside_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const img = new Image();
@@ -2747,12 +2764,12 @@ def generar_diagrama_gibbs_d3(df_procesado):
         #gibbs-svg-container.grabbing {{ cursor: grabbing; }}
         #gibbs-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
-        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; fill: none; }}
+        .grid-line {{ stroke: #e2e8f0; stroke-width: 0.8; fill: none; vector-effect: non-scaling-stroke; }}
         .axis-label {{ font-size: 11px; fill: #475569; font-weight: 600; font-family: sans-serif; }}
         .panel-title {{ font-size: 12.5px; fill: #1e293b; font-weight: 700; text-anchor: middle; font-family: sans-serif; }}
         .zone-rect {{ stroke: none; rx: 4; }}
         .zone-text {{ font-size: 9.5px; font-weight: 700; text-anchor: middle; font-family: sans-serif; }}
-        .dot {{ cursor: pointer; transition: r 0.2s; }}
+        .dot {{ cursor: pointer; transition: r 0.2s; transform-box: fill-box; transform-origin: center; transform: scale(var(--pt-scale, 1)); }}
         #gibbs-tooltip {{
           position: fixed; display: none; z-index: 9999;
           background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(8px);
@@ -2944,7 +2961,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
         let rafId = null;
         let pendingTransform = null;
         const zoom = d3.zoom()
-          .scaleExtent([0.5, 12])
+          .scaleExtent([0.5, 15])
           .on("start", () => {{
             isZooming = true;
             d3.select("#gibbs-svg-container").classed("grabbing", true);
@@ -2964,6 +2981,8 @@ def generar_diagrama_gibbs_d3(df_procesado):
                 rafId = null;
                 if (!pendingTransform) return;
                 zoomGroup.attr("transform", pendingTransform);
+                const ptScale = pendingTransform.k > 1 ? Math.pow(pendingTransform.k, -0.78) : 1;
+                zoomGroup.style("--pt-scale", ptScale.toFixed(4));
                 const pct = Math.round(pendingTransform.k * 100);
                 d3.select("#zoom-level").text(pct + "%");
                 if (lupaActiva) updateLens();
@@ -3024,7 +3043,8 @@ def generar_diagrama_gibbs_d3(df_procesado):
 
         function descargarSVG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-gibbs");
@@ -3034,7 +3054,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const xmlHeader = '<?xml version="1.0" encoding="UTF-8" standalone="no"?> ';
@@ -3048,7 +3068,8 @@ def generar_diagrama_gibbs_d3(df_procesado):
 
         function descargarPNG() {{
           const prevTransform = zoomGroup.attr("transform");
-          zoomGroup.attr("transform", null);
+          const prevPtScale = zoomGroup.style("--pt-scale");
+          zoomGroup.attr("transform", null).style("--pt-scale", null);
           lensGroup.style("display", "none");
 
           const svgEl = document.getElementById("svg-gibbs");
@@ -3058,7 +3079,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
             source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"');
           }}
 
-          zoomGroup.attr("transform", prevTransform);
+          zoomGroup.attr("transform", prevTransform).style("--pt-scale", prevPtScale || null);
           if (lupaActiva && lastMouseSVG) lensGroup.style("display", "block");
 
           const img = new Image();
