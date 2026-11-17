@@ -65,6 +65,116 @@ def obtener_color_facies(facies_str):
     return _FACIES_FALLBACK_PALETTE[h % len(_FACIES_FALLBACK_PALETTE)]
 
 
+_JS_FULLSCREEN_HELPER = """
+        let _cssFsActive = false;
+        let _savedFrameCss = null;
+        let _savedBodyCss = null;
+
+        function _getFrameEl() {
+          try { return window.frameElement || null; } catch (e) { return null; }
+        }
+
+        function _updateFsBtn(active) {
+          const btn = document.getElementById("btn-fullscreen");
+          const ico = document.getElementById("fs-icon");
+          if (btn) btn.classList.toggle("active", !!active);
+          if (ico) ico.textContent = active ? "🗗" : "⛶";
+        }
+
+        function _setCssFs(enable) {
+          const frameEl = _getFrameEl();
+          if (enable) {
+            if (frameEl) {
+              if (_savedFrameCss === null) _savedFrameCss = frameEl.style.cssText || "";
+              frameEl.style.cssText = (_savedFrameCss ? _savedFrameCss + ";" : "") +
+                "position:fixed !important; inset:0px !important; width:100vw !important; height:100vh !important; max-width:100vw !important; z-index:999999 !important; background:#ffffff !important; border:none !important; border-radius:0 !important;";
+            } else {
+              if (_savedBodyCss === null) _savedBodyCss = document.body.style.cssText || "";
+              document.body.style.cssText = (_savedBodyCss ? _savedBodyCss + ";" : "") +
+                "position:fixed !important; inset:0px !important; width:100vw !important; height:100vh !important; z-index:999999 !important; border-radius:0 !important;";
+            }
+            _cssFsActive = true;
+            _updateFsBtn(true);
+          } else {
+            if (frameEl && _savedFrameCss !== null) {
+              frameEl.style.cssText = _savedFrameCss;
+              _savedFrameCss = null;
+            }
+            if (_savedBodyCss !== null) {
+              document.body.style.cssText = _savedBodyCss;
+              _savedBodyCss = null;
+            }
+            _cssFsActive = false;
+            _updateFsBtn(false);
+          }
+        }
+
+        function _isFsActive() {
+          return !!(document.fullscreenElement || document.webkitFullscreenElement || _cssFsActive);
+        }
+
+        function toggleFullscreen() {
+          if (_isFsActive()) {
+            if (_cssFsActive) _setCssFs(false);
+            if (document.fullscreenElement && document.exitFullscreen) {
+              document.exitFullscreen().catch(() => {});
+            } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+              document.webkitExitFullscreen();
+            }
+            return;
+          }
+          const frameEl = _getFrameEl();
+          if (frameEl) {
+            try {
+              frameEl.setAttribute("allowfullscreen", "true");
+              const curAllow = frameEl.getAttribute("allow") || "";
+              if (!curAllow.includes("fullscreen")) {
+                frameEl.setAttribute("allow", (curAllow ? curAllow + "; " : "") + "fullscreen");
+              }
+            } catch (e) {}
+          }
+          const el = document.documentElement;
+          const req = el.requestFullscreen || el.webkitRequestFullscreen;
+          if (req) {
+            try {
+              Promise.resolve(req.call(el))
+                .then(() => { _updateFsBtn(true); })
+                .catch(() => { _setCssFs(true); });
+            } catch (e) {
+              _setCssFs(true);
+            }
+          } else {
+            _setCssFs(true);
+          }
+        }
+
+        function _onFsChange() {
+          const nativeFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+          if (!nativeFs && _cssFsActive) _setCssFs(false);
+          else _updateFsBtn(_isFsActive());
+        }
+        document.addEventListener("fullscreenchange", _onFsChange);
+        document.addEventListener("webkitfullscreenchange", _onFsChange);
+
+        function _onEscKey(ev) {
+          if (ev && ev.key === "Escape" && _isFsActive()) {
+            if (_cssFsActive) _setCssFs(false);
+            if (document.fullscreenElement && document.exitFullscreen) {
+              document.exitFullscreen().catch(() => {});
+            } else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {
+              document.webkitExitFullscreen();
+            }
+          }
+        }
+        window.addEventListener("keydown", _onEscKey);
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.addEventListener("keydown", _onEscKey);
+          }
+        } catch (e) {}
+"""
+
+
 # =============================================================================
 # 1. DIAGRAMA TRILINEAL DE PIPER VECTORIAL D3.JS
 # =============================================================================
@@ -136,7 +246,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
         }}
         .btn-toolbar {{
           background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px;
-          padding: 4px 8px; font-size: 10.5px; font-weight: 600; cursor: pointer;
+          padding: 4px 7px; font-size: 10.5px; font-weight: 600; cursor: pointer;
           color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px;
           white-space: nowrap;
         }}
@@ -191,7 +301,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
         <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
           🧪 Diagrama Trilineal de Piper (OMM / UNESCO)
         </div>
-        <div style="display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; flex-shrink: 0;">
+        <div style="display: flex; gap: 3px; align-items: center; flex-wrap: nowrap; flex-shrink: 0;">
           <button class="btn-toolbar" onclick="zoomIn()" title="Acercar (Zoom In)"><span>🔍+</span></button>
           <button class="btn-toolbar" onclick="zoomOut()" title="Alejar (Zoom Out)"><span>🔍-</span></button>
           <button class="btn-toolbar" onclick="resetZoom()" title="Restablecer tamaño original (100%)"><span>🔄 1:1</span></button>
@@ -201,9 +311,10 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           <button class="btn-toolbar active" id="btn-diamond-labels" onclick="toggleDiamondLabels()" title="Mostrar/Ocultar Rótulos de Ejes del Rombo">
             <span>🏷️ Rótulos Ejes</span>
           </button>
-          <span id="zoom-level" style="font-size:11px; font-weight:600; color:#64748b; margin: 0 4px;">100%</span>
+          <span id="zoom-level" style="font-size:11px; font-weight:600; color:#64748b; margin: 0 2px;">100%</span>
           <button class="btn-toolbar" onclick="descargarSVG()" title="Exportar vector SVG original"><span>📥 SVG</span></button>
           <button class="btn-toolbar" onclick="descargarPNG()" title="Exportar imagen de alta resolución (300 DPI)"><span>📷 PNG</span></button>
+          <button class="btn-toolbar" id="btn-fullscreen" onclick="toggleFullscreen()" title="Pantalla Completa (Esc para salir)"><span id="fs-icon" style="display:inline-block; width:14px; text-align:center;">⛶</span></button>
         </div>
       </div>
 
@@ -890,6 +1001,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           }};
           img.src = url;
         }}
+{_JS_FULLSCREEN_HELPER}
       </script>
     </body>
     </html>
@@ -1002,6 +1114,7 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
         .btn-toolbar:hover {{
           background: #691C32; color: #ffffff; border-color: #691C32;
         }}
+        .btn-toolbar.active {{ background: #691C32 !important; color: #ffffff !important; border-color: #691C32 !important; }}
         .btn-card-dl {{
           background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px;
           padding: 2px 7px; font-size: 10px; font-weight: 600; color: #475569;
@@ -1068,6 +1181,7 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
           <button class="btn-toolbar" onclick="descargarMosaicoPNG()">
             <span>🖼️</span> Mosaico PNG 300 DPI
           </button>
+          <button class="btn-toolbar" id="btn-fullscreen" onclick="toggleFullscreen()" title="Pantalla Completa (Esc para salir)"><span id="fs-icon" style="display:inline-block; width:14px; text-align:center;">⛶</span></button>
         </div>
       </div>
 
@@ -1282,6 +1396,7 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
         function descargarMosaicoPNG() {{
           descargarStiffIndividualPNG(0, data[0]?.id || "Muestra");
         }}
+{_JS_FULLSCREEN_HELPER}
       </script>
     </body>
     </html>
@@ -1430,6 +1545,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
           <div style="height: 16px; width: 1px; background: #cbd5e1; margin: 0 3px;"></div>
           <button class="btn-toolbar" onclick="descargarSVG()" title="Exportar SVG Vectorial"><span>📥 SVG</span></button>
           <button class="btn-toolbar" onclick="descargarPNG()" title="Exportar PNG a 300 DPI"><span>🖼️ PNG</span></button>
+          <button class="btn-toolbar" id="btn-fullscreen" onclick="toggleFullscreen()" title="Pantalla Completa (Esc para salir)"><span id="fs-icon" style="display:inline-block; width:14px; text-align:center;">⛶</span></button>
         </div>
       </div>
 
@@ -1744,6 +1860,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
           }};
           img.src = url;
         }}
+{_JS_FULLSCREEN_HELPER}
       </script>
     </body>
     </html>
@@ -1867,6 +1984,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
           <div style="height: 16px; width: 1px; background: #cbd5e1; margin: 0 3px;"></div>
           <button class="btn-toolbar" onclick="descargarSVG()" title="Exportar SVG"><span>📥 SVG</span></button>
           <button class="btn-toolbar" onclick="descargarPNG()" title="Exportar PNG a 300 DPI"><span>🖼️ PNG</span></button>
+          <button class="btn-toolbar" id="btn-fullscreen" onclick="toggleFullscreen()" title="Pantalla Completa (Esc para salir)"><span id="fs-icon" style="display:inline-block; width:14px; text-align:center;">⛶</span></button>
         </div>
       </div>
       <div id="wilcox-tooltip"></div>
@@ -2135,6 +2253,7 @@ def generar_diagrama_wilcox_d3(df_procesado):
           }};
           img.src = url;
         }}
+{_JS_FULLSCREEN_HELPER}
       </script>
     </body>
     </html>
@@ -2256,6 +2375,7 @@ def generar_diagrama_riverside_d3(df_procesado):
           <div style="height: 16px; width: 1px; background: #cbd5e1; margin: 0 3px;"></div>
           <button class="btn-toolbar" onclick="descargarSVG()" title="Exportar SVG"><span>📥 SVG</span></button>
           <button class="btn-toolbar" onclick="descargarPNG()" title="Exportar PNG a 300 DPI"><span>🖼️ PNG</span></button>
+          <button class="btn-toolbar" id="btn-fullscreen" onclick="toggleFullscreen()" title="Pantalla Completa (Esc para salir)"><span id="fs-icon" style="display:inline-block; width:14px; text-align:center;">⛶</span></button>
         </div>
       </div>
       <div id="riv-tooltip"></div>
@@ -2535,6 +2655,7 @@ def generar_diagrama_riverside_d3(df_procesado):
           }};
           img.src = url;
         }}
+{_JS_FULLSCREEN_HELPER}
       </script>
     </body>
     </html>
@@ -2655,6 +2776,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
           <div style="height: 16px; width: 1px; background: #cbd5e1; margin: 0 3px;"></div>
           <button class="btn-toolbar" onclick="descargarSVG()" title="Exportar SVG"><span>📥 SVG</span></button>
           <button class="btn-toolbar" onclick="descargarPNG()" title="Exportar PNG a 300 DPI"><span>🖼️ PNG</span></button>
+          <button class="btn-toolbar" id="btn-fullscreen" onclick="toggleFullscreen()" title="Pantalla Completa (Esc para salir)"><span id="fs-icon" style="display:inline-block; width:14px; text-align:center;">⛶</span></button>
         </div>
       </div>
       <div id="gibbs-tooltip"></div>
@@ -2964,6 +3086,7 @@ def generar_diagrama_gibbs_d3(df_procesado):
           }};
           img.src = url;
         }}
+{_JS_FULLSCREEN_HELPER}
       </script>
     </body>
     </html>
