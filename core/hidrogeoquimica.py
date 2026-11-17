@@ -102,7 +102,7 @@ ALIAS_COLUMNAS = {
     'Elevacion': ['ELEVACION', 'ELEV', 'ALTITUD', 'COTA', 'MSNM', 'Z'],
     'Temp_C': ['TEMP', 'TEMPERATURA', 'TEMP_C', 'T_C', 'GRADOS_C'],
     'pH': ['PH', 'POTENCIAL_HIDROGENO', 'UPH'],
-    'CE_uS_cm': ['CE', 'CONDUCTIVIDAD', 'COND', 'CE_US_CM', 'COND_ELEC', 'EC'],
+    'CE_uS_cm': ['CE', 'CONDUCTIVIDAD', 'CONDUCTIVIDAD_ELECTRICA', 'COND', 'CE_US_CM', 'COND_ELEC', 'EC'],
     'SDT_mg_L': ['SDT', 'TDS', 'SOLIDOS_DISUELTOS_TOTALES', 'SDT_MG_L', 'SOLIDOS_TOTALES_DISUELTOS'],
     'Dureza_mg_L': ['DUREZA', 'DUREZA_TOTAL', 'DUREZA_MG_L', 'DUREZA_CACO3', 'TH'],
     # Cationes
@@ -114,7 +114,8 @@ ALIAS_COLUMNAS = {
     # Aniones
     'HCO3_mg_L': ['HCO3', 'BICARBONATOS', 'BICARBONATO', 'HCO3_MG_L', 'ALCALINIDAD_HCO3', 'ALC_HCO3', 'HCO3_MEQ', 'HCO3_MEQ_L'],
     'CO3_mg_L':  ['CO3', 'CARBONATOS', 'CARBONATO', 'CO3_MG_L', 'ALCALINIDAD_CO3', 'CO3_MEQ', 'CO3_MEQ_L'],
-    'HCO3_CO3_meq_L': ['HCO3_CO3', 'HCO3+CO3', 'BICARBONATO_CARBONATO', 'ALCALINIDAD_TOTAL'],
+    'HCO3_CO3_meq_L': ['HCO3_CO3', 'HCO3+CO3', 'BICARBONATO_CARBONATO'],
+    'Alcalinidad_CaCO3_mg_L': ['ALCALINIDAD', 'ALCALINIDAD_TOTAL', 'ALC_TOTAL', 'ALCALINIDAD_CACO3', 'ALCALINIDAD_MG_L', 'ALCALINIDAD_TOTAL_CACO3'],
     'Cl_mg_L':   ['CL', 'CLORUROS', 'CLORURO', 'CL_MG_L', 'CHLORIDE', 'CL_MEQ', 'CL_MEQ_L'],
     'SO4_mg_L':  ['SO4', 'SULFATOS', 'SULFATO', 'SO4_MG_L', 'SULFATE', 'SO4_MEQ', 'SO4_MEQ_L'],
     'NO3_mg_L':  ['NO3', 'NITRATOS', 'NITRATO', 'NO3_MG_L', 'NITRATE'],
@@ -134,12 +135,28 @@ ALIAS_COLUMNAS = {
     'Cu_mg_L': ['CU', 'COBRE', 'CU_TOTAL', 'CU_MG_L'],
     'Ni_mg_L': ['NI', 'NIQUEL', 'NI_TOTAL', 'NI_MG_L'],
     # Microbiológicos
-    'E_Coli': ['E_COLI', 'ESCHERICHIA_COLI', 'ECOLI', 'COLI']
+    'E_Coli': ['E_COLI', 'ESCHERICHIA_COLI', 'ECOLI', 'COLI'],
+    'Coliformes': ['COLIFORMES', 'COLIFORMES_TOTALES']
 }
+
+_TRACE_METAL_COLS = {
+    'As_mg_L', 'Pb_mg_L', 'Cd_mg_L', 'Cr_mg_L', 'Hg_mg_L',
+    'Fe_mg_L', 'Mn_mg_L', 'Zn_mg_L', 'Al_mg_L', 'Ba_mg_L', 'Cu_mg_L', 'Ni_mg_L'
+}
+_BASE_MAJOR_ION_COLS = {
+    'Ca_mg_L', 'Mg_mg_L', 'Na_mg_L', 'K_mg_L',
+    'HCO3_mg_L', 'CO3_mg_L', 'Cl_mg_L', 'SO4_mg_L'
+}
+_UNIT_SUFFIXES = (
+    '_MG_L_CACO3', '_NMP_100_ML', '_UFC_100_ML', '_CACO3',
+    '_MEQ_L', '_MCG_L', '_US_CM', '_S_CM', '_MG_L', '_UG_L',
+    '_MEQ', '_PPM', '_PPB', '_UNT', '_UPH'
+)
+_QUAL_SUFFIXES = ('_DISUELTOS', '_DISUELTO', '_TOTALES', '_TOTAL')
 
 def normalizar_texto_col(col):
     if not col: return ""
-    t = str(col).strip().upper()
+    t = str(col).strip().replace('\u00b5', 'u').replace('\u03bc', 'u').upper()
     t = ''.join(c for c in unicodedata.normalize('NFD', t) if unicodedata.category(c) != 'Mn')
     t = re.sub(r'[^A-Z0-9]', '_', t)
     return re.sub(r'_+', '_', t).strip('_')
@@ -184,6 +201,8 @@ def parse_concatenated_csv(raw_text):
     return dfs[0]
 
 
+_RE_UG_L = re.compile(r'(?:^|_)(UG_L|UG|MCG_L|MCG|PPB)(?:_|$)')
+
 def mapear_dataframe_hidroquimico(df_raw):
     """
     Toma un DataFrame crudo proveniente de Excel, CSV o tabla de laboratorio
@@ -195,69 +214,174 @@ def mapear_dataframe_hidroquimico(df_raw):
     df = df_raw.copy()
     mapa_renombrado = {}
     canonicos_usados = set()
+    cols_ug_l = set()
+    meq_hits = 0
+    mg_hits = 0
 
     for col_orig in df.columns:
         c_norm = normalizar_texto_col(col_orig)
+        matched_canon = None
 
         # 1. Si ya coincide exactamente con un canónico
-        if col_orig in ALIAS_COLUMNAS:
-            mapa_renombrado[col_orig] = col_orig
-            canonicos_usados.add(col_orig)
-            continue
-
-        # 2. Si su versión normalizada coincide con algún canónico
-        c_matched = None
-        for canonico in ALIAS_COLUMNAS.keys():
-            if c_norm == normalizar_texto_col(canonico):
-                c_matched = canonico
-                break
-        if c_matched and c_matched not in canonicos_usados:
-            mapa_renombrado[col_orig] = c_matched
-            canonicos_usados.add(c_matched)
-            continue
+        if col_orig in ALIAS_COLUMNAS and col_orig not in canonicos_usados:
+            matched_canon = col_orig
+        else:
+            # 2. Si su versión normalizada coincide con algún canónico
+            for canonico in ALIAS_COLUMNAS.keys():
+                if c_norm == normalizar_texto_col(canonico) and canonico not in canonicos_usados:
+                    matched_canon = canonico
+                    break
 
         # 3. Buscar en la lista de aliases explícitos (coincidencia exacta)
-        for canonico, aliases in ALIAS_COLUMNAS.items():
-            if canonico in canonicos_usados:
-                continue
-            if c_norm in aliases:
-                mapa_renombrado[col_orig] = canonico
-                canonicos_usados.add(canonico)
-                break
+        if not matched_canon:
+            for canonico, aliases in ALIAS_COLUMNAS.items():
+                if canonico in canonicos_usados:
+                    continue
+                if c_norm in aliases:
+                    matched_canon = canonico
+                    break
+
+        # 4. Intentar recortando sufijos de unidades / calificadores (ej. "Calcio (mg/L)" -> CALCIO)
+        if not matched_canon and c_norm:
+            candidates = []
+            cur = c_norm
+            changed = True
+            while changed:
+                changed = False
+                for suf in _UNIT_SUFFIXES:
+                    if cur.endswith(suf) and len(cur) > len(suf):
+                        cur = cur[:-len(suf)].strip('_')
+                        candidates.append(cur)
+                        changed = True
+                        break
+                if not changed:
+                    for qsuf in _QUAL_SUFFIXES:
+                        if cur.endswith(qsuf) and len(cur) > len(qsuf):
+                            cur = cur[:-len(qsuf)].strip('_')
+                            candidates.append(cur)
+                            changed = True
+                            break
+            for cand in candidates:
+                for canonico in ALIAS_COLUMNAS.keys():
+                    if cand == normalizar_texto_col(canonico) and canonico not in canonicos_usados:
+                        matched_canon = canonico
+                        break
+                if matched_canon:
+                    break
+                for canonico, aliases in ALIAS_COLUMNAS.items():
+                    if canonico in canonicos_usados:
+                        continue
+                    if cand in aliases:
+                        matched_canon = canonico
+                        break
+                if matched_canon:
+                    break
+
+        if matched_canon:
+            mapa_renombrado[col_orig] = matched_canon
+            canonicos_usados.add(matched_canon)
+            if matched_canon in _BASE_MAJOR_ION_COLS:
+                if 'MEQ' in c_norm:
+                    meq_hits += 1
+                elif 'MG_L' in c_norm or 'PPM' in c_norm:
+                    mg_hits += 1
+            if matched_canon in _TRACE_METAL_COLS and _RE_UG_L.search(c_norm):
+                cols_ug_l.add(matched_canon)
 
     df = df.rename(columns=mapa_renombrado)
 
-    # Si no tiene columna 'Muestra', usar la primera columna de texto o índice
-    if 'Muestra' not in df.columns:
+    # Guardar señal de unidad detectada desde los encabezados originales
+    if meq_hits > 0 and mg_hits == 0:
+        unidad_col_detectada = 'meq_L'
+    elif mg_hits > 0 and meq_hits == 0:
+        unidad_col_detectada = 'mg_L'
+    else:
+        unidad_col_detectada = 'auto'
+
+    # Si no tiene columna 'Muestra', usar la primera columna disponible distinta a metadatos internos
+    if 'Muestra' not in df.columns and len(df.columns) > 0:
         primera_col = df.columns[0]
         df['Muestra'] = df[primera_col].astype(str)
 
-    # Limpiar cadenas de texto numéricas con '<' (ej. '< 0.010' -> 0.005, límite de detección / 2)
+    cols_no_analiticas = {'Muestra', 'Tipo_Fuente', 'Fecha', '_unidad_col_detectada'}
+    cols_micro = {'E_Coli', 'Coliformes'}
+
+    # Limpiar cadenas de texto numéricas, valores censurados ('< 0.010', 'Ausente', 'ND') y comas de miles
     for col in df.columns:
-        if col in ['Muestra', 'Tipo_Fuente', 'Fecha']:
+        if col in cols_no_analiticas:
             continue
+        es_micro = (col in cols_micro)
         try:
-            if df[col].dtype == object:
-                # Detectar valores tipo '< 0.010' o '<0.002'
-                def limpiar_num(v):
-                    if pd.isna(v): return np.nan
+            if df[col].dtype == object or str(df[col].dtype) == 'string':
+                def limpiar_num(v, _micro=es_micro):
+                    if pd.isna(v):
+                        return np.nan
                     v_str = str(v).strip()
-                    if v_str.startswith('<'):
+                    if not v_str:
+                        return np.nan
+                    v_up = v_str.upper()
+                    if v_up in {'NAN', 'NONE', 'NULL', '-', '--', 'N/D', 'NA', 'S/D'}:
+                        return np.nan
+                    if _micro:
+                        if v_str.startswith('<') or v_up in {'AUSENTE', 'ND', 'NO DETECTADO', 'NEGATIVO', 'AUS'}:
+                            return 0.0
+                    else:
+                        if v_up in {'ND', 'NO DETECTADO', 'CERO', 'AUSENTE'}:
+                            return 0.0
+                        if v_str.startswith('<'):
+                            m = re.search(r'[-+]?\d*\.?\d+', v_str.replace(',', ''))
+                            if m:
+                                return float(m.group()) / 2.0  # Criterio estándar OMM/EPA: mitad del límite de detección
+                            return np.nan
+                    v_clean = v_str.replace(',', '')
+                    m = re.search(r'[-+]?\d*\.?\d+', v_clean)
+                    if m:
                         try:
-                            num = float(v_str.replace('<', '').strip())
-                            return num / 2.0  # Criterio estándar OMM/EPA: mitad del límite de detección
+                            return float(m.group())
                         except Exception:
                             return np.nan
-                    try:
-                        return float(re.sub(r'[^\d\.\-]', '', v_str))
-                    except Exception:
-                        return np.nan
+                    return np.nan
                 df[col] = df[col].apply(limpiar_num)
             else:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
         except Exception:
             pass
 
+    # Conversión de metales traza reportados en ug/L o ppb a mg/L
+    for col_m in cols_ug_l:
+        if col_m in df.columns:
+            df[col_m] = pd.to_numeric(df[col_m], errors='coerce') / 1000.0
+
+    # Eliminar filas completamente vacías en todas las columnas analíticas
+    cols_analiticas = [c for c in df.columns if c not in cols_no_analiticas]
+    if cols_analiticas:
+        df = df.dropna(subset=cols_analiticas, how='all').reset_index(drop=True)
+
+    if df.empty:
+        return df
+
+    # Normalización geoespacial de coordenadas (UTM -> WGS84 y longitudes positivas en México)
+    if 'Latitud' in df.columns and 'Longitud' in df.columns:
+        df['Latitud'] = pd.to_numeric(df['Latitud'], errors='coerce')
+        df['Longitud'] = pd.to_numeric(df['Longitud'], errors='coerce')
+        mask_utm = df['Longitud'].between(100000.0, 900000.0) & df['Latitud'].between(1500000.0, 3700000.0)
+        if mask_utm.any():
+            try:
+                from pyproj import Transformer
+                transformer = Transformer.from_crs("EPSG:32614", "EPSG:4326", always_xy=True)
+                lons_wgs, lats_wgs = transformer.transform(
+                    df.loc[mask_utm, 'Longitud'].values,
+                    df.loc[mask_utm, 'Latitud'].values
+                )
+                df.loc[mask_utm, 'Longitud'] = lons_wgs
+                df.loc[mask_utm, 'Latitud'] = lats_wgs
+            except Exception:
+                pass
+        mask_pos_mx = df['Latitud'].between(14.0, 33.5) & df['Longitud'].between(86.0, 119.0)
+        if mask_pos_mx.any():
+            df.loc[mask_pos_mx, 'Longitud'] = -df.loc[mask_pos_mx, 'Longitud']
+
+    df['_unidad_col_detectada'] = unidad_col_detectada
     return df
 
 # =============================================================================
@@ -276,21 +400,86 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None, estimar_ce
     df = df_muestras.copy()
 
     # Detección inteligente de unidades (meq/L vs mg/L)
+    unidad_col = None
+    if '_unidad_col_detectada' in df.columns:
+        u_vals = df['_unidad_col_detectada'].dropna().unique()
+        if len(u_vals) > 0 and u_vals[0] in ('meq_L', 'mg_L'):
+            unidad_col = u_vals[0]
+
     es_meq = False
     if unidad_forzada == 'meq_L':
         es_meq = True
     elif unidad_forzada == 'mg_L':
         es_meq = False
+    elif unidad_col == 'meq_L':
+        es_meq = True
+    elif unidad_col == 'mg_L':
+        es_meq = False
     else:
-        # Si los iones mayores tienen percentil 75 < 20 y mediana < 10, están en meq/L
+        # Inferencia estadística + contraste físico por Error de Balance Iónico (% CBE)
         cols_iones = [f"{ion}_mg_L" for ion in ['Ca', 'Mg', 'Na', 'Cl', 'HCO3', 'SO4'] if f"{ion}_mg_L" in df.columns]
         if cols_iones:
             vals = []
             for c in cols_iones:
                 v = pd.to_numeric(df[c], errors='coerce').dropna()
-                if len(v) > 0: vals.extend(v.tolist())
-            if vals and np.percentile(vals, 75) < 20.0 and np.median(vals) < 10.0:
-                es_meq = True
+                if len(v) > 0:
+                    vals.extend(v.tolist())
+            hco3_vals = pd.to_numeric(df['HCO3_mg_L'], errors='coerce').dropna() if 'HCO3_mg_L' in df.columns else pd.Series(dtype=float)
+            med_hco3 = float(hco3_vals.median()) if len(hco3_vals) > 0 else 0.0
+
+            if vals:
+                p75 = float(np.percentile(vals, 75))
+                med_all = float(np.median(vals))
+                if med_hco3 > 25.0 or p75 > 35.0:
+                    es_meq = False
+                else:
+                    def _calc_cbe_hipotesis(assum_meq):
+                        cat_s = pd.Series(0.0, index=df.index)
+                        an_s = pd.Series(0.0, index=df.index)
+                        n_cat, n_an = 0, 0
+                        for ion_c in ['Ca', 'Mg', 'Na', 'K']:
+                            col_c = f"{ion_c}_mg_L"
+                            if col_c in df.columns:
+                                v_c = pd.to_numeric(df[col_c], errors='coerce')
+                                if v_c.notna().any():
+                                    n_cat += 1
+                                    cat_s = cat_s + (v_c.fillna(0.0) if assum_meq else (v_c.fillna(0.0) / PESOS_EQUIVALENTES[ion_c]['eq_wt']))
+                        if 'Na_K_meq_L' in df.columns:
+                            v_nk = pd.to_numeric(df['Na_K_meq_L'], errors='coerce')
+                            if v_nk.notna().any() and ('Na_mg_L' not in df.columns or df['Na_mg_L'].isna().all()):
+                                n_cat += 1
+                                cat_s = cat_s + v_nk.fillna(0.0)
+                        for ion_a in ['HCO3', 'CO3', 'Cl', 'SO4']:
+                            col_a = f"{ion_a}_mg_L"
+                            if col_a in df.columns:
+                                v_a = pd.to_numeric(df[col_a], errors='coerce')
+                                if v_a.notna().any():
+                                    n_an += 1
+                                    an_s = an_s + (v_a.fillna(0.0) if assum_meq else (v_a.fillna(0.0) / PESOS_EQUIVALENTES[ion_a]['eq_wt']))
+                        if 'HCO3_CO3_meq_L' in df.columns:
+                            v_hc = pd.to_numeric(df['HCO3_CO3_meq_L'], errors='coerce')
+                            if v_hc.notna().any() and ('HCO3_mg_L' not in df.columns or df['HCO3_mg_L'].isna().all()):
+                                n_an += 1
+                                an_s = an_s + v_hc.fillna(0.0)
+                        if 'Alcalinidad_CaCO3_mg_L' in df.columns and ('HCO3_mg_L' not in df.columns or df['HCO3_mg_L'].isna().all()):
+                            v_al = pd.to_numeric(df['Alcalinidad_CaCO3_mg_L'], errors='coerce')
+                            if v_al.notna().any():
+                                n_an += 1
+                                an_s = an_s + (v_al.fillna(0.0) if assum_meq else (v_al.fillna(0.0) / 50.04345))
+                        if n_cat >= 2 and n_an >= 2:
+                            den = cat_s + an_s
+                            valid = den > 0
+                            if valid.any():
+                                cbe_abs = ((cat_s[valid] - an_s[valid]).abs() / den[valid]) * 100.0
+                                return float(cbe_abs.median())
+                        return None
+
+                    cbe_meq = _calc_cbe_hipotesis(True)
+                    cbe_mg = _calc_cbe_hipotesis(False)
+                    if cbe_meq is not None and cbe_mg is not None:
+                        es_meq = (cbe_meq < cbe_mg)
+                    else:
+                        es_meq = (p75 < 20.0 and med_all < 10.0)
 
     # 1. Conversión de concentraciones (Estricto: SIN estimaciones ni fillna(0.0) arbitrarios)
     for ion, datos in PESOS_EQUIVALENTES.items():
@@ -335,6 +524,17 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None, estimar_ce
         df['HCO3_mg_L'] = df['HCO3_meq_L'] * PESOS_EQUIVALENTES['HCO3']['eq_wt']
         df['CO3_mg_L'] = 0.0
 
+    # Conversión de Alcalinidad Total como CaCO3 a HCO3 (Standard Methods 2320 B: eq_wt CaCO3 = 50.04345)
+    if 'Alcalinidad_CaCO3_mg_L' in df.columns and ('HCO3_meq_L' not in df.columns or df['HCO3_meq_L'].isna().all()):
+        alc_val = pd.to_numeric(df['Alcalinidad_CaCO3_mg_L'], errors='coerce')
+        if es_meq:
+            df['HCO3_meq_L'] = alc_val
+        else:
+            df['HCO3_meq_L'] = alc_val / 50.04345
+        df['HCO3_mg_L'] = df['HCO3_meq_L'] * PESOS_EQUIVALENTES['HCO3']['eq_wt']
+        df['CO3_meq_L'] = np.where(df['HCO3_meq_L'].notna(), 0.0, np.nan)
+        df['CO3_mg_L'] = np.where(df['HCO3_meq_L'].notna(), 0.0, np.nan)
+
     # Conversión N-NO3 a NO3 si aplica
     if ('NO3_mg_L' not in df.columns or df['NO3_mg_L'].isna().all()) and 'N_NO3_mg_L' in df.columns:
         df['NO3_mg_L'] = df['N_NO3_mg_L'] * 4.427
@@ -353,7 +553,7 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None, estimar_ce
         df['CO3_meq_L'] = df['CO3_meq_L'].fillna(0.0)
 
     # Evaluación de completitud analítica para el Diagrama de Piper
-    # Requiere obligatoriamente: Ca²⁺, Mg²⁺, (Na⁺+K⁺), HCO₃⁻, SO₄²⁻, Cl⁻ (todos medidos >= 0)
+    # Requiere obligatoriamente: Ca²⁺, Mg²⁺, (Na⁺+K⁺), HCO₃⁻, SO₄²⁻, Cl⁻ (todos medidos >= 0) y sumas > 0
     has_ca = df['Ca_meq_L'].notna() & (df['Ca_meq_L'] >= 0)
     has_mg = df['Mg_meq_L'].notna() & (df['Mg_meq_L'] >= 0)
     has_nak = df['Na_K_meq_L'].notna() & (df['Na_K_meq_L'] >= 0)
@@ -361,7 +561,10 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None, estimar_ce
     has_so4 = df['SO4_meq_L'].notna() & (df['SO4_meq_L'] >= 0)
     has_cl = df['Cl_meq_L'].notna() & (df['Cl_meq_L'] >= 0)
 
-    apta_piper = has_ca & has_mg & has_nak & has_hco3 & has_so4 & has_cl
+    cat_gt0 = (df['Ca_meq_L'].fillna(0.0) + df['Mg_meq_L'].fillna(0.0) + df['Na_K_meq_L'].fillna(0.0)) > 0
+    an_gt0 = (df['HCO3_meq_L'].fillna(0.0) + df['CO3_meq_L'].fillna(0.0) + df['SO4_meq_L'].fillna(0.0) + df['Cl_meq_L'].fillna(0.0)) > 0
+
+    apta_piper = has_ca & has_mg & has_nak & has_hco3 & has_so4 & has_cl & cat_gt0 & an_gt0
     df['Apta_Piper'] = apta_piper
 
     def identificar_faltantes(r):
@@ -372,7 +575,11 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None, estimar_ce
         if pd.isna(r.get('HCO3_meq_L')): falt.append('HCO₃⁻')
         if pd.isna(r.get('SO4_meq_L')): falt.append('SO₄²⁻')
         if pd.isna(r.get('Cl_meq_L')): falt.append('Cl⁻')
-        return f"Faltan: {', '.join(falt)}" if falt else "Completo"
+        if falt:
+            return f"Faltan: {', '.join(falt)}"
+        if not bool(r.get('Apta_Piper', True)):
+            return "Concentraciones iónicas en cero"
+        return "Completo"
 
     df['Iones_Faltantes'] = df.apply(identificar_faltantes, axis=1)
 
@@ -639,12 +846,59 @@ def auditar_norma_127(df_muestras):
         parametros_excedidos = []
         parametros_alerta = []
 
-        for p_key, info in LIMITES_NOM_127_2021.items():
-            col_nom = f"{p_key}_mg_L" if p_key not in ['pH_min', 'pH_max', 'SDT', 'Dureza', 'Color', 'Turbiedad', 'E_Coli', 'Coliformes', 'pH'] else p_key
-            if col_nom not in row:
-                col_nom = p_key
+        ph_evaluado = False
+        tiene_n_no3 = pd.notna(row.get('N_NO3_mg_L'))
 
-            val = row.get(col_nom)
+        for p_key, info in LIMITES_NOM_127_2021.items():
+            if p_key in ('pH_min', 'pH_max'):
+                if ph_evaluado:
+                    continue
+                val_ph = row.get('pH')
+                if pd.isna(val_ph):
+                    ph_evaluado = True
+                    continue
+                try:
+                    val_ph = float(val_ph)
+                except Exception:
+                    ph_evaluado = True
+                    continue
+                ph_evaluado = True
+                total_evaluados += 1
+                if val_ph < 6.5:
+                    no_conformes += 1
+                    parametros_excedidos.append(f"pH ({val_ph:.2f} UpH < Mín 6.5)")
+                elif val_ph > 8.5:
+                    no_conformes += 1
+                    parametros_excedidos.append(f"pH ({val_ph:.2f} UpH > Máx 8.5)")
+                elif val_ph < 6.7 or val_ph > 8.3:
+                    alertas += 1
+                    parametros_alerta.append(f"pH ({val_ph:.2f} UpH, próximo a límite 6.5–8.5)")
+                else:
+                    conformes += 1
+                continue
+
+            if p_key == 'NO3' and tiene_n_no3:
+                continue
+
+            if p_key == 'SDT':
+                if bool(row.get('SDT_Estimado', False)):
+                    continue
+                val = row.get('SDT_mg_L')
+                if pd.isna(val):
+                    val = row.get('SDT')
+            elif p_key == 'Dureza':
+                val = row.get('Dureza_mg_L')
+                if pd.isna(val):
+                    val = row.get('Dureza')
+                if pd.isna(val):
+                    val = row.get('Dureza_Calculada_mg_L')
+            else:
+                if p_key in ('Color', 'Turbiedad', 'E_Coli', 'Coliformes'):
+                    col_nom = p_key if p_key in row else f"{p_key}_mg_L"
+                else:
+                    col_nom = f"{p_key}_mg_L" if f"{p_key}_mg_L" in row else p_key
+                val = row.get(col_nom)
+
             if pd.isna(val):
                 continue
 
@@ -656,6 +910,7 @@ def auditar_norma_127(df_muestras):
             total_evaluados += 1
             lmp = info['lmp']
             tipo_lim = info['tipo']
+            fmt_dec = f"{val:.4f}" if lmp > 0 and lmp < 0.05 else f"{val:.3f}"
 
             if tipo_lim == 'max':
                 if lmp == 0.0:  # Microbiológico (debe ser 0)
@@ -667,10 +922,10 @@ def auditar_norma_127(df_muestras):
                 else:
                     if val > lmp:
                         no_conformes += 1
-                        parametros_excedidos.append(f"{info['nombre']} ({val:.3f} {info['unidad']} > LMP {lmp})")
+                        parametros_excedidos.append(f"{info['nombre']} ({fmt_dec} {info['unidad']} > LMP {lmp})")
                     elif val >= (lmp * 0.80):
                         alertas += 1
-                        parametros_alerta.append(f"{info['nombre']} ({val:.3f} {info['unidad']}, ≥80% LMP)")
+                        parametros_alerta.append(f"{info['nombre']} ({fmt_dec} {info['unidad']}, ≥80% LMP)")
                     else:
                         conformes += 1
             elif tipo_lim == 'min':

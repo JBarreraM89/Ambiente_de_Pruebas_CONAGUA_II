@@ -59,7 +59,8 @@ from core.hidro_d3_diagrams import (
     generar_diagrama_schoeller_d3,
     generar_diagrama_wilcox_d3,
     generar_diagrama_riverside_d3,
-    generar_diagrama_gibbs_d3
+    generar_diagrama_gibbs_d3,
+    obtener_color_facies
 )
 
 # =============================================================================
@@ -406,6 +407,16 @@ with st.sidebar:
 
     st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
     st.markdown("<p style='font-size:11.5px; font-weight:700; color:#691C32; margin-bottom:2px;'>⚙️ CONFIGURACIÓN ANALÍTICA</p>", unsafe_allow_html=True)
+    unidad_ui = st.selectbox(
+        "Unidades de entrada:",
+        ["Automático", "mg/L (ppm)", "meq/L"],
+        index=0,
+        key="sel_unidad_entrada_hidro",
+        help="En modo Automático, el sistema detecta si las concentraciones vienen en mg/L o meq/L por encabezado y contraste de balance iónico (CBE)."
+    )
+    mapa_unidad = {"Automático": None, "mg/L (ppm)": "mg_L", "meq/L": "meq_L"}
+    unidad_forzada_sel = mapa_unidad.get(unidad_ui, None)
+
     estimar_ce_sdt = st.toggle(
         "📐 Estimar CE y SDT si faltan",
         value=True,
@@ -418,7 +429,7 @@ with st.sidebar:
 # =============================================================================
 df_crudo = st.session_state.get("df_hidro_raw", pd.DataFrame())
 df_normalizado = mapear_dataframe_hidroquimico(df_crudo) if not df_crudo.empty else pd.DataFrame()
-df_procesado = procesar_muestras_hidroquimicas(df_normalizado, estimar_ce_sdt=estimar_ce_sdt) if not df_normalizado.empty else pd.DataFrame()
+df_procesado = procesar_muestras_hidroquimicas(df_normalizado, unidad_forzada=unidad_forzada_sel, estimar_ce_sdt=estimar_ce_sdt) if not df_normalizado.empty else pd.DataFrame()
 resumen_nom127, df_auditoria = auditar_norma_127(df_procesado) if not df_procesado.empty else ({}, pd.DataFrame())
 
 # Obtener polígono oficial del acuífero (robusto, serialización limpia vía mapping sin Timestamp)
@@ -571,22 +582,6 @@ with tab_piper:
         st.warning(f"⚠️ **{n_incomp} muestra(s) no fueron proyectadas en el diagrama trilineal** por carecer de la serie analítica completa de iones mayores (Ca²⁺, Mg²⁺, Na⁺/K⁺, HCO₃⁻, SO₄²⁻, Cl⁻). Los valores ausentes no se estimaron para preservar el rigor analítico oficial.")
 
     col_p_plot, col_p_info = st.columns([7.5, 4.5], gap="large")
-
-    facies_paleta_ui = {
-        "Bicarbonatada Magnésica-Sódica": "#0891b2",
-        "Bicarbonatada Sódica": "#7c3aed",
-        "Bicarbonatada Sódica-Magnésica": "#9333ea",
-        "Bicarbonatada Magnésica": "#16a34a",
-        "Bicarbonatada Magnésica-Cálcica": "#059669",
-        "Bicarbonatada Cálcica-Magnésica": "#0284c7",
-        "Bicarbonatada Sódica-Cálcica": "#c026d3",
-        "Bicarbonatada Cálcica": "#0369a1",
-        "Bicarbonatada Mixta Catiónica": "#64748b",
-        "Bicarbonatada Cálcica-Sódica": "#0ea5e9",
-        "Sulfatada Magnésica-Sódica": "#d97706",
-        "Clorurada Sódica": "#dc2626",
-        "Sulfatada Cálcica": "#b45309"
-    }
 
     with col_p_info:
         with st.container(border=True):
@@ -751,7 +746,7 @@ with tab_piper:
             }
             """
             for i, fac_nom in enumerate(todas_familias):
-                col_hex = facies_paleta_ui.get(fac_nom, "#0284c7")
+                col_hex = obtener_color_facies(fac_nom)
                 is_active = (fac_nom in familias_activas)
 
                 if is_active:
@@ -1076,7 +1071,11 @@ with tab_geo:
         </div>
     """, unsafe_allow_html=True)
 
-    df_geo_pts = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy() if ('Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns) else pd.DataFrame()
+    if 'Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns:
+        _df_g_tmp = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
+        df_geo_pts = _df_g_tmp[_df_g_tmp['Latitud'].between(-90.0, 90.0) & _df_g_tmp['Longitud'].between(-180.0, 180.0)].copy()
+    else:
+        df_geo_pts = pd.DataFrame()
 
     if df_geo_pts.empty:
         st.warning("⚠️ Las muestras cargadas no cuentan con coordenadas 'Latitud' y 'Longitud' para su representación cartográfica.")
@@ -1105,11 +1104,7 @@ with tab_geo:
             
             # Asignar color según criterio
             if "Piper" in col_criterio:
-                if "Bicarbonatada Cálcica" in facies: color_pt = "#0284c7"
-                elif "Bicarbonatada Sódica" in facies: color_pt = "#7c3aed"
-                elif "Clorurada Sódica" in facies: color_pt = "#dc2626"
-                elif "Sulfatada" in facies: color_pt = "#d97706"
-                else: color_pt = "#059669"
+                color_pt = obtener_color_facies(facies)
             else:
                 if "No Conforme" in estatus: color_pt = "#dc2626"
                 elif "Alerta" in estatus: color_pt = "#d97706"
@@ -1468,7 +1463,13 @@ with tab_export:
     c_exp1, c_exp2 = st.columns(2, gap="medium")
     c_exp3, c_exp4 = st.columns(2, gap="medium")
 
-    tiene_coords = ('Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns and not df_procesado.dropna(subset=['Latitud', 'Longitud']).empty) if not df_procesado.empty else False
+    if not df_procesado.empty and 'Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns:
+        _df_v_tmp = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
+        df_valid_geo = _df_v_tmp[_df_v_tmp['Latitud'].between(-90.0, 90.0) & _df_v_tmp['Longitud'].between(-180.0, 180.0)].copy()
+        tiene_coords = not df_valid_geo.empty
+    else:
+        df_valid_geo = pd.DataFrame()
+        tiene_coords = False
 
     # 1. Google Earth KMZ
     with c_exp1:
@@ -1482,7 +1483,7 @@ with tab_export:
             </div>
         """, unsafe_allow_html=True)
         if tiene_coords:
-            bytes_kmz = generar_kmz_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
+            bytes_kmz = generar_kmz_hidrogeoquimico(df_valid_geo, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
             btn_kmz = generar_enlace_descarga(
                 bytes_kmz, f"auditoria_hidroquimica_{clave_sel or 'acuifero'}.kmz",
                 "application/vnd.google-earth.kmz", "Descargar Paquete KMZ (.kmz)", icon="🌐"
@@ -1504,7 +1505,7 @@ with tab_export:
             </div>
         """, unsafe_allow_html=True)
         if tiene_coords:
-            bytes_shp = generar_shapefile_hidrogeoquimico(df_procesado, df_auditoria, f"hidroquimica_{clave_sel or 'acuifero'}")
+            bytes_shp = generar_shapefile_hidrogeoquimico(df_valid_geo, df_auditoria, f"hidroquimica_{clave_sel or 'acuifero'}")
             btn_shp = generar_enlace_descarga(
                 bytes_shp, f"shapefile_hidroquimica_{clave_sel or 'acuifero'}.zip",
                 "application/zip", "Descargar Shapefile ZIP (.zip)", icon="🗺️"
@@ -1548,7 +1549,6 @@ with tab_export:
             </div>
         """, unsafe_allow_html=True)
         if tiene_coords:
-            df_valid_geo = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
             pts_geom = [Point(xy) for xy in zip(df_valid_geo['Longitud'], df_valid_geo['Latitud'])]
             gdf_pts = gpd.GeoDataFrame(df_valid_geo, geometry=pts_geom, crs="EPSG:4326")
             bytes_geojson = gdf_pts.to_json().encode('utf-8')
