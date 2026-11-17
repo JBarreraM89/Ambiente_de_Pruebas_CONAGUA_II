@@ -567,19 +567,34 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           const xd = (xc + xa) / 2.0 + (yc - ya) / (2.0 * Math.sqrt(3));
           const yd = (yc + ya) / 2.0 - Math.sqrt(3) * (xa - xc) / 2.0;
 
+          const defaultConnW = isMatch ? 2.6 : 1.2;
+          const defaultConnOp = isMatch ? 1.0 : (hasIsolation ? 0.0 : 0.65);
+          const defaultGrpOp = (hasIsolation && !isMatch) ? 0.15 : 1.0;
+          const stroke_c = isMatch ? "#0f172a" : "#ffffff";
+          const stroke_w = isMatch ? 2.5 : 1.8;
+
           // Rayos trilineales directos continuos (chevron limpio a 60° y 120°)
           const conn = gConnections.append("polyline")
             .attr("points", `${{xc}},${{yc}} ${{xd}},${{yd}} ${{xa}},${{ya}}`)
             .attr("stroke", m.color)
-            .attr("stroke-width", isMatch ? 2.6 : 1.2)
+            .attr("stroke-width", defaultConnW)
             .attr("stroke-dasharray", isMatch ? "4,3" : null)
-            .attr("stroke-opacity", isMatch ? 1.0 : (hasIsolation ? 0.0 : 0.65))
+            .attr("stroke-opacity", defaultConnOp)
             .attr("fill", "none")
             .attr("class", `connection-line conn-${{i}}`);
 
+          const grp = gSamples.append("g")
+            .attr("class", `pt-group-${{i}}${{isMatch ? " pt-group-isolated" : ""}}`)
+            .attr("opacity", defaultGrpOp);
+
           const showTip = (event) => {{
-            conn.classed("highlight", true).attr("stroke-width", 2.4).attr("stroke-opacity", 1.0);
-            d3.selectAll(`.pt-group-${{i}}`).raise().selectAll("circle, polygon").attr("stroke-width", 3.0);
+            conn.classed("highlight", true)
+              .attr("stroke-width", isMatch ? 3.0 : 2.4)
+              .attr("stroke-opacity", 1.0);
+            grp.raise().attr("opacity", 1.0);
+            grp.selectAll("circle, polygon")
+              .attr("stroke-width", 3.0)
+              .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: 3px !important;`);
 
             const tipHtml = `
               <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:12px;">🧪 ${{m.id}}</div>
@@ -625,14 +640,19 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           }};
 
           const hideTip = () => {{
-            conn.classed("highlight", false).attr("stroke-width", 1.2).attr("stroke-opacity", 0.65);
-            d3.selectAll(`.pt-group-${{i}}`).selectAll("circle, polygon").attr("stroke-width", 1.8);
+            conn.classed("highlight", false)
+              .attr("stroke-width", defaultConnW)
+              .attr("stroke-opacity", defaultConnOp);
+            grp.attr("opacity", defaultGrpOp);
+            grp.selectAll("circle, polygon")
+              .attr("stroke-width", stroke_w)
+              .attr("style", `fill: ${{m.color}} !important; stroke: ${{stroke_c}} !important; stroke-width: ${{stroke_w}}px !important;`);
+            if (hasIsolation) {{
+              d3.selectAll(".pt-group-isolated").raise();
+            }}
             tooltip.style("display", "none");
           }};
 
-          const grp = gSamples.append("g").attr("class", `pt-group-${{i}}`);
-          const stroke_c = isMatch ? "#0f172a" : "#ffffff";
-          const stroke_w = isMatch ? 2.5 : 1.8;
           const r_circ = isMatch ? 8.0 : 5.5;
 
           // Punto Catiónico
