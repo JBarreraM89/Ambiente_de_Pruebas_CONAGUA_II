@@ -131,16 +131,19 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
         }}
         .toolbar-piper {{
           display: flex; justify-content: space-between; align-items: center;
-          flex-wrap: wrap; gap: 6px; flex-shrink: 0;
-          padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
+          flex-wrap: nowrap; gap: 6px; flex-shrink: 0;
+          padding: 7px 12px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
         }}
         .btn-toolbar {{
           background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px;
-          padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer;
+          padding: 4px 8px; font-size: 10.5px; font-weight: 600; cursor: pointer;
           color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px;
+          white-space: nowrap;
         }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
+        #zoom-level {{ display: inline-block; width: 38px; text-align: center; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+        #lupa-status {{ display: inline-block; width: 20px; text-align: center; }}
         #piper-svg-container {{
           width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden;
           cursor: grab;
@@ -185,10 +188,10 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
     </head>
     <body>
       <div class="toolbar-piper">
-        <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap;">
+        <div style="font-size: 12px; font-weight: 700; color: #691C32; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;">
           🧪 Diagrama Trilineal de Piper (OMM / UNESCO)
         </div>
-        <div style="display: flex; gap: 6px; align-items: center; flex-wrap: nowrap;">
+        <div style="display: flex; gap: 4px; align-items: center; flex-wrap: nowrap; flex-shrink: 0;">
           <button class="btn-toolbar" onclick="zoomIn()" title="Acercar (Zoom In)"><span>🔍+</span></button>
           <button class="btn-toolbar" onclick="zoomOut()" title="Alejar (Zoom Out)"><span>🔍-</span></button>
           <button class="btn-toolbar" onclick="resetZoom()" title="Restablecer tamaño original (100%)"><span>🔄 1:1</span></button>
@@ -1382,6 +1385,8 @@ def generar_diagrama_schoeller_d3(df_procesado):
         }}
         .btn-toolbar:hover {{ background: #691C32; color: #ffffff; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: #ffffff !important; border-color: #691C32 !important; }}
+        #zoom-level {{ display: inline-block; width: 38px; text-align: center; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+        #lupa-status {{ display: inline-block; width: 20px; text-align: center; }}
         #schoeller-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #schoeller-svg-container.grabbing {{ cursor: grabbing; }}
         #schoeller-svg-container.lupa-mode {{ cursor: crosshair; }}
@@ -1828,6 +1833,8 @@ def generar_diagrama_wilcox_d3(df_procesado):
         .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px; }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
+        #zoom-level {{ display: inline-block; width: 38px; text-align: center; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+        #lupa-status {{ display: inline-block; width: 20px; text-align: center; }}
         #wilcox-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #wilcox-svg-container.grabbing {{ cursor: grabbing; }}
         #wilcox-svg-container.lupa-mode {{ cursor: crosshair; }}
@@ -2215,6 +2222,8 @@ def generar_diagrama_riverside_d3(df_procesado):
         .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px; }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
+        #zoom-level {{ display: inline-block; width: 38px; text-align: center; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+        #lupa-status {{ display: inline-block; width: 20px; text-align: center; }}
         #riverside-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #riverside-svg-container.grabbing {{ cursor: grabbing; }}
         #riverside-svg-container.lupa-mode {{ cursor: crosshair; }}
@@ -2611,6 +2620,8 @@ def generar_diagrama_gibbs_d3(df_procesado):
         .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px; }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
+        #zoom-level {{ display: inline-block; width: 38px; text-align: center; font-variant-numeric: tabular-nums; flex-shrink: 0; }}
+        #lupa-status {{ display: inline-block; width: 20px; text-align: center; }}
         #gibbs-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #gibbs-svg-container.grabbing {{ cursor: grabbing; }}
         #gibbs-svg-container.lupa-mode {{ cursor: crosshair; }}
