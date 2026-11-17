@@ -18,8 +18,51 @@ Funcionalidades de cada diagrama:
 
 import json
 import math
+import zlib
 import numpy as np
 import pandas as pd
+
+
+FACIES_PALETA_BASE = {
+    "Bicarbonatada Cálcica": "#0369a1",
+    "Bicarbonatada Cálcica-Magnésica": "#0284c7",
+    "Bicarbonatada Magnésica-Cálcica": "#059669",
+    "Bicarbonatada Magnésica": "#16a34a",
+    "Bicarbonatada Magnésica-Sódica": "#0891b2",
+    "Bicarbonatada Sódica-Magnésica": "#9333ea",
+    "Bicarbonatada Sódica": "#7c3aed",
+    "Bicarbonatada Sódica-Cálcica": "#c026d3",
+    "Bicarbonatada Cálcica-Sódica": "#0ea5e9",
+    "Bicarbonatada Mixta Catiónica": "#64748b",
+    "Sulfatada Cálcica": "#b45309",
+    "Sulfatada Cálcica-Magnésica": "#d97706",
+    "Sulfatada Magnésica": "#ca8a04",
+    "Sulfatada Magnésica-Sódica": "#ea580c",
+    "Sulfatada Sódica": "#e11d48",
+    "Clorurada Sódica": "#dc2626",
+    "Clorurada Sódica-Cálcica": "#b91c1c",
+    "Clorurada Cálcica": "#9f1239",
+    "Clorurada Magnésica": "#be123c",
+    "Mixta Aniónica Cálcica": "#0d9488",
+    "Mixta Aniónica Sódica": "#6366f1",
+    "Mixta Aniónica Mixta Catiónica": "#475569",
+}
+
+_FACIES_FALLBACK_PALETTE = [
+    "#0284c7", "#16a34a", "#dc2626", "#ea580c",
+    "#7c3aed", "#0891b2", "#d97706", "#4f46e5",
+    "#0d9488", "#db2777", "#65a30d", "#2563eb",
+    "#b45309", "#9333ea", "#059669", "#e11d48"
+]
+
+
+def obtener_color_facies(facies_str):
+    """Retorna un color hexadecimal determinista y consistente por nombre de facies hidrogeoquímica."""
+    fac = str(facies_str or "").strip()
+    if fac in FACIES_PALETA_BASE:
+        return FACIES_PALETA_BASE[fac]
+    h = zlib.crc32(fac.encode('utf-8'))
+    return _FACIES_FALLBACK_PALETTE[h % len(_FACIES_FALLBACK_PALETTE)]
 
 
 # =============================================================================
@@ -38,23 +81,6 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
       - Controles de Zoom, Paneo, Lupa de Aumento (2.5x) y Descarga SVG/PNG limpia (sin fondo negro).
     """
     muestras_data = []
-    colores_paleta = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
-
-    facies_paleta_base = {
-        "Bicarbonatada Magnésica-Sódica": "#0891b2",
-        "Bicarbonatada Sódica": "#7c3aed",
-        "Bicarbonatada Sódica-Magnésica": "#9333ea",
-        "Bicarbonatada Magnésica": "#16a34a",
-        "Bicarbonatada Magnésica-Cálcica": "#059669",
-        "Bicarbonatada Cálcica-Magnésica": "#0284c7",
-        "Bicarbonatada Sódica-Cálcica": "#c026d3",
-        "Bicarbonatada Cálcica": "#0369a1",
-        "Bicarbonatada Mixta Catiónica": "#64748b",
-        "Bicarbonatada Cálcica-Sódica": "#0ea5e9",
-        "Sulfatada Magnésica-Sódica": "#d97706",
-        "Clorurada Sódica": "#dc2626",
-        "Sulfatada Cálcica": "#b45309"
-    }
 
     for idx, r in df_procesado.iterrows():
         if 'Apta_Piper' in df_procesado.columns and not r.get('Apta_Piper', True):
@@ -64,7 +90,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
 
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         fac = str(r.get('Facies_Piper', 'N/D'))
-        color_pt = facies_paleta_base.get(fac, colores_paleta[idx % len(colores_paleta)])
+        color_pt = obtener_color_facies(fac)
 
         muestras_data.append({
             "id": id_m,
@@ -837,28 +863,34 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
     for idx, (_, r) in enumerate(df_plot.iterrows()):
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         nak_val = r.get('Na_K_meq_L')
+        na_v = r.get('Na_meq_L')
+        k_v = r.get('K_meq_L')
+        ca_v = r.get('Ca_meq_L')
+        mg_v = r.get('Mg_meq_L')
+        cl_v = r.get('Cl_meq_L')
+        hco3_v = r.get('HCO3_meq_L')
+        co3_v = r.get('CO3_meq_L')
+        so4_v = r.get('SO4_meq_L')
+
+        # Omitir muestras incompletas sin la serie de iones mayores requerida para Stiff o todo en cero
+        if 'Apta_Piper' in df_plot.columns and not bool(r.get('Apta_Piper', True)):
+            continue
+        has_nak_val = pd.notna(nak_val) or pd.notna(na_v)
+        if not has_nak_val or pd.isna(ca_v) or pd.isna(mg_v) or pd.isna(cl_v) or pd.isna(hco3_v) or pd.isna(so4_v):
+            continue
+
         if pd.notna(nak_val):
             na_k = float(nak_val)
         else:
-            na_v = r.get('Na_meq_L')
-            k_v = r.get('K_meq_L')
-            na_k = float(na_v if pd.notna(na_v) else 0.0) + float(k_v if pd.notna(k_v) else 0.0)
+            na_k = float(na_v) + float(k_v if pd.notna(k_v) else 0.0)
 
-        ca_v = r.get('Ca_meq_L')
-        ca = float(ca_v) if pd.notna(ca_v) else 0.0
-
-        mg_v = r.get('Mg_meq_L')
-        mg = float(mg_v) if pd.notna(mg_v) else 0.0
-
-        cl_v = r.get('Cl_meq_L')
-        cl = float(cl_v) if pd.notna(cl_v) else 0.0
-
-        hco3_v = r.get('HCO3_meq_L')
-        co3_v = r.get('CO3_meq_L')
-        hco3 = float(hco3_v if pd.notna(hco3_v) else 0.0) + float(co3_v if pd.notna(co3_v) else 0.0)
-
-        so4_v = r.get('SO4_meq_L')
-        so4 = float(so4_v) if pd.notna(so4_v) else 0.0
+        ca = float(ca_v)
+        mg = float(mg_v)
+        cl = float(cl_v)
+        hco3 = float(hco3_v) + float(co3_v if pd.notna(co3_v) else 0.0)
+        so4 = float(so4_v)
+        if (na_k + ca + mg) <= 0 or (cl + hco3 + so4) <= 0:
+            continue
 
         color_pt = colores_paleta[idx % len(colores_paleta)]
         muestras_stiff.append({
@@ -871,6 +903,17 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
             "cl": cl, "hco3": hco3, "so4": so4,
             "color": color_pt
         })
+
+    if not muestras_stiff:
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:320px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:24px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:36px; margin-bottom:10px;">⚡</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:15px; font-weight:700;">Sin Muestras Completas para Polígonos de Stiff</h4>
+          <p style="margin:0; color:#64748b; font-size:12px; max-width:460px; line-height:1.5;">
+            El diagrama de Stiff (1951) requiere la serie completa de iones mayores (Ca²⁺, Mg²⁺, Na⁺+K⁺, HCO₃⁻, SO₄²⁻ y Cl⁻) en meq/L.
+          </p>
+        </div>
+        """
 
     json_stiff = json.dumps(muestras_stiff)
 
@@ -1071,7 +1114,8 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
             .attr("class", "center-axis")
             .attr("fill", "none");
 
-          const ticks = [Math.round(maxGlobal * 0.5), maxGlobal];
+          const halfTick = maxGlobal >= 4 ? Math.round(maxGlobal * 0.5) : Number((maxGlobal * 0.5).toFixed(1));
+          const ticks = [halfTick, maxGlobal];
           ticks.forEach(tVal => {{
             const xL = scaleCat(tVal);
             const xR = scaleAn(tVal);
@@ -1203,32 +1247,53 @@ def generar_diagrama_schoeller_d3(df_procesado):
         color_pt = colores_paleta[idx % len(colores_paleta)]
 
         nak_val = r.get('Na_K_meq_L')
-        if pd.notna(nak_val):
-            nak_num = float(nak_val)
-        else:
-            na_v = r.get('Na_meq_L')
-            k_v = r.get('K_meq_L')
-            nak_num = float(na_v if pd.notna(na_v) else 0.0) + float(k_v if pd.notna(k_v) else 0.0)
-
+        na_v = r.get('Na_meq_L')
+        k_v = r.get('K_meq_L')
         ca_v = r.get('Ca_meq_L')
         mg_v = r.get('Mg_meq_L')
         cl_v = r.get('Cl_meq_L')
         so4_v = r.get('SO4_meq_L')
         hco3_v = r.get('HCO3_meq_L')
         co3_v = r.get('CO3_meq_L')
-        hco3_num = float(hco3_v if pd.notna(hco3_v) else 0.0) + float(co3_v if pd.notna(co3_v) else 0.0)
+
+        # Omitir muestras incompletas sin serie completa de iones mayores o todo en cero
+        if 'Apta_Piper' in df_procesado.columns and not bool(r.get('Apta_Piper', True)):
+            continue
+        has_nak_val = pd.notna(nak_val) or pd.notna(na_v)
+        if not has_nak_val or pd.isna(ca_v) or pd.isna(mg_v) or pd.isna(cl_v) or pd.isna(hco3_v) or pd.isna(so4_v):
+            continue
+
+        if pd.notna(nak_val):
+            nak_num = float(nak_val)
+        else:
+            nak_num = float(na_v) + float(k_v if pd.notna(k_v) else 0.0)
+
+        hco3_num = float(hco3_v) + float(co3_v if pd.notna(co3_v) else 0.0)
+        if (float(ca_v) + float(mg_v) + nak_num) <= 0 or (float(cl_v) + hco3_num + float(so4_v)) <= 0:
+            continue
 
         muestras_data.append({
             "id": id_m,
             "facies": str(r.get('Facies_Piper', 'N/D')),
-            "ca": max(0.001, float(ca_v) if pd.notna(ca_v) else 0.001),
-            "mg": max(0.001, float(mg_v) if pd.notna(mg_v) else 0.001),
+            "ca": max(0.001, float(ca_v)),
+            "mg": max(0.001, float(mg_v)),
             "nak": max(0.001, nak_num),
             "hco3": max(0.001, hco3_num),
-            "so4": max(0.001, float(so4_v) if pd.notna(so4_v) else 0.001),
-            "cl": max(0.001, float(cl_v) if pd.notna(cl_v) else 0.001),
+            "so4": max(0.001, float(so4_v)),
+            "cl": max(0.001, float(cl_v)),
             "color": color_pt
         })
+
+    if not muestras_data:
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:360px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:24px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:36px; margin-bottom:10px;">📉</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:15px; font-weight:700;">Sin Muestras Completas para Perfil de Schöeller</h4>
+          <p style="margin:0; color:#64748b; font-size:12px; max-width:460px; line-height:1.5;">
+            El perfil semilogarítmico de Schöeller-Berkaloff (1962) requiere la secuencia completa de iones mayores en meq/L.
+          </p>
+        </div>
+        """
 
     json_str = json.dumps(muestras_data)
 
@@ -1346,9 +1411,25 @@ def generar_diagrama_schoeller_d3(df_procesado):
         const tooltip = d3.select("#schoeller-tooltip");
 
         const xScale = d3.scalePoint().domain(ions.map(d => d.label)).range([padL, w - padR]).padding(0.4);
-        const yScale = d3.scaleLog().domain([0.01, 100]).range([h - padB, padT]);
 
-        [0.01, 0.1, 1, 10, 100].forEach(val => {{
+        let minLog = 0.01, maxLog = 100;
+        data.forEach(m => {{
+          ions.forEach(ion => {{
+            const v = m[ion.key];
+            if (v !== null && !isNaN(v) && v > 0) {{
+              if (v < minLog) minLog = Math.pow(10, Math.floor(Math.log10(v)));
+              if (v > maxLog) maxLog = Math.pow(10, Math.ceil(Math.log10(v)));
+            }}
+          }});
+        }});
+        minLog = Math.max(0.001, minLog);
+        const yScale = d3.scaleLog().domain([minLog, maxLog]).range([h - padB, padT]);
+
+        const logTicks = [];
+        for (let p = Math.round(Math.log10(minLog)); p <= Math.round(Math.log10(maxLog)); p++) {{
+          logTicks.push(Number(Math.pow(10, p).toPrecision(1)));
+        }}
+        logTicks.forEach(val => {{
           const y = yScale(val);
           zoomGroup.append("line").attr("x1", padL).attr("y1", y).attr("x2", w - padR).attr("y2", y).attr("class", "grid-line").attr("fill", "none");
           zoomGroup.append("text").attr("x", padL - 10).attr("y", y).text(val).attr("class", "axis-text").attr("text-anchor", "end").attr("dominant-baseline", "middle");
@@ -1621,10 +1702,12 @@ def generar_diagrama_wilcox_d3(df_procesado):
             ce = float(ce_v)
         else:
             sdt_v = r.get('SDT_mg_L')
-            ce = float(sdt_v / 0.65) if pd.notna(sdt_v) else 0.0
+            ce = float(sdt_v / 0.65) if pd.notna(sdt_v) else np.nan
 
         pct_na_v = r.get('Pct_Na_Riego')
-        pct_na = float(pct_na_v) if pd.notna(pct_na_v) else 0.0
+        if pd.isna(ce) or ce <= 0 or pd.isna(pct_na_v):
+            continue
+        pct_na = float(pct_na_v)
 
         ras_v = r.get('RAS')
         ras = float(ras_v) if pd.notna(ras_v) else 0.0
@@ -1634,6 +1717,17 @@ def generar_diagrama_wilcox_d3(df_procesado):
             "color": colores[idx % len(colores)],
             "facies": str(r.get('Facies_Piper', ''))
         })
+
+    if not muestras:
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:480px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:28px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:42px; margin-bottom:12px;">🌾</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:16px; font-weight:700;">Sin Muestras Completas para Diagrama de Wilcox</h4>
+          <p style="margin:0; color:#64748b; font-size:12.5px; max-width:520px; line-height:1.5;">
+            El diagrama de Wilcox (1955) requiere Conductividad Eléctrica (CE &gt; 0) y serie catiónica completa para calcular % Na soluble.
+          </p>
+        </div>
+        """
 
     json_str = json.dumps(muestras)
 
@@ -1718,7 +1812,9 @@ def generar_diagrama_wilcox_d3(df_procesado):
 
         const tooltip = d3.select("#wilcox-tooltip");
 
-        const xScale = d3.scaleLinear().domain([0, 4000]).range([padL, w - padR]);
+        const maxDataCE = d3.max(data, d => d.ce) || 0;
+        const maxCE = Math.max(4000, Math.ceil(maxDataCE * 1.1 / 500) * 500);
+        const xScale = d3.scaleLinear().domain([0, maxCE]).range([padL, w - padR]);
         const yScale = d3.scaleLinear().domain([0, 100]).range([h - padB, padT]);
 
         xScale.ticks(8).forEach(tick => {{
@@ -1733,7 +1829,8 @@ def generar_diagrama_wilcox_d3(df_procesado):
         zoomGroup.append("text").attr("x", (padL + w - padR)/2).attr("y", h - 12).text("Conductividad Eléctrica (µS/cm a 25 °C)").attr("class", "axis-label").attr("text-anchor", "middle");
         zoomGroup.append("text").attr("transform", "rotate(-90)").attr("x", -(padT + h - padB)/2).attr("y", 16).text("Porcentaje de Sodio Soluble (% Na)").attr("class", "axis-label").attr("text-anchor", "middle");
 
-        const ceArr = d3.range(0, 4001, 100);
+        const ceStep = Math.max(100, Math.round(maxCE / 40));
+        const ceArr = d3.range(0, maxCE + 1, ceStep);
         // Curvas empíricas originales de aptitud agronómica de Wilcox (1948, 1955)
         const curveExc = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(0, Math.min(100, 100.0 * Math.exp(-d / 2800.0)))));
         const curveBue = d3.line().x(d => xScale(d)).y(d => yScale(Math.max(0, Math.min(100, 85.0 * Math.exp(-d / 2000.0)))));
@@ -1968,21 +2065,33 @@ def generar_diagrama_riverside_d3(df_procesado):
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         ce_v = r.get('CE_uS_cm')
         if pd.notna(ce_v):
-            ce = float(ce_v)
+            ce_real = float(ce_v)
         else:
             sdt_v = r.get('SDT_mg_L')
-            ce = float(sdt_v / 0.65) if pd.notna(sdt_v) else 100.0
-        ce = max(100.0, ce)
+            ce_real = float(sdt_v / 0.65) if pd.notna(sdt_v) else np.nan
 
         ras_v = r.get('RAS')
-        ras = float(ras_v) if pd.notna(ras_v) else 0.0
+        if pd.isna(ce_real) or ce_real <= 0 or pd.isna(ras_v):
+            continue
+        ras = float(ras_v)
 
         muestras.append({
-            "id": id_m, "ce": ce, "ras": ras,
+            "id": id_m, "ce": ce_real, "ras": ras,
             "clasif": str(r.get('Clasif_RAS', '')),
             "color": colores[idx % len(colores)],
             "facies": str(r.get('Facies_Piper', ''))
         })
+
+    if not muestras:
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:480px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:28px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:42px; margin-bottom:12px;">💧</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:16px; font-weight:700;">Sin Muestras Completas para Diagrama de Riverside</h4>
+          <p style="margin:0; color:#64748b; font-size:12.5px; max-width:520px; line-height:1.5;">
+            El diagrama de Riverside (USSL / Richards, 1954) requiere Conductividad Eléctrica (CE &gt; 0) e índice RAS válido.
+          </p>
+        </div>
+        """
 
     json_str = json.dumps(muestras)
 
@@ -2067,15 +2176,26 @@ def generar_diagrama_riverside_d3(df_procesado):
 
         const tooltip = d3.select("#riv-tooltip");
 
-        const xScale = d3.scaleLog().domain([100, 5000]).range([padL, w - padR]);
-        const yScale = d3.scaleLinear().domain([0, 32]).range([h - padB, padT]);
+        const minDataCE = d3.min(data, d => d.ce) || 100;
+        const maxDataCE = d3.max(data, d => d.ce) || 5000;
+        const maxDataRAS = d3.max(data, d => d.ras) || 32;
+        const minCE = minDataCE < 100 ? Math.max(10, Math.pow(10, Math.floor(Math.log10(minDataCE)))) : 100;
+        const maxCE = Math.max(5000, Math.ceil(maxDataCE * 1.1 / 1000) * 1000);
+        const maxRAS = Math.max(32, Math.ceil(maxDataRAS * 1.15 / 5) * 5);
 
-        [100, 250, 750, 2250, 5000].forEach(val => {{
-          zoomGroup.append("line").attr("x1", xScale(val)).attr("y1", padT).attr("x2", xScale(val)).attr("y2", h - padB).attr("fill", "none").attr("class", val === 100 || val === 5000 ? "grid-line" : "c-boundary");
-          zoomGroup.append("text").attr("x", xScale(val)).attr("y", h - padB + 18).text(val).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "middle");
+        const xScale = d3.scaleLog().domain([minCE, maxCE]).range([padL, w - padR]);
+        const yScale = d3.scaleLinear().domain([0, maxRAS]).range([h - padB, padT]);
+
+        const ceTicks = [minCE, 100, 250, 750, 2250, 5000, maxCE]
+          .filter((v, idx, arr) => v >= minCE && v <= maxCE && arr.indexOf(v) === idx)
+          .sort((a, b) => a - b);
+        ceTicks.forEach(val => {{
+          const isBound = (val === minCE || val === maxCE);
+          zoomGroup.append("line").attr("x1", xScale(val)).attr("y1", padT).attr("x2", xScale(val)).attr("y2", h - padB).attr("fill", "none").attr("class", isBound ? "grid-line" : "c-boundary");
+          zoomGroup.append("text").attr("x", xScale(val)).attr("y", h - padB + 18).text(val.toLocaleString()).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "middle");
         }});
 
-        [0, 5, 10, 15, 20, 25, 30].forEach(val => {{
+        yScale.ticks(6).forEach(val => {{
           zoomGroup.append("line").attr("x1", padL).attr("y1", yScale(val)).attr("x2", w - padR).attr("y2", yScale(val)).attr("class", "grid-line").attr("fill", "none");
           zoomGroup.append("text").attr("x", padL - 8).attr("y", yScale(val)).text(val).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "end").attr("dominant-baseline", "middle");
         }});
@@ -2085,7 +2205,7 @@ def generar_diagrama_riverside_d3(df_procesado):
         zoomGroup.append("text").attr("x", xScale(1300)).attr("y", padT - 8).text("C3: Alta").attr("font-size", "10px").attr("fill", "#d97706").attr("text-anchor", "middle").style("font-weight", "700");
         zoomGroup.append("text").attr("x", xScale(3350)).attr("y", padT - 8).text("C4: Muy Alta").attr("font-size", "10px").attr("fill", "#dc2626").attr("text-anchor", "middle").style("font-weight", "700");
 
-        const ceLogArr = d3.range(100, 5001, 25);
+        const ceLogArr = d3.range(minCE, maxCE + 1, Math.max(25, Math.round((maxCE - minCE) / 160)));
         // Ecuaciones empíricas oficiales del USDA Handbook 60 (L.A. Richards, 1954):
         // S1/S2: S = 18.87 - 4.44*log10(CE)
         // S2/S3: S = 31.31 - 6.66*log10(CE)
@@ -2320,16 +2440,31 @@ def generar_diagrama_gibbs_d3(df_procesado):
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         sdt_v = r.get('SDT_mg_L')
-        sdt = max(10.0, float(sdt_v) if pd.notna(sdt_v) else 100.0)
+        if pd.isna(sdt_v) or float(sdt_v) <= 0:
+            continue
+        sdt = max(10.0, float(sdt_v))
         g_cat_v = r.get('Gibbs_Cationes')
-        g_cat = float(g_cat_v) if pd.notna(g_cat_v) else 0.0
         g_an_v = r.get('Gibbs_Aniones')
-        g_an = float(g_an_v) if pd.notna(g_an_v) else 0.0
+        if pd.isna(g_cat_v) and pd.isna(g_an_v):
+            continue
+        g_cat = float(g_cat_v) if pd.notna(g_cat_v) else None
+        g_an = float(g_an_v) if pd.notna(g_an_v) else None
         muestras.append({
             "id": id_m, "sdt": sdt, "g_cat": g_cat, "g_an": g_an,
             "color": colores[idx % len(colores)],
             "facies": str(r.get('Facies_Piper', ''))
         })
+
+    if not muestras:
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:480px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:28px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:42px; margin-bottom:12px;">🌍</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:16px; font-weight:700;">Sin Muestras Completas para Diagramas de Gibbs</h4>
+          <p style="margin:0; color:#64748b; font-size:12.5px; max-width:520px; line-height:1.5;">
+            El diagrama de Gibbs (1970) requiere SDT válido junto con las relaciones Na⁺/(Na⁺+Ca²⁺) o Cl⁻/(Cl⁻+HCO₃⁻).
+          </p>
+        </div>
+        """
 
     json_str = json.dumps(muestras)
 
@@ -2418,7 +2553,13 @@ def generar_diagrama_gibbs_d3(df_procesado):
         `);
 
         const tooltip = d3.select("#gibbs-tooltip");
-        const yScale = d3.scaleLog().domain([10, 10000]).range([h - padB, padT]);
+        const maxDataSDT = d3.max(data, d => d.sdt) || 10000;
+        const maxSDTDom = Math.max(10000, Math.pow(10, Math.ceil(Math.log10(maxDataSDT))));
+        const yScale = d3.scaleLog().domain([10, maxSDTDom]).range([h - padB, padT]);
+        const sdtTicks = [];
+        for (let p = 1; p <= Math.round(Math.log10(maxSDTDom)); p++) {{
+          sdtTicks.push(Math.pow(10, p));
+        }}
 
         function dibujarPanel(offsetL, titulo, xField, xLabel) {{
           const xScale = d3.scaleLinear().domain([0, 1.0]).range([offsetL, offsetL + panelW]);
@@ -2465,13 +2606,13 @@ def generar_diagrama_gibbs_d3(df_procesado):
           }});
 
           if (offsetL === padL1) {{
-            [10, 100, 1000, 10000].forEach(val => {{
+            sdtTicks.forEach(val => {{
               zoomGroup.append("line").attr("x1", padL1).attr("y1", yScale(val)).attr("x2", padL1 + panelW).attr("y2", yScale(val)).attr("class", "grid-line").attr("fill", "none");
               zoomGroup.append("text").attr("x", padL1 - 8).attr("y", yScale(val)).text(val.toLocaleString()).attr("font-size", "9.5px").attr("fill", "#64748b").attr("text-anchor", "end").attr("dominant-baseline", "middle");
             }});
             zoomGroup.append("text").attr("transform", "rotate(-90)").attr("x", -(padT + h - padB)/2).attr("y", 16).text("SDT (mg/L, escala log)").attr("class", "axis-label").attr("text-anchor", "middle");
           }} else {{
-            [10, 100, 1000, 10000].forEach(val => {{
+            sdtTicks.forEach(val => {{
               zoomGroup.append("line").attr("x1", offsetL).attr("y1", yScale(val)).attr("x2", offsetL + panelW).attr("y2", yScale(val)).attr("class", "grid-line").attr("fill", "none");
             }});
           }}
