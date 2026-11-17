@@ -319,11 +319,20 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
             df['Na_K_meq_L'] = np.nan
     else:
         df['Na_K_meq_L'] = pd.to_numeric(df['Na_K_meq_L'], errors='coerce')
+        # Si sólo se reportó Na+K conjunto (común en Grapher/RockWare), asignar a Na como proxy mayoritario (Na >> K)
+        if 'Na_meq_L' not in df.columns or df['Na_meq_L'].isna().all():
+            df['Na_meq_L'] = df['Na_K_meq_L']
+            df['Na_mg_L'] = df['Na_meq_L'] * PESOS_EQUIVALENTES['Na']['eq_wt']
+        if 'K_meq_L' not in df.columns or df['K_meq_L'].isna().all():
+            df['K_meq_L'] = 0.0
+            df['K_mg_L'] = 0.0
 
     # Manejo de HCO3+CO3:
     if 'HCO3_CO3_meq_L' in df.columns and ('HCO3_meq_L' not in df.columns or df['HCO3_meq_L'].isna().all()):
         df['HCO3_meq_L'] = pd.to_numeric(df['HCO3_CO3_meq_L'], errors='coerce')
         df['CO3_meq_L'] = 0.0
+        df['HCO3_mg_L'] = df['HCO3_meq_L'] * PESOS_EQUIVALENTES['HCO3']['eq_wt']
+        df['CO3_mg_L'] = 0.0
 
     # Conversión N-NO3 a NO3 si aplica
     if ('NO3_mg_L' not in df.columns or df['NO3_mg_L'].isna().all()) and 'N_NO3_mg_L' in df.columns:
@@ -488,15 +497,36 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
     # 6. Índices para Uso Agrícola y Riego
     # Relación de Adsorción de Sodio (RAS / SAR)
     ca_mg_half = (df['Ca_meq_L'] + df['Mg_meq_L']) / 2.0
-    df['RAS'] = np.where(ca_mg_half > 0, df['Na_meq_L'] / np.sqrt(ca_mg_half), np.nan)
+    na_eff = df['Na_meq_L'] if ('Na_meq_L' in df.columns and df['Na_meq_L'].notna().any()) else df['Na_K_meq_L']
+    df['RAS'] = np.where(ca_mg_half > 0, na_eff / np.sqrt(ca_mg_half), np.nan)
 
     # % Sodio Soluble (%Na)
     cat_suma = df['Suma_Cationes_meq']
-    df['Pct_Na_Riego'] = np.where(cat_suma > 0, ((df['Na_meq_L'] + df['K_meq_L']) / cat_suma) * 100.0, np.nan)
+    nak_tot = df['Na_K_meq_L'] if ('Na_K_meq_L' in df.columns and df['Na_K_meq_L'].notna().any()) else (df['Na_meq_L'].fillna(0.0) + df['K_meq_L'].fillna(0.0))
+    df['Pct_Na_Riego'] = np.where(cat_suma > 0, (nak_tot / cat_suma) * 100.0, np.nan)
 
     # Carbonato de Sodio Residual (CSR en meq/L)
     # CSR = (HCO3 + CO3) - (Ca + Mg)
     df['CSR'] = (df['HCO3_meq_L'] + df['CO3_meq_L']) - (df['Ca_meq_L'] + df['Mg_meq_L'])
+
+    # Estimación hidrogeológica de CE y SDT a partir de balance iónico si faltan en el análisis de laboratorio
+    if 'CE_uS_cm' not in df.columns or df['CE_uS_cm'].isna().all():
+        if 'Suma_Cationes_meq' in df.columns and df['Suma_Cationes_meq'].notna().any():
+            df['CE_uS_cm'] = df['Suma_Cationes_meq'] * 100.0
+            df['CE_Estimada'] = True
+        else:
+            df['CE_Estimada'] = False
+    else:
+        df['CE_Estimada'] = False
+
+    if 'SDT_mg_L' not in df.columns or df['SDT_mg_L'].isna().all():
+        if 'CE_uS_cm' in df.columns and df['CE_uS_cm'].notna().any():
+            df['SDT_mg_L'] = df['CE_uS_cm'] * 0.65
+            df['SDT_Estimado'] = True
+        else:
+            df['SDT_Estimado'] = False
+    else:
+        df['SDT_Estimado'] = False
 
     def clasificar_ras(val, ce=None):
         if pd.isna(val): return "N/D"
@@ -520,22 +550,25 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
         else: return "Inadecuado (Peligro de sodificación)"
 
     # Clasificación RAS con ajuste semilogarítmico Richards USSL
-    if 'CE_uS_cm' in df.columns:
+    if 'CE_uS_cm' in df.columns and df['CE_uS_cm'].notna().any():
         df['Clasif_RAS'] = df.apply(lambda r: clasificar_ras(r.get('RAS'), r.get('CE_uS_cm')), axis=1)
     else:
         df['Clasif_RAS'] = df['RAS'].apply(clasificar_ras)
     df['Clasif_CSR'] = df['CSR'].apply(clasificar_csr)
 
     # 7. Diagrama de Gibbs (Ratios en peso mg/L según Gibbs 1970, con fallback a meq/L)
-    if 'Na_mg_L' in df.columns and 'Ca_mg_L' in df.columns:
-        k_mg = df['K_mg_L'] if 'K_mg_L' in df.columns else 0.0
+    if 'Na_mg_L' in df.columns and df['Na_mg_L'].notna().any() and 'Ca_mg_L' in df.columns and df['Ca_mg_L'].notna().any():
+        k_mg = df['K_mg_L'].fillna(0.0) if 'K_mg_L' in df.columns else 0.0
         denom_gibbs_cat_mg = df['Na_mg_L'] + k_mg + df['Ca_mg_L']
         df['Gibbs_Cationes'] = np.where(denom_gibbs_cat_mg > 0, (df['Na_mg_L'] + k_mg) / denom_gibbs_cat_mg, np.nan)
+    elif 'Na_K_meq_L' in df.columns and df['Na_K_meq_L'].notna().any() and 'Ca_meq_L' in df.columns:
+        denom_gibbs_cat = df['Na_K_meq_L'] + df['Ca_meq_L']
+        df['Gibbs_Cationes'] = np.where(denom_gibbs_cat > 0, df['Na_K_meq_L'] / denom_gibbs_cat, np.nan)
     else:
-        denom_gibbs_cat = df['Na_meq_L'] + df['K_meq_L'] + df['Ca_meq_L']
-        df['Gibbs_Cationes'] = np.where(denom_gibbs_cat > 0, (df['Na_meq_L'] + df['K_meq_L']) / denom_gibbs_cat, np.nan)
+        denom_gibbs_cat = df['Na_meq_L'].fillna(0.0) + df['K_meq_L'].fillna(0.0) + df['Ca_meq_L']
+        df['Gibbs_Cationes'] = np.where(denom_gibbs_cat > 0, (df['Na_meq_L'].fillna(0.0) + df['K_meq_L'].fillna(0.0)) / denom_gibbs_cat, np.nan)
 
-    if 'Cl_mg_L' in df.columns and 'HCO3_mg_L' in df.columns:
+    if 'Cl_mg_L' in df.columns and df['Cl_mg_L'].notna().any() and 'HCO3_mg_L' in df.columns and df['HCO3_mg_L'].notna().any():
         denom_gibbs_an_mg = df['Cl_mg_L'] + df['HCO3_mg_L']
         df['Gibbs_Aniones'] = np.where(denom_gibbs_an_mg > 0, df['Cl_mg_L'] / denom_gibbs_an_mg, np.nan)
     else:
@@ -561,11 +594,6 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
 
     # Dureza Total Calculada como CaCO3 (mg/L)
     df['Dureza_Calculada_mg_L'] = (df['Ca_meq_L'] + df['Mg_meq_L']) * 50.04
-
-    # Si no hay SDT medido pero hay CE, estimar SDT aprox = CE * 0.65
-    if 'SDT_mg_L' not in df.columns or df['SDT_mg_L'].isna().all():
-        if 'CE_uS_cm' in df.columns:
-            df['SDT_mg_L'] = df['CE_uS_cm'] * 0.65
 
     return df
 

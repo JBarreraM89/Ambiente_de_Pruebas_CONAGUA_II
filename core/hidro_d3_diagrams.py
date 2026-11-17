@@ -836,20 +836,37 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
 
     for idx, (_, r) in enumerate(df_plot.iterrows()):
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
-        na_k = float(r.get('Na_meq_L', 0) + r.get('K_meq_L', 0))
-        ca = float(r.get('Ca_meq_L', 0))
-        mg = float(r.get('Mg_meq_L', 0))
-        cl = float(r.get('Cl_meq_L', 0))
-        hco3 = float(r.get('HCO3_meq_L', 0) + r.get('CO3_meq_L', 0))
-        so4 = float(r.get('SO4_meq_L', 0))
+        nak_val = r.get('Na_K_meq_L')
+        if pd.notna(nak_val):
+            na_k = float(nak_val)
+        else:
+            na_v = r.get('Na_meq_L')
+            k_v = r.get('K_meq_L')
+            na_k = float(na_v if pd.notna(na_v) else 0.0) + float(k_v if pd.notna(k_v) else 0.0)
+
+        ca_v = r.get('Ca_meq_L')
+        ca = float(ca_v) if pd.notna(ca_v) else 0.0
+
+        mg_v = r.get('Mg_meq_L')
+        mg = float(mg_v) if pd.notna(mg_v) else 0.0
+
+        cl_v = r.get('Cl_meq_L')
+        cl = float(cl_v) if pd.notna(cl_v) else 0.0
+
+        hco3_v = r.get('HCO3_meq_L')
+        co3_v = r.get('CO3_meq_L')
+        hco3 = float(hco3_v if pd.notna(hco3_v) else 0.0) + float(co3_v if pd.notna(co3_v) else 0.0)
+
+        so4_v = r.get('SO4_meq_L')
+        so4 = float(so4_v) if pd.notna(so4_v) else 0.0
 
         color_pt = colores_paleta[idx % len(colores_paleta)]
         muestras_stiff.append({
             "id": id_m,
             "fuente": str(r.get('Tipo_Fuente', 'Fuente')),
             "facies": str(r.get('Facies_Piper', 'N/D')),
-            "cbe": float(r.get('CBE_pct', 0.0)),
-            "sdt": float(r.get('SDT_mg_L', 0.0)),
+            "cbe": float(r.get('CBE_pct', 0.0) if pd.notna(r.get('CBE_pct')) else 0.0),
+            "sdt": float(r.get('SDT_mg_L', 0.0) if pd.notna(r.get('SDT_mg_L')) else 0.0),
             "na_k": na_k, "ca": ca, "mg": mg,
             "cl": cl, "hco3": hco3, "so4": so4,
             "color": color_pt
@@ -969,7 +986,13 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
 
         let maxGlobal = 0.5;
         data.forEach(d => {{
-          maxGlobal = Math.max(maxGlobal, d.na_k, d.ca, d.mg, d.cl, d.hco3, d.so4);
+          const v_nak = isNaN(d.na_k) ? 0 : d.na_k;
+          const v_ca = isNaN(d.ca) ? 0 : d.ca;
+          const v_mg = isNaN(d.mg) ? 0 : d.mg;
+          const v_cl = isNaN(d.cl) ? 0 : d.cl;
+          const v_hco3 = isNaN(d.hco3) ? 0 : d.hco3;
+          const v_so4 = isNaN(d.so4) ? 0 : d.so4;
+          maxGlobal = Math.max(maxGlobal, v_nak, v_ca, v_mg, v_cl, v_hco3, v_so4);
         }});
         maxGlobal = Math.ceil(maxGlobal * 1.15);
 
@@ -1178,15 +1201,32 @@ def generar_diagrama_schoeller_d3(df_procesado):
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
         color_pt = colores_paleta[idx % len(colores_paleta)]
+
+        nak_val = r.get('Na_K_meq_L')
+        if pd.notna(nak_val):
+            nak_num = float(nak_val)
+        else:
+            na_v = r.get('Na_meq_L')
+            k_v = r.get('K_meq_L')
+            nak_num = float(na_v if pd.notna(na_v) else 0.0) + float(k_v if pd.notna(k_v) else 0.0)
+
+        ca_v = r.get('Ca_meq_L')
+        mg_v = r.get('Mg_meq_L')
+        cl_v = r.get('Cl_meq_L')
+        so4_v = r.get('SO4_meq_L')
+        hco3_v = r.get('HCO3_meq_L')
+        co3_v = r.get('CO3_meq_L')
+        hco3_num = float(hco3_v if pd.notna(hco3_v) else 0.0) + float(co3_v if pd.notna(co3_v) else 0.0)
+
         muestras_data.append({
             "id": id_m,
             "facies": str(r.get('Facies_Piper', 'N/D')),
-            "ca": max(0.001, float(r.get('Ca_meq_L', 0.001))),
-            "mg": max(0.001, float(r.get('Mg_meq_L', 0.001))),
-            "nak": max(0.001, float(r.get('Na_meq_L', 0) + r.get('K_meq_L', 0))),
-            "hco3": max(0.001, float(r.get('HCO3_meq_L', 0.001) + r.get('CO3_meq_L', 0))),
-            "so4": max(0.001, float(r.get('SO4_meq_L', 0.001))),
-            "cl": max(0.001, float(r.get('Cl_meq_L', 0.001))),
+            "ca": max(0.001, float(ca_v) if pd.notna(ca_v) else 0.001),
+            "mg": max(0.001, float(mg_v) if pd.notna(mg_v) else 0.001),
+            "nak": max(0.001, nak_num),
+            "hco3": max(0.001, hco3_num),
+            "so4": max(0.001, float(so4_v) if pd.notna(so4_v) else 0.001),
+            "cl": max(0.001, float(cl_v) if pd.notna(cl_v) else 0.001),
             "color": color_pt
         })
 
@@ -1557,9 +1597,19 @@ def generar_diagrama_wilcox_d3(df_procesado):
 
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
-        ce = float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65))
-        pct_na = float(r.get('Pct_Na_Riego', 0.0))
-        ras = float(r.get('RAS', 0.0))
+        ce_v = r.get('CE_uS_cm')
+        if pd.notna(ce_v):
+            ce = float(ce_v)
+        else:
+            sdt_v = r.get('SDT_mg_L')
+            ce = float(sdt_v / 0.65) if pd.notna(sdt_v) else 0.0
+
+        pct_na_v = r.get('Pct_Na_Riego')
+        pct_na = float(pct_na_v) if pd.notna(pct_na_v) else 0.0
+
+        ras_v = r.get('RAS')
+        ras = float(ras_v) if pd.notna(ras_v) else 0.0
+
         muestras.append({
             "id": id_m, "ce": ce, "pct_na": pct_na, "ras": ras,
             "color": colores[idx % len(colores)],
@@ -1878,9 +1928,17 @@ def generar_diagrama_riverside_d3(df_procesado):
 
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
-        ce = float(r.get('CE_uS_cm', 0.0) if pd.notna(r.get('CE_uS_cm')) else (r.get('SDT_mg_L', 0.0) / 0.65))
+        ce_v = r.get('CE_uS_cm')
+        if pd.notna(ce_v):
+            ce = float(ce_v)
+        else:
+            sdt_v = r.get('SDT_mg_L')
+            ce = float(sdt_v / 0.65) if pd.notna(sdt_v) else 100.0
         ce = max(100.0, ce)
-        ras = float(r.get('RAS', 0.0))
+
+        ras_v = r.get('RAS')
+        ras = float(ras_v) if pd.notna(ras_v) else 0.0
+
         muestras.append({
             "id": id_m, "ce": ce, "ras": ras,
             "clasif": str(r.get('Clasif_RAS', '')),
@@ -2204,9 +2262,12 @@ def generar_diagrama_gibbs_d3(df_procesado):
 
     for idx, r in df_procesado.iterrows():
         id_m = str(r.get('Muestra', f'M-{idx+1}'))
-        sdt = max(10.0, float(r.get('SDT_mg_L', 100.0) if pd.notna(r.get('SDT_mg_L')) else 100.0))
-        g_cat = float(r.get('Gibbs_Cationes', np.nan))
-        g_an = float(r.get('Gibbs_Aniones', np.nan))
+        sdt_v = r.get('SDT_mg_L')
+        sdt = max(10.0, float(sdt_v) if pd.notna(sdt_v) else 100.0)
+        g_cat_v = r.get('Gibbs_Cationes')
+        g_cat = float(g_cat_v) if pd.notna(g_cat_v) else 0.0
+        g_an_v = r.get('Gibbs_Aniones')
+        g_an = float(g_an_v) if pd.notna(g_an_v) else 0.0
         muestras.append({
             "id": id_m, "sdt": sdt, "g_cat": g_cat, "g_an": g_an,
             "color": colores[idx % len(colores)],
