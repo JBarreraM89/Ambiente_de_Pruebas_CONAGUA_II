@@ -122,12 +122,16 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
       <title>Diagrama de Piper D3.js</title>
       <script src="https://d3js.org/d3.v7.min.js"></script>
       <style>
+        html {{ height: 100%; margin: 0; padding: 0; }}
         body {{
-          margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+          height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
           background: #ffffff; user-select: none; overflow: hidden;
+          display: flex; flex-direction: column;
+          box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 8px;
         }}
         .toolbar-piper {{
           display: flex; justify-content: space-between; align-items: center;
+          flex-wrap: wrap; gap: 6px; flex-shrink: 0;
           padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
         }}
         .btn-toolbar {{
@@ -138,7 +142,7 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
         #piper-svg-container {{
-          width: 100%; height: 720px; position: relative; background: #ffffff; overflow: hidden;
+          width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden;
           cursor: grab;
         }}
         #piper-svg-container.grabbing {{ cursor: grabbing; }}
@@ -925,13 +929,18 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
       <title>Diagramas de Stiff D3.js</title>
       <script src="https://d3js.org/d3.v7.min.js"></script>
       <style>
+        html {{ height: 100%; margin: 0; padding: 0; }}
         body {{
-          margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-          background: #f8fafc; user-select: none;
+          height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+          background: #f8fafc; user-select: none; overflow: hidden;
+          display: flex; flex-direction: column;
+          box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 8px;
         }}
         .toolbar-stiff {{
           display: flex; justify-content: space-between; align-items: center;
+          flex-wrap: wrap; gap: 6px; flex-shrink: 0;
           padding: 8px 16px; background: #ffffff; border-bottom: 1px solid #e2e8f0;
+          border-radius: 8px 8px 0 0;
           position: sticky; top: 0; z-index: 100;
         }}
         .btn-toolbar {{
@@ -955,6 +964,7 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
           --card-min-w: 440px;
           display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--card-min-w), 1fr));
           gap: 16px; padding: 16px;
+          flex: 1; min-height: 0; overflow-y: auto; align-content: start;
         }}
         .stiff-card {{
           background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;
@@ -1305,12 +1315,16 @@ def generar_diagrama_schoeller_d3(df_procesado):
       <title>Diagrama de Schöeller D3.js</title>
       <script src="https://d3js.org/d3.v7.min.js"></script>
       <style>
+        html {{ height: 100%; margin: 0; padding: 0; }}
         body {{
-          margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+          height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
           background: #ffffff; user-select: none; overflow: hidden;
+          display: flex; flex-direction: column;
+          box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 8px;
         }}
         .toolbar-schoeller {{
           display: flex; justify-content: space-between; align-items: center;
+          flex-wrap: wrap; gap: 6px; flex-shrink: 0;
           padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;
         }}
         .btn-toolbar {{
@@ -1321,7 +1335,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
         }}
         .btn-toolbar:hover {{ background: #691C32; color: #ffffff; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: #ffffff !important; border-color: #691C32 !important; }}
-        #schoeller-svg-container {{ width: 100%; height: 500px; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
+        #schoeller-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #schoeller-svg-container.grabbing {{ cursor: grabbing; }}
         #schoeller-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
@@ -1339,7 +1353,7 @@ def generar_diagrama_schoeller_d3(df_procesado):
           padding: 8px 12px; font-size: 11.5px; color: #1e293b; pointer-events: none;
         }}
         .legend-container {{
-          display: flex; gap: 12px; flex-wrap: wrap; padding: 6px 16px; background: #ffffff; border-bottom: 1px solid #f1f5f9; max-height: 50px; overflow-y: auto;
+          display: flex; gap: 12px; flex-wrap: wrap; flex-shrink: 0; padding: 6px 16px; background: #ffffff; border-bottom: 1px solid #f1f5f9; max-height: 50px; overflow-y: auto;
         }}
         .leg-item {{
           display: flex; align-items: center; gap: 6px; font-size: 10.5px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
@@ -1739,12 +1753,13 @@ def generar_diagrama_wilcox_d3(df_procesado):
       <title>Diagrama de Wilcox D3.js</title>
       <script src="https://d3js.org/d3.v7.min.js"></script>
       <style>
-        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; overflow: hidden; }}
-        .toolbar {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+        html {{ height: 100%; margin: 0; padding: 0; }}
+        body {{ height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 8px; }}
+        .toolbar {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; flex-shrink: 0; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
         .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px; }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
-        #wilcox-svg-container {{ width: 100%; height: 480px; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
+        #wilcox-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #wilcox-svg-container.grabbing {{ cursor: grabbing; }}
         #wilcox-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
@@ -2103,12 +2118,13 @@ def generar_diagrama_riverside_d3(df_procesado):
       <title>Diagrama de Riverside D3.js</title>
       <script src="https://d3js.org/d3.v7.min.js"></script>
       <style>
-        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; overflow: hidden; }}
-        .toolbar {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+        html {{ height: 100%; margin: 0; padding: 0; }}
+        body {{ height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 8px; }}
+        .toolbar {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; flex-shrink: 0; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
         .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px; }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
-        #riverside-svg-container {{ width: 100%; height: 480px; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
+        #riverside-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #riverside-svg-container.grabbing {{ cursor: grabbing; }}
         #riverside-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
@@ -2476,12 +2492,13 @@ def generar_diagrama_gibbs_d3(df_procesado):
       <title>Diagrama de Gibbs D3.js</title>
       <script src="https://d3js.org/d3.v7.min.js"></script>
       <style>
-        body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; overflow: hidden; }}
-        .toolbar {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
+        html {{ height: 100%; margin: 0; padding: 0; }}
+        body {{ height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #ffffff; user-select: none; overflow: hidden; display: flex; flex-direction: column; box-sizing: border-box; border: 1.5px solid #cbd5e1; border-radius: 8px; }}
+        .toolbar {{ display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; flex-shrink: 0; padding: 8px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; }}
         .btn-toolbar {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 5px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; color: #334155; transition: all 0.2s ease; display: inline-flex; align-items: center; gap: 4px; }}
         .btn-toolbar:hover {{ background: #691C32; color: white; border-color: #691C32; }}
         .btn-toolbar.active {{ background: #691C32 !important; color: white !important; border-color: #691C32 !important; }}
-        #gibbs-svg-container {{ width: 100%; height: 500px; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
+        #gibbs-svg-container {{ width: 100%; flex: 1; min-height: 0; position: relative; background: #ffffff; overflow: hidden; cursor: grab; }}
         #gibbs-svg-container.grabbing {{ cursor: grabbing; }}
         #gibbs-svg-container.lupa-mode {{ cursor: crosshair; }}
         svg {{ width: 100%; height: 100%; display: block; }}
