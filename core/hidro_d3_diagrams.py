@@ -1592,6 +1592,25 @@ def generar_diagrama_wilcox_d3(df_procesado):
       - CE vs % Na soluble.
       - Controles de Zoom, Paneo, Lupa de Aumento Dinámica (2.5x) y Descarga SVG/PNG 300 DPI.
     """
+    if df_procesado is None or df_procesado.empty:
+        return ""
+
+    if 'CE_uS_cm' not in df_procesado.columns or df_procesado['CE_uS_cm'].isna().all():
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:480px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:28px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:42px; margin-bottom:12px;">🌾</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:16px; font-weight:700;">Parámetro Analítico Requerido: Conductividad Eléctrica (CE)</h4>
+          <p style="margin:0 0 14px 0; color:#64748b; font-size:12.5px; max-width:520px; line-height:1.5;">
+            El <b>Diagrama de Wilcox (1955)</b> proyecta la salinidad (CE en µS/cm) frente al porcentaje de sodio soluble (% Na). El archivo cargado no incluye mediciones de CE reportadas por el laboratorio.
+          </p>
+          <div style="background:#eff6ff; border-left:4px solid #2563eb; padding:12px 16px; border-radius:4px; font-size:12px; color:#1e40af; max-width:520px; text-align:left; line-height:1.5;">
+            💡 <b>Para visualizar este diagrama:</b><br>
+            • Incluya la columna <code>CE</code> o <code>Conductividad</code> (µS/cm) en su reporte de laboratorio, <b>o bien</b><br>
+            • Active en la barra lateral el interruptor <i>"📐 Estimar CE y SDT teóricos si faltan"</i> para calcular la aproximación canónica oficial (USGS Hem 1985 / Standard Methods 1030 E).
+          </div>
+        </div>
+        """
+
     muestras = []
     colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 
@@ -1923,6 +1942,25 @@ def generar_diagrama_riverside_d3(df_procesado):
       - Escala logarítmica de CE e isolíneas empíricas de RAS.
       - Controles de Zoom, Paneo, Lupa de Aumento Dinámica (2.5x) y Descarga SVG/PNG 300 DPI.
     """
+    if df_procesado is None or df_procesado.empty:
+        return ""
+
+    if 'CE_uS_cm' not in df_procesado.columns or df_procesado['CE_uS_cm'].isna().all():
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:480px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:28px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:42px; margin-bottom:12px;">💧</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:16px; font-weight:700;">Parámetro Analítico Requerido: Conductividad Eléctrica (CE)</h4>
+          <p style="margin:0 0 14px 0; color:#64748b; font-size:12.5px; max-width:520px; line-height:1.5;">
+            El <b>Diagrama de Riverside (USSL / Richards, 1954)</b> evalúa el peligro de salinidad (C1-C4) frente al riesgo de sodificación (S1-S4). Requiere la medición de CE (µS/cm a 25 °C) reportada por el laboratorio.
+          </p>
+          <div style="background:#eff6ff; border-left:4px solid #2563eb; padding:12px 16px; border-radius:4px; font-size:12px; color:#1e40af; max-width:520px; text-align:left; line-height:1.5;">
+            💡 <b>Para visualizar este diagrama:</b><br>
+            • Cargue los valores medidos de <code>CE</code> en su archivo, <b>o bien</b><br>
+            • Active en la barra lateral el interruptor <i>"📐 Estimar CE y SDT teóricos si faltan"</i> para calcular la salinidad teórica según USGS (Hem, 1985).
+          </div>
+        </div>
+        """
+
     muestras = []
     colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 
@@ -2257,6 +2295,25 @@ def generar_diagrama_gibbs_d3(df_procesado):
       - Zonas geomorfológicas rectoras sombreadas (Lluvia, Agua-Roca, Evaporación).
       - Controles de Zoom, Paneo, Lupa de Aumento Dinámica (2.5x) y Descarga SVG/PNG 300 DPI.
     """
+    if df_procesado is None or df_procesado.empty:
+        return ""
+
+    if 'SDT_mg_L' not in df_procesado.columns or df_procesado['SDT_mg_L'].isna().all():
+        return """
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:480px; background:#f8fafc; border:2px dashed #cbd5e1; border-radius:8px; padding:28px; text-align:center; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+          <span style="font-size:42px; margin-bottom:12px;">🌍</span>
+          <h4 style="margin:0 0 8px 0; color:#1e293b; font-size:16px; font-weight:700;">Parámetro Analítico Requerido: Sólidos Disueltos Totales (SDT)</h4>
+          <p style="margin:0 0 14px 0; color:#64748b; font-size:12.5px; max-width:520px; line-height:1.5;">
+            El <b>Diagrama de Gibbs (1970)</b> posiciona los mecanismos hidrogeoquímicos rectores (Precipitación, Interacción Agua-Roca, Evaporación) sobre un eje logarítmico de concentración de <b>SDT (mg/L)</b>. El archivo analizado no contiene valores de SDT reportados por el laboratorio.
+          </p>
+          <div style="background:#eff6ff; border-left:4px solid #2563eb; padding:12px 16px; border-radius:4px; font-size:12px; color:#1e40af; max-width:520px; text-align:left; line-height:1.5;">
+            💡 <b>Para visualizar este diagrama:</b><br>
+            • Incluya la columna <code>SDT</code> o <code>TDS</code> (mg/L) en su archivo de laboratorio, <b>o bien</b><br>
+            • Active en la barra lateral el interruptor <i>"📐 Estimar CE y SDT teóricos si faltan"</i> para calcular el residuo seco oficial por suma iónica según USGS (Hem, 1985; Standard Methods 1030 E).
+          </div>
+        </div>
+        """
+
     muestras = []
     colores = ["#0284c7", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#0891b2", "#d97706", "#4f46e5"]
 

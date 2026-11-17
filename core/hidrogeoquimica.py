@@ -263,11 +263,12 @@ def mapear_dataframe_hidroquimico(df_raw):
 # =============================================================================
 # 3. CÁLCULOS HIDROGEOQUÍMICOS (meq/L, CBE, ÍNDICES Y FACIES)
 # =============================================================================
-def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
+def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None, estimar_ce_sdt=True):
     """
     Calcula meq/L, suma de cationes/aniones, error de balance iónico (% CBE),
     facies de Piper, índices de riego (RAS, %Na, CSR) y coordenadas de Gibbs.
     Detecta automáticamente si los datos vienen en meq/L o mg/L.
+    Permite estimación canónica opcional de CE y SDT según USGS (Hem, 1985).
     """
     if df_muestras is None or df_muestras.empty:
         return pd.DataFrame()
@@ -510,20 +511,36 @@ def procesar_muestras_hidroquimicas(df_muestras, unidad_forzada=None):
     df['CSR'] = (df['HCO3_meq_L'] + df['CO3_meq_L']) - (df['Ca_meq_L'] + df['Mg_meq_L'])
 
     # Estimación hidrogeológica de CE y SDT a partir de balance iónico si faltan en el análisis de laboratorio
+    # Cita oficial: USGS Water-Supply Paper 2254 (Hem, 1985, p. 67) y Standard Methods 1030 E (APHA, 2017)
     if 'CE_uS_cm' not in df.columns or df['CE_uS_cm'].isna().all():
-        if 'Suma_Cationes_meq' in df.columns and df['Suma_Cationes_meq'].notna().any():
+        if estimar_ce_sdt and 'Suma_Cationes_meq' in df.columns and df['Suma_Cationes_meq'].notna().any():
+            # Regla canónica Hem (1985): En aguas naturales dulces, 1 meq/L de cationes ≈ 100 µS/cm a 25 °C
             df['CE_uS_cm'] = df['Suma_Cationes_meq'] * 100.0
             df['CE_Estimada'] = True
         else:
+            df['CE_uS_cm'] = np.nan
             df['CE_Estimada'] = False
     else:
         df['CE_Estimada'] = False
 
     if 'SDT_mg_L' not in df.columns or df['SDT_mg_L'].isna().all():
-        if 'CE_uS_cm' in df.columns and df['CE_uS_cm'].notna().any():
-            df['SDT_mg_L'] = df['CE_uS_cm'] * 0.65
-            df['SDT_Estimado'] = True
+        if estimar_ce_sdt:
+            # Suma iónica oficial con pérdida térmica de bicarbonato por evaporación a 180 °C (factor 0.4917)
+            ca_mg = df['Ca_mg_L'].fillna(0.0) if 'Ca_mg_L' in df.columns else 0.0
+            mg_mg = df['Mg_mg_L'].fillna(0.0) if 'Mg_mg_L' in df.columns else 0.0
+            na_mg = df['Na_mg_L'].fillna(0.0) if 'Na_mg_L' in df.columns else 0.0
+            k_mg = df['K_mg_L'].fillna(0.0) if 'K_mg_L' in df.columns else 0.0
+            cl_mg = df['Cl_mg_L'].fillna(0.0) if 'Cl_mg_L' in df.columns else 0.0
+            so4_mg = df['SO4_mg_L'].fillna(0.0) if 'SO4_mg_L' in df.columns else 0.0
+            no3_mg = df['NO3_mg_L'].fillna(0.0) if 'NO3_mg_L' in df.columns else 0.0
+            hco3_mg = df['HCO3_mg_L'].fillna(0.0) if 'HCO3_mg_L' in df.columns else 0.0
+            co3_mg = df['CO3_mg_L'].fillna(0.0) if 'CO3_mg_L' in df.columns else 0.0
+
+            sdt_calc = ca_mg + mg_mg + na_mg + k_mg + cl_mg + so4_mg + no3_mg + co3_mg + (0.4917 * hco3_mg)
+            df['SDT_mg_L'] = np.where(sdt_calc > 0, sdt_calc, np.nan)
+            df['SDT_Estimado'] = df['SDT_mg_L'].notna()
         else:
+            df['SDT_mg_L'] = np.nan
             df['SDT_Estimado'] = False
     else:
         df['SDT_Estimado'] = False
