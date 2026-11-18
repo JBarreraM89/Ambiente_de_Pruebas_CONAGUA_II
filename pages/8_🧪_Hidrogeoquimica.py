@@ -40,6 +40,7 @@ from utils.styles import inyectar_css_oficial, banner_institucional
 from core.data_loader import (
     cargar_catalogo, cargar_datos_maestros, normalizar_clave
 )
+from core.pmtiles_server import obtener_url_pmtiles
 from core.hidrogeoquimica import (
     parse_concatenated_csv,
     generar_plantilla_excel_hidroquimica, mapear_dataframe_hidroquimico,
@@ -1009,15 +1010,21 @@ with tab_geo:
     """, unsafe_allow_html=True)
 
     if 'Latitud' in df_procesado.columns and 'Longitud' in df_procesado.columns:
-        _df_g_tmp = df_procesado.dropna(subset=['Latitud', 'Longitud']).copy()
-        df_geo_pts = _df_g_tmp[_df_g_tmp['Latitud'].between(-90.0, 90.0) & _df_g_tmp['Longitud'].between(-180.0, 180.0)].copy()
+        _df_g_tmp = df_procesado.copy()
+        _df_g_tmp['Latitud'] = pd.to_numeric(_df_g_tmp['Latitud'], errors='coerce')
+        _df_g_tmp['Longitud'] = pd.to_numeric(_df_g_tmp['Longitud'], errors='coerce')
+        _df_g_tmp = _df_g_tmp.dropna(subset=['Latitud', 'Longitud'])
+        df_geo_pts = _df_g_tmp[
+            _df_g_tmp['Latitud'].between(-90.0, 90.0) & _df_g_tmp['Longitud'].between(-180.0, 180.0)
+        ].copy()
     else:
         df_geo_pts = pd.DataFrame()
 
-    if df_geo_pts.empty:
-        st.warning("⚠️ Las muestras cargadas no cuentan con coordenadas 'Latitud' y 'Longitud' para su representación cartográfica.")
-    else:
-        # Unir estatus NOM-127 a los puntos si no está
+    tiene_muestras_geo = not df_geo_pts.empty
+    if not tiene_muestras_geo:
+        st.info("ℹ️ El archivo cargado no incluye columnas 'Latitud' y 'Longitud'; se despliega el polígono del acuífero evaluado y las capas de contexto.")
+
+    if tiene_muestras_geo:
         if 'Estatus_NOM127' not in df_geo_pts.columns and not df_auditoria.empty:
             df_geo_pts = df_geo_pts.merge(df_auditoria[['Muestra', 'Estatus_NOM127', 'Parametros_Excedidos']], on='Muestra', how='left')
 
@@ -1027,40 +1034,73 @@ with tab_geo:
             horizontal=True,
             key="radio_geo_criterio"
         )
+    else:
+        col_criterio = "Por Facies Hidrogeoquímica (Piper)"
 
+    # Centro y encuadre inicial garantizados con o sin coordenadas de muestras
+    if tiene_muestras_geo:
         c_lat_cen = float(df_geo_pts['Latitud'].mean())
         c_lon_cen = float(df_geo_pts['Longitud'].mean())
+        min_lon = float(df_geo_pts['Longitud'].min())
+        max_lon = float(df_geo_pts['Longitud'].max())
+        min_lat = float(df_geo_pts['Latitud'].min())
+        max_lat = float(df_geo_pts['Latitud'].max())
+        if (max_lon - min_lon) < 0.015:
+            min_lon, max_lon = c_lon_cen - 0.015, c_lon_cen + 0.015
+        if (max_lat - min_lat) < 0.015:
+            min_lat, max_lat = c_lat_cen - 0.015, c_lat_cen + 0.015
+        bounds_encuadre = [min_lon, min_lat, max_lon, max_lat]
+    elif bounds_poligono and len(bounds_poligono) == 4:
+        c_lon_cen = float((bounds_poligono[0] + bounds_poligono[2]) / 2.0)
+        c_lat_cen = float((bounds_poligono[1] + bounds_poligono[3]) / 2.0)
+        bounds_encuadre = bounds_poligono
+    else:
+        c_lat_cen = 23.6345
+        c_lon_cen = -102.5528
+        bounds_encuadre = [-117.5, 14.5, -86.5, 32.8]
 
-        # Construir GeoJSON de puntos
-        features_pts = []
+    # Construir GeoJSON de puntos (seguro ante nulos/NaN)
+    features_pts = []
+    if tiene_muestras_geo:
         for _, r in df_geo_pts.iterrows():
             id_m = html.escape(str(r.get('Muestra', 'Muestra')))
-            facies = str(r.get('Facies_Piper', 'N/D'))
-            estatus = str(r.get('Estatus_NOM127', 'Conforme'))
-            exc = str(r.get('Parametros_Excedidos', 'Ninguno'))
-            
-            # Asignar color según criterio
+            tipo_f = html.escape(str(r.get('Tipo_Fuente', 'Fuente') if pd.notna(r.get('Tipo_Fuente')) else 'Fuente'))
+            facies_raw = str(r.get('Facies_Piper', 'N/D') if pd.notna(r.get('Facies_Piper')) else 'N/D')
+            facies = html.escape(facies_raw)
+            estatus_raw = str(r.get('Estatus_NOM127', 'Conforme') if pd.notna(r.get('Estatus_NOM127')) else 'Conforme')
+            estatus = html.escape(estatus_raw)
+            exc = html.escape(str(r.get('Parametros_Excedidos', 'Ninguno') if pd.notna(r.get('Parametros_Excedidos')) else 'Ninguno'))
+
+            sdt_v = r.get('SDT_mg_L', np.nan)
+            ce_v = r.get('CE_uS_cm', np.nan)
+            cbe_v = r.get('CBE_pct', np.nan)
+            rev_v = r.get('Indice_Revelle', np.nan)
+            sdt_txt = f"{float(sdt_v):,.1f} mg/L" if pd.notna(sdt_v) else "S/D"
+            ce_txt = f"{float(ce_v):,.0f} µS/cm" if pd.notna(ce_v) else "S/D"
+            cbe_txt = f"{float(cbe_v):+.2f}%" if pd.notna(cbe_v) else "S/D"
+            rev_txt = f"{float(rev_v):.2f}" if pd.notna(rev_v) else "S/D"
+
             if "Piper" in col_criterio:
-                color_pt = obtener_color_facies(facies)
+                color_pt = obtener_color_facies(facies_raw)
             else:
-                if "No Conforme" in estatus: color_pt = "#dc2626"
-                elif "Alerta" in estatus: color_pt = "#d97706"
-                else: color_pt = "#16a34a"
+                if "No Conforme" in estatus_raw:
+                    color_pt = "#dc2626"
+                elif "Alerta" in estatus_raw:
+                    color_pt = "#d97706"
+                else:
+                    color_pt = "#16a34a"
 
             popup_html = f"""
-            <div style='font-family: Arial, sans-serif; font-size: 11.5px; line-height: 1.4; color: #1e293b; min-width: 250px;'>
-              <div style='background: #691C32; color: white; padding: 6px 10px; font-weight: bold; border-radius: 4px 4px 0 0;'>
-                🧪 {id_m} ({r.get('Tipo_Fuente', 'Fuente')})
+            <div style='font-family: Segoe UI, Arial, sans-serif; font-size: 11.5px; line-height: 1.45; color: #1e293b; min-width: 245px;'>
+              <div style='background: #691C32; color: white; padding: 6px 10px; font-weight: 700; border-radius: 4px 4px 0 0; margin: -6px -10px 6px -10px;'>
+                🧪 {id_m} ({tipo_f})
               </div>
-              <div style='padding: 8px 10px; border: 1px solid #cbd5e1; border-top: none; background: white; border-radius: 0 0 4px 4px;'>
-                <b>Facies:</b> {facies}<br>
-                <b>Dictamen NOM-127:</b> {estatus}<br>
-                <b>SDT:</b> {r.get('SDT_mg_L', 0):,.1f} mg/L | <b>CE:</b> {r.get('CE_uS_cm', 0):,.0f} µS/cm<br>
-                <b>Balance CBE:</b> {r.get('CBE_pct', 0):+.2f}%<br>
-                <b>Índice Revelle:</b> {r.get('Indice_Revelle', 0):.2f}<br>
-                <hr style='margin: 4px 0;'>
-                <b>Fuera de Norma:</b> <span style='color:#dc2626; font-weight:600;'>{exc}</span>
-              </div>
+              <div><b>Facies:</b> {facies}</div>
+              <div><b>Dictamen NOM-127:</b> {estatus}</div>
+              <div><b>SDT:</b> {sdt_txt} | <b>CE:</b> {ce_txt}</div>
+              <div><b>Balance CBE:</b> {cbe_txt} | <b>Revelle:</b> {rev_txt}</div>
+              <hr style='margin: 5px 0; border: 0; border-top: 1px solid #e2e8f0;'>
+              <div><b>Fuera de Norma:</b> <span style='color:#dc2626; font-weight:600;'>{exc}</span></div>
             </div>
             """
 
@@ -1072,6 +1112,7 @@ with tab_geo:
                 },
                 "properties": {
                     "id": id_m,
+                    "tipo": tipo_f,
                     "color": color_pt,
                     "facies": facies,
                     "estatus": estatus,
@@ -1079,310 +1120,1254 @@ with tab_geo:
                 }
             })
 
-        geojson_muestras_str = json.dumps({"type": "FeatureCollection", "features": features_pts})
-        geojson_poly_str = json.dumps(poligono_geojson) if poligono_geojson else "null"
-        bounds_poly_str = json.dumps(bounds_poligono) if bounds_poligono else "null"
+    geojson_muestras_str = json.dumps({"type": "FeatureCollection", "features": features_pts})
+    geojson_poly_str = json.dumps(poligono_geojson) if poligono_geojson else "null"
+    bounds_encuadre_str = json.dumps(bounds_encuadre)
+    url_pmtiles_srv_geo = obtener_url_pmtiles()
+    tiene_poligono_geo = poligono_geojson is not None
+    n_muestras_geo = len(features_pts)
 
-        # Construir items de la leyenda según criterio
+    # Bloques de leyenda sincronizados con los checkboxes del Dock
+    if tiene_muestras_geo:
         if "Piper" in col_criterio:
-            legend_items = """
-            <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Facies Hidrogeoquímicas:</div>
-            <div><i style='background:#0284c7;'></i> Bicarbonatada Cálcica</div>
-            <div><i style='background:#7c3aed;'></i> Bicarbonatada Sódica</div>
-            <div><i style='background:#dc2626;'></i> Clorurada Sódica</div>
-            <div><i style='background:#d97706;'></i> Sulfatada Cálcica</div>
-            <div><i style='background:#059669;'></i> Mixta / Otra</div>
+            leg_muestras_items = """
+            <div id='leg-muestras'>
+                <div style='font-weight:700; color:#691C32; margin-bottom:3px; font-size:11px;'>Facies Hidrogeoquímicas:</div>
+                <div><i style='background:#0284c7;'></i> Bicarbonatada Cálcica</div>
+                <div><i style='background:#7c3aed;'></i> Bicarbonatada Sódica</div>
+                <div><i style='background:#dc2626;'></i> Clorurada Sódica</div>
+                <div><i style='background:#d97706;'></i> Sulfatada Cálcica</div>
+                <div><i style='background:#059669;'></i> Mixta / Otra</div>
+            </div>
             """
         else:
-            legend_items = """
-            <div style='font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px;'>Dictamen NOM-127:</div>
-            <div><i style='background:#16a34a;'></i> Conforme (Apta)</div>
-            <div><i style='background:#d97706;'></i> Alerta Preventiva</div>
-            <div><i style='background:#dc2626;'></i> No Conforme (Rebasa)</div>
+            leg_muestras_items = """
+            <div id='leg-muestras'>
+                <div style='font-weight:700; color:#691C32; margin-bottom:3px; font-size:11px;'>Dictamen NOM-127:</div>
+                <div><i style='background:#16a34a;'></i> Conforme (Apta)</div>
+                <div><i style='background:#d97706;'></i> Alerta Preventiva</div>
+                <div><i style='background:#dc2626;'></i> No Conforme (Rebasa)</div>
+            </div>
             """
+    else:
+        leg_muestras_items = ""
 
-        html_maplibre = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="utf-8" />
-            <title>Geovisor Hidrogeoquímico</title>
-            <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
-            <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
-            <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
-            <style>
-                body {{ margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
-                #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; border-radius: 8px; }}
+    leg_acuifero_html = (
+        "<div id='leg-acuifero' style='margin-top:4px;'><i class='square' style='background:rgba(105,28,50,0.20); border:1.5px solid #691C32;'></i> Polígono del Acuífero</div>"
+        if tiene_poligono_geo else ""
+    )
 
-                .btn-open-dock-circle {{
-                    position: absolute; top: 12px; left: 12px; z-index: 1000;
-                    background: #691C32; color: #ffffff; width: 38px; height: 38px;
-                    border-radius: 50%; border: 1.5px solid #DDC9A3;
-                    box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
-                    font-size: 19px; font-weight: bold; cursor: pointer;
-                    display: flex; align-items: center; justify-content: center;
-                    transition: all 0.2s ease;
-                }}
-                .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.08); }}
+    chk_muestras_html = (
+        f"<label><input type='checkbox' id='chk-muestras' checked> 🧪 Fuentes de Monitoreo ({n_muestras_geo})</label>"
+        if tiene_muestras_geo else ""
+    )
+    chk_acuifero_html = (
+        "<label><input type='checkbox' id='chk-acuifero' checked> 🛡️ Delimitación Acuífero</label>"
+        if tiene_poligono_geo else ""
+    )
+    opac_poly_html = """
+        <div class="dock-section" id="sec-opac-poly">
+            <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🎨 Opacidad Acuífero: <span id="val-opac-poly">20%</span></label>
+            <input type="range" class="slider-ctrl" id="slider-opac-poly" min="0" max="100" step="5" value="20" oninput="ajustarOpacidadPoligono(this.value)">
+        </div>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+    """ if tiene_poligono_geo else ""
 
-                .workbench-dock {{
-                    position: absolute; top: 12px; left: 12px; z-index: 2000;
-                    background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
-                    width: 285px; border-radius: 10px; overflow: hidden;
-                    box-shadow: 0 6px 22px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
-                    border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
-                    font-size: 11.5px; color: #1E293B;
-                }}
-                .dock-header {{ 
-                    background: #691C32; color: white; padding: 9px 12px; 
-                    font-weight: 700; display: flex; justify-content: space-between; align-items: center; 
-                }}
-                .dock-body {{ padding: 12px 14px; max-height: 70vh; overflow-y: auto; }}
-                .dock-section {{ margin-bottom: 12px; }}
-                .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 6px; font-weight: 500; }}
-                .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+    html_maplibre = f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="utf-8" />
+        <title>Geovisor Hidrogeoquímico</title>
+        <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+        <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+        <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+        <script src="https://unpkg.com/pmtiles@2.11.0/dist/index.js"></script>
+        <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.css" type="text/css" />
+        <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-draw/v1.4.3/mapbox-gl-draw.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js"></script>
+        <style>
+            html, body {{ margin: 0; padding: 0; width: 100%; height: 100%; font-family: 'Segoe UI', Arial, sans-serif; overflow: hidden; }}
+            #map {{ position: absolute; top: 0; bottom: 0; width: 100%; height: 100%; background: #f8fafc; border-radius: 8px; }}
 
-                .hud-elevation {{
-                    position: absolute; top: 12px; right: 55px; z-index: 1000;
-                    background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
-                    color: #1e293b; padding: 7px 14px; border-radius: 8px;
-                    border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-                    font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
-                }}
-                .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
+            .btn-open-dock-circle {{
+                position: absolute; top: 12px; left: 12px; z-index: 1000;
+                background: #691C32; color: #ffffff; width: 38px; height: 38px;
+                border-radius: 50%; border: 1.5px solid #DDC9A3;
+                box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+                font-size: 19px; font-weight: bold; cursor: pointer;
+                display: flex; align-items: center; justify-content: center;
+                transition: all 0.2s ease;
+            }}
+            .btn-open-dock-circle:hover {{ background: #88102B; transform: scale(1.08); }}
 
-                .legend-panel {{
-                    position: absolute; bottom: 25px; left: 12px; z-index: 1000;
-                    background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
-                    padding: 10px 14px; border-radius: 8px;
-                    box-shadow: 0 4px 14px rgba(0,0,0,0.16); font-size: 11px; line-height: 1.6;
-                    border: 1px solid #E2E8F0; border-top: 3px solid #691C32; max-width: 280px;
-                }}
-                .legend-panel i {{
-                    width: 12px; height: 12px; display: inline-block; border-radius: 50%;
-                    margin-right: 6px; vertical-align: middle; border: 1px solid #fff;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-                }}
+            .workbench-dock {{
+                position: absolute; top: 12px; left: 12px; z-index: 2000;
+                background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                width: 285px; border-radius: 10px; overflow: hidden;
+                box-shadow: 0 6px 22px rgba(0,0,0,0.25); border-top: 4px solid #691C32;
+                border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0;
+                font-size: 11.5px; color: #1E293B;
+            }}
+            .dock-header {{
+                background: #691C32; color: white; padding: 9px 12px;
+                font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+            }}
+            .dock-body {{ padding: 12px 14px; max-height: 72vh; overflow-y: auto; }}
+            .dock-section {{ margin-bottom: 10px; }}
+            .dock-section label {{ display: flex; align-items: center; gap: 6px; cursor: pointer; margin-bottom: 5px; font-weight: 500; }}
+            .slider-ctrl {{ width: 100%; accent-color: #691C32; cursor: pointer; margin-top: 4px; }}
+            .coord-row {{ display: flex; gap: 6px; margin-bottom: 6px; }}
+            .coord-row input {{
+                width: 50%; padding: 5px 7px; font-size: 11px; border: 1px solid #cbd5e1;
+                border-radius: 4px; background: #ffffff; color: #1e293b; box-sizing: border-box;
+            }}
+            .coord-row input:focus {{ outline: none; border-color: #691C32; }}
+            .btn-dock-primary {{
+                flex: 1; padding: 6px 10px; background: #691C32; color: #ffffff;
+                border: 1px solid #BC955C; border-radius: 4px; cursor: pointer;
+                font-size: 11px; font-weight: 600; transition: background 0.15s ease;
+            }}
+            .btn-dock-primary:hover {{ background: #4A1424; }}
+            .btn-dock-clear {{
+                width: 32px; padding: 6px 0; background: #64748b; color: #ffffff;
+                border: none; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: 600;
+            }}
+            .btn-dock-clear:hover {{ background: #475569; }}
+            .btn-reset-view {{
+                width: 100%; padding: 7px 10px; background: #475569; color: #ffffff;
+                border: none; border-radius: 5px; cursor: pointer; font-weight: 600;
+                font-size: 11.5px; margin-top: 4px; transition: background 0.15s ease;
+            }}
+            .btn-reset-view:hover {{ background: #334155; }}
 
-                .gis-badge-popup .maplibregl-popup-content {{
-                    background: rgba(255, 255, 255, 0.96) !important;
-                    backdrop-filter: blur(8px) !important;
-                    border: 1px solid #CBD5E1 !important;
-                    border-top: 3px solid #691C32 !important;
-                    border-radius: 6px !important;
-                    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.20) !important;
-                    padding: 0 !important;
-                    overflow: hidden !important;
-                }}
-                .gis-badge-popup .maplibregl-popup-tip {{
-                    border-top-color: rgba(255, 255, 255, 0.96) !important;
-                }}
-                .gis-badge-popup .maplibregl-popup-close-button {{
-                    color: #ffffff !important;
-                    font-size: 15px !important;
-                    top: 4px !important; right: 6px !important;
-                    padding: 2px 4px !important;
-                }}
-            </style>
-        </head>
-        <body>
-            <div id="map"></div>
+            .hud-elevation {{
+                position: absolute; top: 12px; right: 55px; z-index: 1000;
+                background: rgba(255, 255, 255, 0.94); backdrop-filter: blur(8px);
+                color: #1e293b; padding: 7px 14px; border-radius: 8px;
+                border: 1.5px solid #691C32; box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                font-size: 11.5px; display: flex; gap: 14px; align-items: center; pointer-events: none;
+            }}
+            .hud-elevation b {{ color: #691C32; margin-right: 4px; }}
 
-            <div class="btn-open-dock-circle" onclick="toggleDock()" title="Capas y Controles SIG">☰</div>
+            .legend-panel {{
+                position: absolute; bottom: 25px; left: 12px; z-index: 1000;
+                background: rgba(255,255,255,0.95); backdrop-filter: blur(8px);
+                padding: 9px 13px; border-radius: 8px;
+                box-shadow: 0 4px 14px rgba(0,0,0,0.16); font-size: 11px; line-height: 1.6;
+                border: 1px solid #E2E8F0; border-top: 3px solid #691C32; max-width: 280px; pointer-events: auto;
+            }}
+            .legend-header {{
+                display: flex; justify-content: space-between; align-items: center;
+                cursor: pointer; font-size: 12px; font-weight: 700; color: #691C32; gap: 12px;
+            }}
+            .legend-header:hover {{ color: #88102B; }}
+            .legend-body {{ overflow: hidden; transition: max-height 0.25s ease; margin-top: 6px; }}
+            .legend-body.collapsed {{ max-height: 0 !important; margin-top: 0 !important; }}
+            .legend-panel i {{
+                width: 12px; height: 12px; display: inline-block; border-radius: 50%;
+                margin-right: 6px; vertical-align: middle; border: 1px solid #fff;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            }}
+            .legend-panel i.square {{ border-radius: 2px; box-shadow: none; }}
 
-            <div id="dock-panel" class="workbench-dock" style="display: none;">
-                <div class="dock-header">
-                    <span>🛠️ Capas y Control SIG</span>
-                    <span style="cursor:pointer; font-size:16px;" onclick="toggleDock()">✕</span>
+            .gis-badge-popup .maplibregl-popup-content {{
+                background: rgba(255, 255, 255, 0.96) !important;
+                backdrop-filter: blur(8px) !important;
+                border: 1px solid #CBD5E1 !important;
+                border-top: 3px solid #691C32 !important;
+                border-radius: 6px !important;
+                box-shadow: 0 4px 16px rgba(0, 0, 0, 0.20) !important;
+                padding: 6px 10px !important;
+                font-family: 'Segoe UI', Arial, sans-serif !important;
+                line-height: 1.4 !important;
+                pointer-events: auto !important;
+            }}
+            .gis-badge-popup .maplibregl-popup-tip {{
+                border-top-color: rgba(255, 255, 255, 0.96) !important;
+            }}
+            .gis-badge-popup .maplibregl-popup-close-button {{
+                color: #ffffff !important; font-size: 15px !important;
+                top: 3px !important; right: 5px !important; padding: 2px 5px !important; cursor: pointer !important;
+            }}
+
+            .minimal-popup .maplibregl-popup-content {{
+                background: rgba(26, 26, 26, 0.92) !important; color: #ffffff !important;
+                border: 1px solid #BC955C !important; border-left: 3px solid #BC955C !important;
+                border-radius: 4px !important; font-size: 11px !important; padding: 5px 9px !important;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3) !important; pointer-events: none !important;
+            }}
+            .minimal-popup .maplibregl-popup-tip {{ display: none !important; }}
+
+            .leaflet-open-draw-btn {{
+                position: absolute; top: 160px; right: 10px; z-index: 1000;
+                background: #691C32 !important; color: #ffffff; width: 29px; height: 29px;
+                border-radius: 4px; border: 2px solid rgba(0,0,0,0.2);
+                cursor: pointer; display: flex; align-items: center; justify-content: center;
+                transition: background 0.2s ease;
+            }}
+            .leaflet-open-draw-btn:hover {{ background: #88102B !important; }}
+
+            .draw-docked-panel {{
+                position: absolute; top: 160px; right: 50px; z-index: 2000;
+                background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px);
+                width: 275px; border-radius: 8px; overflow: hidden;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.2); border-top: 3px solid #691C32;
+                border-left: 1px solid #E2E8F0; border-right: 1px solid #E2E8F0; border-bottom: 1px solid #E2E8F0;
+                font-size: 11px; color: #1E293B;
+            }}
+            .docked-draw-header {{
+                background: #f8fafc; color: #1e293b; padding: 6px 10px;
+                font-weight: 700; display: flex; justify-content: space-between; align-items: center;
+                border-bottom: 1px solid #e2e8f0; font-size: 11.5px;
+            }}
+            .docked-draw-close {{ cursor: pointer; font-size: 16px; color: #64748b; line-height: 1; font-weight: bold; }}
+            .docked-draw-close:hover {{ color: #dc2626; }}
+            .docked-draw-body {{ padding: 10px; }}
+            .draw-grid {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; margin-bottom: 8px; }}
+            .btn-tool {{
+                background: #ffffff; border: 1px solid #CBD5E1; border-radius: 5px;
+                padding: 5px 6px; font-size: 10.5px; font-weight: 600; color: #334155;
+                display: flex; align-items: center; justify-content: center; gap: 5px; cursor: pointer; transition: all 0.15s ease;
+            }}
+            .btn-tool svg {{ width: 13px; height: 13px; stroke: #691C32; fill: none; stroke-width: 2; flex-shrink: 0; }}
+            .btn-tool:hover {{ background: #f1f5f9; border-color: #691C32; color: #691C32; }}
+            .btn-tool.active {{ background: #691C32; border-color: #691C32; color: #ffffff; }}
+            .btn-tool.active svg {{ stroke: #ffffff; }}
+            .btn-preset {{
+                flex: 1; padding: 3px 4px; font-size: 10px; font-weight: 600;
+                border: 1px solid #cbd5e1; border-radius: 3px; background: #f8fafc;
+                color: #475569; cursor: pointer; transition: all 0.15s ease; text-align: center;
+            }}
+            .btn-preset:hover {{ background: #e2e8f0; color: #1e293b; border-color: #691C32; }}
+            .draw-measure-box {{
+                background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 5px;
+                padding: 8px 10px; font-size: 11px; line-height: 1.45; color: #14532D;
+                margin-bottom: 8px; display: none;
+            }}
+            .draw-measure-box b {{ color: #166534; }}
+            .draw-actions {{ display: flex; gap: 6px; border-top: 1px solid #f1f5f9; padding-top: 8px; }}
+            .btn-action-sm {{
+                flex: 1; padding: 5px 8px; font-size: 10.5px; font-weight: 600;
+                border-radius: 4px; border: 1px solid #cbd5e1; background: #ffffff;
+                cursor: pointer; display: flex; align-items: center; justify-content: center;
+                gap: 5px; transition: all 0.15s ease; color: #334155;
+            }}
+            .btn-action-sm svg {{ width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }}
+            .btn-action-sm:hover {{ background: #f8fafc; border-color: #94A3B8; }}
+            .btn-action-sm.danger {{ color: #dc2626; border-color: #fecaca; }}
+            .btn-action-sm.danger:hover {{ background: #fef2f2; border-color: #dc2626; }}
+
+            .label-marker-corte {{
+                width: 22px; height: 22px; border-radius: 50%;
+                color: #ffffff; font-weight: 800; font-size: 11px;
+                display: flex; align-items: center; justify-content: center;
+                box-shadow: 0 2px 6px rgba(0,0,0,0.35); border: 2px solid #ffffff;
+                pointer-events: none; font-family: 'Segoe UI', Arial, sans-serif;
+            }}
+            .label-marker-corte.label-a {{ background: #691C32; }}
+            .label-marker-corte.label-b {{ background: #166534; }}
+
+            .maplibregl-ctrl-attrib {{
+                background-color: rgba(255, 255, 255, 0.85) !important;
+                padding: 2px 6px !important; border-radius: 3px !important;
+                font-size: 10.5px !important; color: #333 !important;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.15) !important;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+
+        <div class="hud-elevation" id="hud-coord">
+            <div><b>Lon:</b> <span id="hud-lon">{c_lon_cen:.4f}</span>°</div>
+            <div><b>Lat:</b> <span id="hud-lat">{c_lat_cen:.4f}</span>°</div>
+            <div><b>Zoom:</b> <span id="hud-zoom">11.0</span></div>
+        </div>
+
+        <div id="btn-open-dock" class="btn-open-dock-circle" onclick="toggleDock()" title="Capas y Control SIG">☰</div>
+
+        <div id="workbench-dock" class="workbench-dock" style="display: none;">
+            <div class="dock-header">
+                <span>🛠️ Capas y Control SIG</span>
+                <button onclick="toggleDock()" style="background:transparent; border:none; color:white; font-size:16px; font-weight:bold; cursor:pointer; line-height:1; padding:2px 5px;" title="Contraer panel">✕</button>
+            </div>
+            <div class="dock-body">
+                <div class="dock-section">
+                    <label style="font-weight:700; color:#691C32; margin-bottom:2px;">🌍 Mapa Base:</label>
+                    <select id="sel-basemap" class="slider-ctrl" style="padding: 4px; border-radius: 4px; border: 1px solid #ccc; width: 100%; background: #f8fafc;">
+                        <option value="base-light-layer">Gris Claro (Esri)</option>
+                        <option value="base-sat-layer">Satélite (Esri)</option>
+                        <option value="base-topo-layer">Topográfico (Esri)</option>
+                        <option value="base-osm-layer">OpenStreetMap</option>
+                        <option value="base-street-layer">Estándar (Esri)</option>
+                        <option value="base-terrain-layer">Terreno (Esri)</option>
+                        <option value="base-ocean-layer">Océanos (Esri)</option>
+                        <option value="base-dark-layer">Gris Oscuro (Esri)</option>
+                        <option value="base-google-layer">Google Satelital gris 35%</option>
+                    </select>
                 </div>
-                <div class="dock-body">
-                    <div class="dock-section">
-                        <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">1. Capa Base Cartográfica</div>
-                        <label><input type="radio" name="basemap" value="esri" checked onchange="cambiarBasemap(this.value)"> 🛰️ Satelital ESRI Maxar</label>
-                        <label><input type="radio" name="basemap" value="carto" onchange="cambiarBasemap(this.value)"> 🗺️ Carto Claro (Vector)</label>
-                        <label><input type="radio" name="basemap" value="topo" onchange="cambiarBasemap(this.value)"> ⛰️ Topografía y Relieve</label>
-                        <label><input type="radio" name="basemap" value="osm" onchange="cambiarBasemap(this.value)"> 🌐 OpenStreetMap</label>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                {opac_poly_html}
+                <div class="dock-section">
+                    <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">📊 CAPAS ANALÍTICAS</span>
+                    {chk_muestras_html}
+                    {chk_acuifero_html}
+                    <label><input type="checkbox" id="chk-repda-nac"> 🇲🇽 REPDA Nacional MVT (461,914)</label>
+                </div>
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+                <div class="dock-section">
+                    <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">📍 IR A COORDENADAS</span>
+                    <div class="coord-row">
+                        <input type="number" id="coord-lat" placeholder="Lat (°N)" step="any">
+                        <input type="number" id="coord-lon" placeholder="Lon (°W)" step="any">
                     </div>
-                    <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
-                        <div style="font-weight:700; color:#691C32; margin-bottom:6px; font-size:11px; text-transform:uppercase;">2. Capas Temáticas</div>
-                        <label><input type="checkbox" id="chk-poligono" checked onchange="toggleLayer('layer-poligono-fill'); toggleLayer('layer-poligono-line');"> 🏛️ Polígono Oficial Acuífero</label>
-                        <label><input type="checkbox" id="chk-muestras" checked onchange="toggleLayer('layer-muestras-circle');"> 🧪 Fuentes de Monitoreo</label>
+                    <div style="display:flex; gap:6px;">
+                        <button id="btn-coords" class="btn-dock-primary" type="button">Ubicar</button>
+                        <button id="btn-clear-coord" class="btn-dock-clear" type="button" title="Borrar marcador">🗑️</button>
                     </div>
-                    <div class="dock-section" style="border-top: 1px solid #e2e8f0; padding-top:8px;">
-                        <div style="font-weight:700; color:#691C32; margin-bottom:4px; font-size:11px; text-transform:uppercase;">3. Opacidad del Polígono</div>
-                        <input type="range" class="slider-ctrl" min="0" max="100" value="20" oninput="ajustarOpacidadPoligono(this.value)">
+                    <div id="coord-error" style="display:none; color:#dc2626; font-size:10.5px; margin-top:4px; font-weight:600;">
+                        ⚠️ Ingresa Latitud (-90 a 90) y Longitud (-180 a 180) válidas.
                     </div>
                 </div>
+                <button id="btn-reset-view" class="btn-reset-view" type="button" onclick="encuadrarVistaInicial()">↺ Restablecer Vista</button>
             </div>
+        </div>
 
-            <div class="hud-elevation" id="hud-coord">
-                <div><b>Lon:</b> <span id="hud-lon">{c_lon_cen:.4f}</span>°</div>
-                <div><b>Lat:</b> <span id="hud-lat">{c_lat_cen:.4f}</span>°</div>
-                <div><b>Zoom:</b> <span id="hud-zoom">11.0</span></div>
+        <div id="btn-open-draw" class="leaflet-open-draw-btn" onclick="toggleDrawPanel()" title="Herramientas de Medición y Diagnóstico Turf.js">
+            <svg viewBox="0 0 24 24" style="width:16px; height:16px; stroke:#ffffff; fill:none; stroke-width:2;">
+                <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+                <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+                <circle cx="12" cy="12" r="2"/>
+            </svg>
+        </div>
+
+        <div class="draw-docked-panel" id="draw-docked-panel" style="display: none;">
+            <div class="docked-draw-header">
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <svg viewBox="0 0 24 24" style="width:14px; height:14px; stroke:#691C32; fill:none; stroke-width:2;">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                        <polyline points="2 17 12 22 22 17"/>
+                        <polyline points="2 12 12 17 22 12"/>
+                    </svg>
+                    <span>Gabinete Hidrogeoquímico</span>
+                </div>
+                <span class="docked-draw-close" onclick="toggleDrawPanel()" title="Ocultar">&times;</span>
             </div>
+            <div class="docked-draw-body">
+                <div class="draw-grid">
+                    <button id="btn-tool-point" class="btn-tool" onclick="activarModoDibujo('point')" title="Sondeo de ubicación y distancia a fuente cercana">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>
+                        Punto
+                    </button>
+                    <button id="btn-tool-line" class="btn-tool" onclick="activarModoDibujo('line_string')" title="Trazar transecto A-A' y medir distancia geodésica">
+                        <svg viewBox="0 0 24 24"><path d="M4 20L20 4"/><circle cx="4" cy="20" r="2.5"/><circle cx="20" cy="4" r="2.5"/></svg>
+                        Corte A-A'
+                    </button>
+                    <button id="btn-tool-poly" class="btn-tool" onclick="activarModoDibujo('polygon')" title="Calcular superficie del polígono trazado">
+                        <svg viewBox="0 0 24 24"><polygon points="12 2 22 8.5 18 20 6 20 2 8.5"/></svg>
+                        Polígono
+                    </button>
+                </div>
 
-            <div class="legend-panel">
-                {legend_items}
+                <div style="margin: 8px 0; border-top: 1px solid #f1f5f9; padding-top: 8px;">
+                    <div style="font-weight: 700; color: #1e293b; font-size: 10.5px; margin-bottom: 5px;">
+                        <span>🎯 Radio de Influencia / Buffer</span>
+                    </div>
+                    <div style="display:flex; gap: 4px; align-items: center; margin-bottom: 5px;">
+                        <input type="number" id="input-buffer-radio" value="1000" min="100" max="50000" step="100"
+                               style="width: 70px; padding: 4px 6px; font-size: 11px; border: 1px solid #cbd5e1; border-radius: 4px;" title="Radio en metros">
+                        <span style="font-size: 11px; color: #64748b;">m</span>
+                        <button id="btn-tool-buffer" class="btn-tool" style="flex:1; padding: 4px 6px; font-size: 10.5px; justify-content: center;" onclick="activarModoBuffer()" title="Clic en mapa para fijar radio de influencia">
+                            Fijar Radio
+                        </button>
+                    </div>
+                    <div style="display: flex; gap: 4px;">
+                        <button class="btn-preset" onclick="setBufferRadio(500)">500m</button>
+                        <button class="btn-preset" onclick="setBufferRadio(1000)">1km</button>
+                        <button class="btn-preset" onclick="setBufferRadio(2500)">2.5km</button>
+                        <button class="btn-preset" onclick="setBufferRadio(5000)">5km</button>
+                    </div>
+                </div>
+
+                <div style="display:flex; justify-content:space-between; align-items:center; margin: 6px 0; background:#f8fafc; padding: 4px 6px; border-radius:4px; border:1px solid #e2e8f0;">
+                    <label style="font-size:10px; color:#475569; display:flex; align-items:center; gap:5px; cursor:pointer;" title="Mostrar u ocultar etiqueta flotante de medición">
+                        <input type="checkbox" id="chk-show-badge" checked onchange="toggleMostrarBadges(this.checked)">
+                        <span>Etiqueta en mapa</span>
+                    </label>
+                    <button class="btn-preset" onclick="deseleccionarTodo()" title="Ocultar nodos de edición para capturas limpias" style="padding:2px 6px; font-size:9.5px;">
+                        👁️ Ocultar Nodos
+                    </button>
+                </div>
+
+                <div id="draw-measure-box" class="draw-measure-box"></div>
+
+                <div class="draw-actions">
+                    <button class="btn-action-sm danger" onclick="eliminarDibujoSeleccionado()" title="Borrar selección o todos los trazos">
+                        <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        Limpiar
+                    </button>
+                    <button class="btn-action-sm" onclick="descargarDibujosGeoJSON()" title="Descargar trazos en GeoJSON para QGIS/ArcGIS">
+                        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Exportar
+                    </button>
+                    <button class="btn-action-sm" onclick="document.getElementById('input-import-geojson-geo').click()" title="Cargar archivo GeoJSON al visor">
+                        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        Importar
+                    </button>
+                    <input type="file" id="input-import-geojson-geo" accept=".geojson,.json" style="display:none;" onchange="importarDibujosGeoJSON(event)">
+                </div>
             </div>
+        </div>
 
-            <script>
-                const basemaps = {{
-                    esri: {{
-                        version: 8,
-                        sources: {{
-                            'esri-sat': {{
-                                type: 'raster',
-                                tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'],
-                                tileSize: 256,
-                                attribution: '© Esri, Maxar, Earthstar Geographics'
-                            }}
-                        }},
-                        layers: [{{ id: 'base-layer', type: 'raster', source: 'esri-sat', minzoom: 0, maxzoom: 19 }}]
+        <div class="legend-panel" id="legend-panel">
+            <div class="legend-header" id="legend-toggle">
+                <span>Simbología</span>
+                <span id="legend-icon" style="font-size:11px;">▼</span>
+            </div>
+            <div class="legend-body" id="legend-body" style="max-height: 360px;">
+                {leg_muestras_items}
+                {leg_acuifero_html}
+                <div id="leg-repda-nac" style="display: none; margin-top:5px; border-top: 1px solid #eee; padding-top:4px;">
+                    <b style="color:#166534; font-size:11px;">🇲🇽 REPDA Nacional (461,914)</b><br>
+                    <div style="font-size:9.5px; color:#64748B; margin-bottom:2px;">Uso Oficial Registrado</div>
+                    <div><i style="background:#16a34a;"></i> Agrícola</div>
+                    <div><i style="background:#2563eb;"></i> Público Urbano</div>
+                    <div><i style="background:#ca8a04;"></i> Pecuario</div>
+                    <div><i style="background:#dc2626;"></i> Industrial</div>
+                    <div><i style="background:#9333ea;"></i> Servicios</div>
+                    <div><i style="background:#0284c7;"></i> Doméstico</div>
+                    <div><i style="background:#0d9488;"></i> Diferentes Usos</div>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            let protocol = new pmtiles.Protocol();
+            maplibregl.addProtocol("pmtiles", protocol.tile);
+
+            const geojsonMuestras = {geojson_muestras_str};
+            const geojsonPoligono = {geojson_poly_str};
+            const boundsEncuadre = {bounds_encuadre_str};
+
+            const map = new maplibregl.Map({{
+                container: 'map',
+                style: {{
+                    'version': 8,
+                    'sources': {{
+                        'base-light': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                        'base-sat': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, Maxar' }},
+                        'base-topo': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                        'base-osm': {{ 'type': 'raster', 'tiles': ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'], 'tileSize': 256, 'attribution': '© OpenStreetMap' }},
+                        'base-street': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                        'base-terrain': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Terrain_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, USGS' }},
+                        'base-ocean': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri, GEBCO' }},
+                        'base-dark': {{ 'type': 'raster', 'tiles': ['https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{{z}}/{{y}}/{{x}}'], 'tileSize': 256, 'attribution': 'Esri' }},
+                        'base-google': {{ 'type': 'raster', 'tiles': ['https://mt1.google.com/vt/lyrs=s&x={{x}}&y={{y}}&z={{z}}'], 'tileSize': 256, 'attribution': 'Google Satellite' }}
                     }},
-                    carto: {{
-                        version: 8,
-                        sources: {{
-                            'carto-light': {{
-                                type: 'raster',
-                                tiles: ['https://basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}.png'],
-                                tileSize: 256,
-                                attribution: '© CARTO, OpenStreetMap'
+                    'layers': [
+                        {{ 'id': 'base-light-layer', 'type': 'raster', 'source': 'base-light', 'layout': {{ 'visibility': 'visible' }} }},
+                        {{ 'id': 'base-sat-layer', 'type': 'raster', 'source': 'base-sat', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-topo-layer', 'type': 'raster', 'source': 'base-topo', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-osm-layer', 'type': 'raster', 'source': 'base-osm', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-street-layer', 'type': 'raster', 'source': 'base-street', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-terrain-layer', 'type': 'raster', 'source': 'base-terrain', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-ocean-layer', 'type': 'raster', 'source': 'base-ocean', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-dark-layer', 'type': 'raster', 'source': 'base-dark', 'layout': {{ 'visibility': 'none' }} }},
+                        {{ 'id': 'base-google-layer', 'type': 'raster', 'source': 'base-google', 'layout': {{ 'visibility': 'none' }}, 'paint': {{ 'raster-opacity': 0.35, 'raster-saturation': -1.0 }} }}
+                    ]
+                }},
+                center: [{c_lon_cen}, {c_lat_cen}],
+                zoom: 10.5,
+                attributionControl: false,
+                preserveDrawingBuffer: true
+            }});
+
+            const iconExpandSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+            const iconCompressSVG = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+
+            class FullscreenCustomControl {{
+                onAdd(mapInstance) {{
+                    this._map = mapInstance;
+                    this._cssFsActive = false;
+                    this._savedFrameCss = null;
+                    this._savedBodyCss = null;
+                    this._container = document.createElement('div');
+                    this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group';
+
+                    const btn = document.createElement('button');
+                    btn.id = 'btn-fs-visor';
+                    btn.type = 'button';
+                    btn.innerHTML = iconExpandSVG;
+                    btn.title = 'Pantalla Completa';
+                    btn.style.width = '30px';
+                    btn.style.height = '30px';
+                    btn.style.display = 'flex';
+                    btn.style.alignItems = 'center';
+                    btn.style.justifyContent = 'center';
+                    btn.style.background = '#ffffff';
+                    btn.style.cursor = 'pointer';
+                    btn.style.border = 'none';
+
+                    const getFrameEl = () => {{ try {{ return window.frameElement || null; }} catch (e) {{ return null; }} }};
+                    const updateBtnUI = (active) => {{
+                        btn.innerHTML = active ? iconCompressSVG : iconExpandSVG;
+                        btn.title = active ? 'Salir de Pantalla Completa (Esc)' : 'Pantalla Completa';
+                        setTimeout(() => {{ mapInstance.resize(); }}, 160);
+                    }};
+                    const setCssFs = (enable) => {{
+                        const frameEl = getFrameEl();
+                        if (enable) {{
+                            if (frameEl) {{
+                                if (this._savedFrameCss === null) this._savedFrameCss = frameEl.style.cssText || '';
+                                frameEl.style.cssText = (this._savedFrameCss ? this._savedFrameCss + ';' : '') +
+                                    'position:fixed !important; inset:0px !important; width:100vw !important; height:100vh !important; max-width:100vw !important; z-index:999999 !important; background:#ffffff !important; border:none !important; border-radius:0 !important;';
+                            }} else {{
+                                if (this._savedBodyCss === null) this._savedBodyCss = document.body.style.cssText || '';
+                                document.body.style.cssText = (this._savedBodyCss ? this._savedBodyCss + ';' : '') +
+                                    'position:fixed !important; inset:0px !important; width:100vw !important; height:100vh !important; z-index:999999 !important; border-radius:0 !important;';
                             }}
-                        }},
-                        layers: [{{ id: 'base-layer', type: 'raster', source: 'carto-light', minzoom: 0, maxzoom: 19 }}]
+                            this._cssFsActive = true;
+                            updateBtnUI(true);
+                        }} else {{
+                            if (frameEl && this._savedFrameCss !== null) {{
+                                frameEl.style.cssText = this._savedFrameCss;
+                                this._savedFrameCss = null;
+                            }}
+                            if (this._savedBodyCss !== null) {{
+                                document.body.style.cssText = this._savedBodyCss;
+                                this._savedBodyCss = null;
+                            }}
+                            this._cssFsActive = false;
+                            updateBtnUI(false);
+                        }}
+                    }};
+
+                    btn.onclick = () => {{
+                        const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement || this._cssFsActive);
+                        if (isFull) {{
+                            if (this._cssFsActive) setCssFs(false);
+                            if (document.fullscreenElement && document.exitFullscreen) {{
+                                document.exitFullscreen().catch(() => {{}});
+                            }} else if (document.webkitFullscreenElement && document.webkitExitFullscreen) {{
+                                document.webkitExitFullscreen();
+                            }}
+                            return;
+                        }}
+                        const frameEl = getFrameEl();
+                        if (frameEl) {{
+                            try {{
+                                frameEl.setAttribute('allowfullscreen', 'true');
+                                const cur = frameEl.getAttribute('allow') || '';
+                                if (!cur.includes('fullscreen')) frameEl.setAttribute('allow', (cur ? cur + '; ' : '') + 'fullscreen');
+                            }} catch (e) {{}}
+                        }}
+                        const target = document.documentElement;
+                        const req = target.requestFullscreen || target.webkitRequestFullscreen;
+                        if (req) {{
+                            try {{
+                                Promise.resolve(req.call(target))
+                                    .then(() => updateBtnUI(true))
+                                    .catch(() => setCssFs(true));
+                            }} catch (e) {{
+                                setCssFs(true);
+                            }}
+                        }} else {{
+                            setCssFs(true);
+                        }}
+                    }};
+
+                    const onNativeFsChange = () => {{
+                        const nativeActive = !!(document.fullscreenElement || document.webkitFullscreenElement);
+                        if (!nativeActive && !this._cssFsActive) updateBtnUI(false);
+                        else if (nativeActive) updateBtnUI(true);
+                    }};
+                    document.addEventListener('fullscreenchange', onNativeFsChange);
+                    document.addEventListener('webkitfullscreenchange', onNativeFsChange);
+                    window.addEventListener('keydown', (ev) => {{
+                        if (ev.key === 'Escape' && this._cssFsActive) setCssFs(false);
+                    }});
+
+                    this._container.appendChild(btn);
+                    return this._container;
+                }}
+                onRemove() {{
+                    this._container.parentNode.removeChild(this._container);
+                    this._map = undefined;
+                }}
+            }}
+
+            map.addControl(new FullscreenCustomControl(), 'top-right');
+            map.addControl(new maplibregl.NavigationControl({{ showCompass: true, showZoom: true }}), 'top-right');
+            map.addControl(new maplibregl.AttributionControl({{ compact: false }}), 'bottom-right');
+            map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
+
+            const draw = new MapboxDraw({{
+                displayControlsDefault: false,
+                controls: {{}},
+                userProperties: true,
+                styles: [
+                    {{
+                        'id': 'gl-draw-line', 'type': 'line',
+                        'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+                        'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                        'paint': {{ 'line-color': '#9f2241', 'line-width': 3, 'line-dasharray': [0.2, 2] }}
                     }},
-                    topo: {{
-                        version: 8,
-                        sources: {{
-                            'topo-layer': {{
-                                type: 'raster',
-                                tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}'],
-                                tileSize: 256,
-                                attribution: '© Esri Topo'
-                            }}
-                        }},
-                        layers: [{{ id: 'base-layer', type: 'raster', source: 'topo-layer', minzoom: 0, maxzoom: 19 }}]
+                    {{
+                        'id': 'gl-draw-polygon-fill', 'type': 'fill',
+                        'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                        'paint': {{ 'fill-color': '#285c4d', 'fill-opacity': 0.25 }}
                     }},
-                    osm: {{
-                        version: 8,
-                        sources: {{
-                            'osm-tiles': {{
-                                type: 'raster',
-                                tiles: ['https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png'],
-                                tileSize: 256,
-                                attribution: '© OpenStreetMap contributors'
-                            }}
-                        }},
-                        layers: [{{ id: 'base-layer', type: 'raster', source: 'osm-tiles', minzoom: 0, maxzoom: 19 }}]
+                    {{
+                        'id': 'gl-draw-polygon-stroke', 'type': 'line',
+                        'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                        'layout': {{ 'line-cap': 'round', 'line-join': 'round' }},
+                        'paint': {{ 'line-color': '#285c4d', 'line-width': 2.5 }}
+                    }},
+                    {{
+                        'id': 'gl-draw-point', 'type': 'circle',
+                        'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'vertex'], ['!=', 'meta', 'midpoint'], ['!=', 'mode', 'static']],
+                        'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                    }},
+                    {{
+                        'id': 'gl-draw-vertex-inactive', 'type': 'circle',
+                        'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                        'paint': {{ 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-width': 2, 'circle-stroke-color': '#691C32' }}
+                    }},
+                    {{
+                        'id': 'gl-draw-vertex-active', 'type': 'circle',
+                        'filter': ['all', ['==', 'meta', 'vertex'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                        'paint': {{ 'circle-radius': 7, 'circle-color': '#691C32', 'circle-stroke-width': 2, 'circle-stroke-color': '#ffffff' }}
+                    }},
+                    {{
+                        'id': 'gl-draw-midpoint', 'type': 'circle',
+                        'filter': ['all', ['==', 'meta', 'midpoint'], ['==', '$type', 'Point'], ['!=', 'mode', 'static']],
+                        'paint': {{ 'circle-radius': 4.5, 'circle-color': '#DDC9A3', 'circle-stroke-width': 1.5, 'circle-stroke-color': '#691C32' }}
+                    }}
+                ]
+            }});
+            map.addControl(draw);
+
+            let dockAbierto = false;
+            function aplicarEstadoVisualDock() {{
+                const dock = document.getElementById('workbench-dock');
+                const btnOpen = document.getElementById('btn-open-dock');
+                if (dock && btnOpen) {{
+                    dock.style.display = dockAbierto ? 'block' : 'none';
+                    btnOpen.style.display = dockAbierto ? 'none' : 'flex';
+                }}
+            }}
+            function toggleDock() {{
+                dockAbierto = !dockAbierto;
+                aplicarEstadoVisualDock();
+                if (dockAbierto && drawAbierto) {{
+                    toggleDrawPanel();
+                }}
+            }}
+            aplicarEstadoVisualDock();
+
+            let drawAbierto = false;
+            function toggleDrawPanel() {{
+                drawAbierto = !drawAbierto;
+                const p = document.getElementById('draw-docked-panel');
+                const btn = document.getElementById('btn-open-draw');
+                if (drawAbierto) {{
+                    p.style.display = 'block';
+                    btn.style.display = 'none';
+                    if (dockAbierto) toggleDock();
+                }} else {{
+                    p.style.display = 'none';
+                    btn.style.display = 'flex';
+                    detenerModoBuffer();
+                    limpiarHerramientasActivas();
+                }}
+            }}
+
+            function isDrawingMode() {{
+                const mode = draw && typeof draw.getMode === 'function' ? draw.getMode() : 'simple_select';
+                return (mode && mode.startsWith('draw_')) || modoBufferActivo;
+            }}
+
+            function activarModoDibujo(mode) {{
+                detenerModoBuffer();
+                limpiarHerramientasActivas();
+                map.getCanvas().style.cursor = 'crosshair';
+                if (mode === 'point') {{
+                    document.getElementById('btn-tool-point').classList.add('active');
+                    draw.changeMode('draw_point');
+                }} else if (mode === 'line_string') {{
+                    document.getElementById('btn-tool-line').classList.add('active');
+                    draw.changeMode('draw_line_string');
+                }} else if (mode === 'polygon') {{
+                    document.getElementById('btn-tool-poly').classList.add('active');
+                    draw.changeMode('draw_polygon');
+                }}
+            }}
+
+            function limpiarHerramientasActivas() {{
+                ['btn-tool-point', 'btn-tool-line', 'btn-tool-poly', 'btn-tool-buffer'].forEach(id => {{
+                    const el = document.getElementById(id);
+                    if (el) el.classList.remove('active');
+                }});
+                map.getCanvas().style.cursor = '';
+            }}
+
+            let modoBufferActivo = false;
+            let radioBufferMetros = 1000;
+
+            function setBufferRadio(m) {{
+                document.getElementById('input-buffer-radio').value = m;
+                radioBufferMetros = m;
+                activarModoBuffer();
+            }}
+
+            function activarModoBuffer() {{
+                limpiarHerramientasActivas();
+                draw.changeMode('simple_select');
+                modoBufferActivo = true;
+                const inputRadio = document.getElementById('input-buffer-radio');
+                radioBufferMetros = parseFloat(inputRadio.value) || 1000;
+                document.getElementById('btn-tool-buffer').classList.add('active');
+                map.getCanvas().style.cursor = 'crosshair';
+                const box = document.getElementById('draw-measure-box');
+                box.style.display = 'block';
+                box.innerHTML = `<b>🎯 Radio de Influencia (${{(radioBufferMetros/1000).toFixed(2)}} km):</b> Clic en el mapa para fijar el área circular.`;
+            }}
+
+            function detenerModoBuffer() {{
+                modoBufferActivo = false;
+                map.getCanvas().style.cursor = '';
+                const btn = document.getElementById('btn-tool-buffer');
+                if (btn) btn.classList.remove('active');
+            }}
+
+            function eliminarDibujoSeleccionado() {{
+                const sel = draw.getSelectedIds();
+                if (sel && sel.length > 0) {{
+                    draw.delete(sel);
+                }} else {{
+                    draw.deleteAll();
+                }}
+                document.getElementById('draw-measure-box').style.display = 'none';
+                limpiarRotulosLinea();
+                if (popupDibujoActivo) popupDibujoActivo.remove();
+            }}
+
+            function descargarDibujosGeoJSON() {{
+                const data = draw.getAll();
+                if (!data || !data.features || data.features.length === 0) {{
+                    alert("No hay geometrías trazadas en el mapa para exportar.");
+                    return;
+                }}
+                const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: 'application/geo+json' }});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'mediciones_hidrogeoquimica.geojson';
+                a.click();
+                URL.revokeObjectURL(url);
+            }}
+
+            function importarDibujosGeoJSON(e) {{
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = function(evt) {{
+                    try {{
+                        const data = JSON.parse(evt.target.result);
+                        if (data.type === "FeatureCollection" && data.features) {{
+                            data.features.forEach(f => draw.add(f));
+                            const bbox = turf.bbox(data);
+                            map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                            alert(`Se importaron ${{data.features.length}} geometrías exitosamente.`);
+                        }} else if (data.type === "Feature") {{
+                            draw.add(data);
+                            const bbox = turf.bbox(data);
+                            map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], {{ padding: 40 }});
+                            alert("Se importó 1 geometría exitosamente.");
+                        }} else {{
+                            alert("Formato GeoJSON no válido.");
+                        }}
+                    }} catch(err) {{
+                        alert("Error al leer archivo: " + err.message);
                     }}
                 }};
+                reader.readAsText(file);
+                e.target.value = "";
+            }}
 
-                const map = new maplibregl.Map({{
-                    container: 'map',
-                    style: basemaps.esri,
-                    center: [{c_lon_cen}, {c_lat_cen}],
-                    zoom: 11
-                }});
+            let markerA = null;
+            let markerB = null;
+            let popupDibujoActivo = null;
+            let popupActivo = null;
+            let tempCoordMarker = null;
+            const hoverTooltip = new maplibregl.Popup({{ closeButton: false, closeOnClick: false, offset: 12, className: 'minimal-popup' }});
 
-                map.addControl(new maplibregl.NavigationControl(), 'top-right');
-                map.addControl(new maplibregl.ScaleControl({{ maxWidth: 100, unit: 'metric' }}), 'bottom-right');
+            function actualizarRotulosLinea(feat) {{
+                limpiarRotulosLinea();
+                if (!feat || !feat.geometry || feat.geometry.type !== 'LineString') return;
+                const coords = feat.geometry.coordinates;
+                if (!coords || coords.length < 2) return;
+                const elA = document.createElement('div');
+                elA.className = 'label-marker-corte label-a';
+                elA.innerText = 'A';
+                const elB = document.createElement('div');
+                elB.className = 'label-marker-corte label-b';
+                elB.innerText = "A'";
+                markerA = new maplibregl.Marker({{ element: elA }}).setLngLat(coords[0]).addTo(map);
+                markerB = new maplibregl.Marker({{ element: elB }}).setLngLat(coords[coords.length - 1]).addTo(map);
+            }}
 
-                const geojsonMuestras = {geojson_muestras_str};
-                const geojsonPoligono = {geojson_poly_str};
-                const boundsPoligono = {bounds_poly_str};
+            function limpiarRotulosLinea() {{
+                if (markerA) {{ markerA.remove(); markerA = null; }}
+                if (markerB) {{ markerB.remove(); markerB = null; }}
+            }}
 
-                function toggleDock() {{
-                    const dock = document.getElementById('dock-panel');
-                    dock.style.display = (dock.style.display === 'none' || dock.style.display === '') ? 'block' : 'none';
-                }}
-
-                function toggleLayer(layerId) {{
-                    if (map.getLayer(layerId)) {{
-                        const vis = map.getLayoutProperty(layerId, 'visibility');
-                        map.setLayoutProperty(layerId, 'visibility', vis === 'none' ? 'visible' : 'none');
+            function toggleMostrarBadges(mostrar) {{
+                if (!mostrar && popupDibujoActivo) {{
+                    popupDibujoActivo.remove();
+                }} else if (mostrar) {{
+                    const feats = draw.getAll().features;
+                    if (feats && feats.length > 0) {{
+                        actualizarMedicionCompleta(feats[feats.length - 1], true);
                     }}
                 }}
+            }}
 
-                function ajustarOpacidadPoligono(val) {{
-                    const op = parseFloat(val) / 100.0;
-                    if (map.getLayer('layer-poligono-fill')) {{
-                        map.setPaintProperty('layer-poligono-fill', 'fill-opacity', op);
-                    }}
-                }}
+            function deseleccionarTodo() {{
+                draw.changeMode('simple_select', {{ featureIds: [] }});
+                if (popupDibujoActivo) popupDibujoActivo.remove();
+            }}
 
-                map.on('mousemove', (e) => {{
-                    document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4);
-                    document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4);
-                    document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
-                }});
+            function obtenerInfoMedicion(feat) {{
+                if (!feat || !feat.geometry) return null;
+                const tipo = feat.geometry.type;
+                const props = feat.properties || {{}};
 
-                function cargarCapasDatos() {{
-                    // 1. Polígono Oficial del Acuífero
+                if (tipo === 'Point') {{
+                    const c = feat.geometry.coordinates;
+                    let estadoAcuifero = "<span style='color:#64748B;'>Sin polígono activo</span>";
                     if (geojsonPoligono && geojsonPoligono.geometry) {{
-                        if (!map.getSource('src-poligono')) {{
-                            map.addSource('src-poligono', {{ type: 'geojson', data: geojsonPoligono }});
-                            map.addLayer({{
-                                id: 'layer-poligono-fill',
-                                type: 'fill',
-                                source: 'src-poligono',
-                                paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.20 }}
-                            }});
-                            map.addLayer({{
-                                id: 'layer-poligono-line',
-                                type: 'line',
-                                source: 'src-poligono',
-                                paint: {{ 'line-color': '#691C32', 'line-width': 2.8 }}
-                            }});
-                        }}
+                        const dentro = turf.booleanPointInPolygon(c, geojsonPoligono);
+                        estadoAcuifero = dentro
+                            ? "<span style='color:#059669; font-weight:700;'>🟢 Dentro del Acuífero Evaluado</span>"
+                            : "<span style='color:#d97706; font-weight:700;'>🟠 Fuera del Polígono del Acuífero</span>";
                     }}
 
-                    // 2. Fuentes de Muestreo Hidrogeoquímico
-                    if (!map.getSource('src-muestras')) {{
-                        map.addSource('src-muestras', {{ type: 'geojson', data: geojsonMuestras }});
-                        map.addLayer({{
-                            id: 'layer-muestras-circle',
-                            type: 'circle',
-                            source: 'src-muestras',
-                            paint: {{
-                                'circle-radius': 9,
-                                'circle-color': ['get', 'color'],
-                                'circle-stroke-width': 2.2,
-                                'circle-stroke-color': '#ffffff'
+                    let distFuenteTxt = "--";
+                    let nombreCercana = "";
+                    if (geojsonMuestras && geojsonMuestras.features && geojsonMuestras.features.length > 0) {{
+                        let minD = Infinity;
+                        geojsonMuestras.features.forEach(ft => {{
+                            const d = turf.distance(c, ft.geometry.coordinates, {{ units: 'kilometers' }});
+                            if (d < minD) {{
+                                minD = d;
+                                nombreCercana = (ft.properties && ft.properties.id) ? ` (${{ft.properties.id}})` : '';
                             }}
                         }});
+                        distFuenteTxt = (minD < 1.0 ? `${{(minD * 1000).toFixed(0)}} m` : `${{minD.toFixed(2)}} km`) + nombreCercana;
                     }}
 
-                    // Encuadre automático (fitBounds)
-                    if (boundsPoligono && boundsPoligono.length === 4) {{
-                        map.fitBounds([
-                            [boundsPoligono[0], boundsPoligono[1]],
-                            [boundsPoligono[2], boundsPoligono[3]]
-                        ], {{ padding: 45, maxZoom: 13.5 }});
-                    }}
+                    return {{
+                        coords: c,
+                        badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📍 Sondeo Puntual</div>` +
+                               `<div style="font-size:10.5px; color:#334155;">` +
+                               `<b>Acuífero:</b> ${{estadoAcuifero}}<br>` +
+                               `<b>Fuente cercana:</b> <b>${{distFuenteTxt}}</b><br>` +
+                               `<span style="color:#64748B; font-size:9.5px;">${{c[1].toFixed(5)}}° N, ${{c[0].toFixed(5)}}° W</span>` +
+                               `</div>`,
+                        panel: `<b>📍 Sondeo de Ubicación</b><br>` +
+                               `<b>Acuífero:</b> ${{estadoAcuifero}}<br>` +
+                               `<b>Fuente más cercana:</b> ${{distFuenteTxt}}<br>` +
+                               `<b>Coordenadas:</b> ${{c[1].toFixed(5)}}° N, ${{c[0].toFixed(5)}}° W`
+                    }};
                 }}
 
-                map.on('load', cargarCapasDatos);
+                if (tipo === 'LineString') {{
+                    const coordsPts = feat.geometry.coordinates;
+                    const km = turf.length(feat, {{ units: 'kilometers' }});
+                    const distFormato = km < 1.0 ? `${{(km * 1000).toFixed(0)}} m` : `${{km.toFixed(2)}} km`;
+                    const cA = coordsPts[0];
+                    const cB = coordsPts[coordsPts.length - 1];
+                    const rumbo = turf.bearing(cA, cB);
+                    const azimut = (rumbo + 360) % 360;
+                    const midCoord = coordsPts[Math.floor(coordsPts.length / 2)];
+                    return {{
+                        coords: midCoord,
+                        badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📏 Transecto A - A'</div>` +
+                               `<div style="font-size:10.5px; color:#334155;">` +
+                               `<b>Distancia:</b> ${{distFormato}}<br>` +
+                               `<b>Azimut:</b> ${{azimut.toFixed(1)}}°` +
+                               `</div>`,
+                        panel: `<b>📏 Transecto Geodésico A - A'</b><br>` +
+                               `<b>Longitud Total:</b> ${{distFormato}}<br>` +
+                               `<b>Azimut:</b> ${{azimut.toFixed(1)}}°<br>` +
+                               `<b>A:</b> ${{cA[1].toFixed(4)}}° N, ${{cA[0].toFixed(4)}}° W<br>` +
+                               `<b>A':</b> ${{cB[1].toFixed(4)}}° N, ${{cB[0].toFixed(4)}}° W`
+                    }};
+                }}
 
+                if (props.esCirculo || props.radioM) {{
+                    const radioM = props.radioM || 1000;
+                    const areaHa = props.areaHa || (turf.area(feat) / 10000).toFixed(2);
+                    const radioTxt = radioM >= 1000 ? `${{(radioM / 1000).toFixed(2)}} km` : `${{radioM}} m`;
+                    const areaKm2 = (turf.area(feat) / 1e6).toFixed(2);
+                    return {{
+                        coords: turf.centroid(feat).geometry.coordinates,
+                        badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">🎯 Área de Influencia</div>` +
+                               `<div style="font-size:10.5px; color:#334155;">` +
+                               `<b>Radio:</b> ${{radioTxt}}<br>` +
+                               `<b>Superficie:</b> ${{areaKm2}} km² (${{areaHa}} ha)` +
+                               `</div>`,
+                        panel: `<b>🎯 Radio de Influencia (Buffer)</b><br>` +
+                               `<b>Radio:</b> ${{radioTxt}}<br>` +
+                               `<b>Superficie:</b> ${{areaKm2}} km² (${{areaHa}} ha)<br>` +
+                               `<b>Perímetro:</b> ${{(2 * Math.PI * radioM / 1000).toFixed(2)}} km`
+                    }};
+                }}
+
+                if (tipo === 'Polygon') {{
+                    const m2 = turf.area(feat);
+                    const ha = (m2 / 10000).toFixed(2);
+                    const km2 = (m2 / 1e6).toFixed(2);
+                    const kmPerim = turf.length(turf.polygonToLine(feat), {{ units: 'kilometers' }}).toFixed(2);
+                    return {{
+                        coords: turf.centroid(feat).geometry.coordinates,
+                        badge: `<div style="font-weight:700; color:#691C32; margin-bottom:2px; font-size:11px;">📐 Área Delimitada</div>` +
+                               `<div style="font-size:10.5px; color:#334155;">` +
+                               `<b>Superficie:</b> ${{km2}} km² (${{ha}} ha)<br>` +
+                               `<b>Perímetro:</b> ${{kmPerim}} km` +
+                               `</div>`,
+                        panel: `<b>📐 Polígono de Medición</b><br>` +
+                               `<b>Superficie:</b> ${{km2}} km² (${{ha}} ha)<br>` +
+                               `<b>Perímetro:</b> ${{kmPerim}} km`
+                    }};
+                }}
+                return null;
+            }}
+
+            function actualizarMedicionCompleta(feat, mostrarBadge) {{
+                if (!feat) return;
+                const info = obtenerInfoMedicion(feat);
+                if (!info) return;
+
+                const box = document.getElementById('draw-measure-box');
+                if (box) {{
+                    box.style.display = 'block';
+                    box.innerHTML = info.panel;
+                }}
+
+                if (feat.geometry.type === 'LineString') actualizarRotulosLinea(feat);
+                else limpiarRotulosLinea();
+
+                const chkBadge = document.getElementById('chk-show-badge');
+                const permitirBadge = chkBadge ? chkBadge.checked : true;
+                if (mostrarBadge && permitirBadge) {{
+                    if (popupDibujoActivo) popupDibujoActivo.remove();
+                    popupDibujoActivo = new maplibregl.Popup({{ closeOnClick: true, offset: 12, className: 'gis-badge-popup' }})
+                        .setLngLat(info.coords)
+                        .setHTML(info.badge)
+                        .addTo(map);
+                }}
+            }}
+
+            window.addEventListener('keydown', (e) => {{
+                if (e.key === 'Escape') {{
+                    const m = draw.getMode();
+                    if ((m && m.startsWith('draw_')) || modoBufferActivo) {{
+                        draw.trash();
+                        draw.changeMode('simple_select');
+                        detenerModoBuffer();
+                        limpiarHerramientasActivas();
+                        const b = document.getElementById('draw-measure-box');
+                        if (b) b.style.display = 'none';
+                        limpiarRotulosLinea();
+                    }}
+                }}
+            }});
+
+            const basemapLayerIds = [
+                'base-light-layer', 'base-sat-layer', 'base-topo-layer',
+                'base-osm-layer', 'base-street-layer', 'base-terrain-layer',
+                'base-ocean-layer', 'base-dark-layer', 'base-google-layer'
+            ];
+            function cambiarMapaBase(selected) {{
+                basemapLayerIds.forEach(id => {{
+                    if (map.getLayer(id)) {{
+                        map.setLayoutProperty(id, 'visibility', (id === selected) ? 'visible' : 'none');
+                    }}
+                }});
+            }}
+            const selBasemapEl = document.getElementById('sel-basemap');
+            if (selBasemapEl) {{
+                selBasemapEl.addEventListener('change', (e) => cambiarMapaBase(e.target.value));
+            }}
+
+            function ajustarOpacidadPoligono(val) {{
+                const pct = parseFloat(val);
+                const lbl = document.getElementById('val-opac-poly');
+                if (lbl) lbl.innerText = Math.round(pct) + '%';
+                if (map.getLayer('layer-poligono-fill')) {{
+                    map.setPaintProperty('layer-poligono-fill', 'fill-opacity', pct / 100.0);
+                }}
+            }}
+
+            function encuadrarVistaInicial() {{
+                if (boundsEncuadre && boundsEncuadre.length === 4) {{
+                    map.fitBounds([
+                        [boundsEncuadre[0], boundsEncuadre[1]],
+                        [boundsEncuadre[2], boundsEncuadre[3]]
+                    ], {{ padding: 48, maxZoom: 13.5, duration: 750 }});
+                }}
+            }}
+
+            const toggleLayerSync = (chkId, layerIds, legId = null) => {{
+                const chk = document.getElementById(chkId);
+                if (chk) {{
+                    chk.addEventListener('change', (e) => {{
+                        const vis = e.target.checked ? 'visible' : 'none';
+                        layerIds.forEach(id => {{
+                            if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+                        }});
+                        if (legId) {{
+                            const leg = document.getElementById(legId);
+                            if (leg) leg.style.display = e.target.checked ? 'block' : 'none';
+                        }}
+                    }});
+                }}
+            }};
+
+            // Leyenda colapsable
+            document.getElementById('legend-toggle').onclick = function() {{
+                const body = document.getElementById('legend-body');
+                const icon = document.getElementById('legend-icon');
+                if (body.classList.contains('collapsed')) {{
+                    body.classList.remove('collapsed');
+                    icon.innerText = '▼';
+                }} else {{
+                    body.classList.add('collapsed');
+                    icon.innerText = '▲';
+                }}
+            }};
+
+            // Buscador rápido Ir a Coordenadas
+            document.getElementById('btn-coords').onclick = () => {{
+                const lat = parseFloat(document.getElementById('coord-lat').value);
+                const lon = parseFloat(document.getElementById('coord-lon').value);
+                const err = document.getElementById('coord-error');
+                if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {{
+                    err.style.display = 'block';
+                    setTimeout(() => {{ err.style.display = 'none'; }}, 3000);
+                    return;
+                }}
+                err.style.display = 'none';
+                if (tempCoordMarker) tempCoordMarker.remove();
+                const pop = new maplibregl.Popup({{ offset: 28, className: 'gis-badge-popup', closeButton: true }})
+                    .setHTML(`<div style="font-size:11px;"><b>📍 Punto Buscado</b><br>Lat: ${{lat.toFixed(5)}}°<br>Lon: ${{lon.toFixed(5)}}°</div>`);
+                tempCoordMarker = new maplibregl.Marker({{ color: '#691C32' }})
+                    .setLngLat([lon, lat])
+                    .setPopup(pop)
+                    .addTo(map);
+                tempCoordMarker.togglePopup();
+                map.flyTo({{ center: [lon, lat], zoom: 12.5 }});
+            }};
+
+            document.getElementById('btn-clear-coord').onclick = () => {{
+                if (tempCoordMarker) {{ tempCoordMarker.remove(); tempCoordMarker = null; }}
+                document.getElementById('coord-lat').value = '';
+                document.getElementById('coord-lon').value = '';
+                document.getElementById('coord-error').style.display = 'none';
+            }};
+
+            map.on('mousemove', (e) => {{
+                document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4);
+                document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4);
+                document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
+            }});
+
+            map.on('load', () => {{
+                // 1. Polígono Oficial del Acuífero
+                if (geojsonPoligono && geojsonPoligono.geometry) {{
+                    map.addSource('src-poligono', {{ type: 'geojson', data: geojsonPoligono }});
+                    map.addLayer({{
+                        id: 'layer-poligono-fill',
+                        type: 'fill',
+                        source: 'src-poligono',
+                        paint: {{ 'fill-color': '#691C32', 'fill-opacity': 0.20 }}
+                    }});
+                    map.addLayer({{
+                        id: 'layer-poligono-line',
+                        type: 'line',
+                        source: 'src-poligono',
+                        paint: {{ 'line-color': '#691C32', 'line-width': 2.4 }}
+                    }});
+                }}
+
+                // 2. REPDA Nacional Completo (Vector Tiles PMTiles)
+                let pmtilesUrlGeo = '{url_pmtiles_srv_geo}';
+                if (!pmtilesUrlGeo.startsWith('http://') && !pmtilesUrlGeo.startsWith('https://')) {{
+                    let baseOrigin = (window.location && window.location.origin && window.location.origin !== 'null') ? window.location.origin : '';
+                    if (!baseOrigin && document.referrer) {{
+                        try {{ baseOrigin = new URL(document.referrer).origin; }} catch (err) {{}}
+                    }}
+                    pmtilesUrlGeo = (baseOrigin || '') + pmtilesUrlGeo;
+                }}
+                map.addSource('repda-nacional-src', {{
+                    type: 'vector',
+                    url: 'pmtiles://' + pmtilesUrlGeo,
+                    minzoom: 4,
+                    maxzoom: 8
+                }});
+                map.addLayer({{
+                    id: 'repda-nacional-layer',
+                    type: 'circle',
+                    source: 'repda-nacional-src',
+                    'source-layer': 'repda',
+                    layout: {{ 'visibility': 'none' }},
+                    paint: {{
+                        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 1.2, 7, 2.5, 10, 4.5, 14, 7.5],
+                        'circle-color': [
+                            'match', ['get', 'u'],
+                            'AGRICOLA', '#16a34a',
+                            'PUBLICO URBANO', '#2563eb',
+                            'DOMESTICO', '#0284c7',
+                            'INDUSTRIAL', '#dc2626',
+                            'SERVICIOS', '#9333ea',
+                            'PECUARIO', '#ca8a04',
+                            'DIFERENTES USOS', '#0d9488',
+                            'ACUACULTURA', '#06b6d4',
+                            'AGROINDUSTRIAL', '#65a30d',
+                            'COMERCIO', '#ea580c',
+                            'ENERGIA ELECTRICA', '#eab308',
+                            '#475569'
+                        ],
+                        'circle-opacity': 0.85,
+                        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 4, 0, 8, 0.4, 11, 1.0],
+                        'circle-stroke-color': '#ffffff'
+                    }}
+                }});
+
+                // 3. Fuentes de Muestreo Hidrogeoquímico (encima del contexto)
+                map.addSource('src-muestras', {{ type: 'geojson', data: geojsonMuestras }});
+                map.addLayer({{
+                    id: 'layer-muestras-circle',
+                    type: 'circle',
+                    source: 'src-muestras',
+                    paint: {{
+                        'circle-radius': ['interpolate', ['linear'], ['zoom'], 5, 5.5, 10, 8.5, 14, 10.5],
+                        'circle-color': ['get', 'color'],
+                        'circle-stroke-width': 2.0,
+                        'circle-stroke-color': '#ffffff'
+                    }}
+                }});
+
+                // Sincronizar checkboxes y leyenda
+                toggleLayerSync('chk-muestras', ['layer-muestras-circle'], 'leg-muestras');
+                toggleLayerSync('chk-acuifero', ['layer-poligono-fill', 'layer-poligono-line'], 'leg-acuifero');
+                toggleLayerSync('chk-repda-nac', ['repda-nacional-layer'], 'leg-repda-nac');
+
+                // Hover tooltip ligero en muestras
+                map.on('mousemove', 'layer-muestras-circle', (e) => {{
+                    if (isDrawingMode()) {{
+                        hoverTooltip.remove();
+                        return;
+                    }}
+                    map.getCanvas().style.cursor = 'pointer';
+                    const p = e.features[0].properties;
+                    hoverTooltip
+                        .setLngLat(e.features[0].geometry.coordinates)
+                        .setHTML(`<b>🧪 ${{p.id}}</b><br><span style="color:#E2E8F0;">${{p.facies}} | ${{p.estatus}}</span>`)
+                        .addTo(map);
+                }});
+                map.on('mouseleave', 'layer-muestras-circle', () => {{
+                    if (!isDrawingMode()) map.getCanvas().style.cursor = '';
+                    hoverTooltip.remove();
+                }});
+
+                // Popup completo al hacer clic en muestras
                 map.on('click', 'layer-muestras-circle', (e) => {{
+                    if (isDrawingMode()) return;
+                    hoverTooltip.remove();
+                    if (popupActivo) popupActivo.remove();
                     const f = e.features[0];
-                    new maplibregl.Popup({{ className: 'gis-badge-popup' }})
+                    popupActivo = new maplibregl.Popup({{ className: 'gis-badge-popup', closeButton: true }})
                         .setLngLat(f.geometry.coordinates)
                         .setHTML(f.properties.popup)
                         .addTo(map);
                 }});
 
-                map.on('mouseenter', 'layer-muestras-circle', () => {{ map.getCanvas().style.cursor = 'pointer'; }});
-                map.on('mouseleave', 'layer-muestras-circle', () => {{ map.getCanvas().style.cursor = ''; }});
+                // Click en concesiones REPDA Nacional
+                map.on('click', 'repda-nacional-layer', (e) => {{
+                    if (isDrawingMode()) return;
+                    const muestrasHit = map.queryRenderedFeatures(e.point, {{ layers: ['layer-muestras-circle'] }});
+                    if (muestrasHit && muestrasHit.length > 0) return;
+                    if (popupActivo) popupActivo.remove();
+                    const p = e.features[0].properties;
+                    const volM3 = p.v ? Number(p.v).toLocaleString('es-MX') : '--';
+                    const volHm3 = p.v ? (Number(p.v) / 1e6).toFixed(3) : '--';
+                    const latFmt = p.la !== undefined ? Number(p.la).toFixed(5) : e.lngLat.lat.toFixed(5);
+                    const lonFmt = p.lo !== undefined ? Number(p.lo).toFixed(5) : e.lngLat.lng.toFixed(5);
+                    popupActivo = new maplibregl.Popup({{ className: 'gis-badge-popup', closeButton: true }})
+                        .setLngLat(e.lngLat)
+                        .setHTML(`
+                            <div style="font-family:'Segoe UI',sans-serif; font-size:11.5px; min-width:220px; line-height:1.45;">
+                                <div style="font-weight:700; color:#166534; font-size:12px; margin-bottom:4px; border-bottom:1.5px solid #166534; padding-bottom:3px; display:flex; justify-content:space-between; align-items:center;">
+                                    <span>🇲🇽 Concesión REPDA Nacional</span>
+                                    <span style="font-size:10px; background:#f1f5f9; color:#475569; padding:1px 5px; border-radius:4px;">${{p.f || '--'}}</span>
+                                </div>
+                                <div style="margin-bottom:3px;"><b>Titular:</b> <span style="color:#0f172a; font-weight:600;">${{p.t || '--'}}</span></div>
+                                ${{p.e ? `<div style="margin-bottom:2px;"><b>Expediente:</b> ${{p.e}}</div>` : ''}}
+                                <div style="margin-bottom:2px;"><b>Uso:</b> <span style="background:#f0fdf4; color:#166534; font-weight:700; padding:1px 5px; border-radius:3px; border:1px solid #bbf7d0;">${{p.u || '--'}}</span></div>
+                                <div style="margin-bottom:2px;"><b>Volumen Anual:</b> <b>${{volM3}}</b> m³/año (${{volHm3}} hm³/año)</div>
+                                <div style="font-size:9.5px; color:#64748b; margin-top:4px;">Coordenadas: ${{latFmt}}° N, ${{lonFmt}}° W</div>
+                            </div>
+                        `)
+                        .addTo(map);
+                }});
+                map.on('mouseenter', 'repda-nacional-layer', () => {{ if (!isDrawingMode()) map.getCanvas().style.cursor = 'pointer'; }});
+                map.on('mouseleave', 'repda-nacional-layer', () => {{ if (!isDrawingMode()) map.getCanvas().style.cursor = ''; }});
 
-                function cambiarBasemap(tipo) {{
-                    map.setStyle(basemaps[tipo]);
-                    map.once('style.load', cargarCapasDatos);
+                // Encuadre automático inicial
+                encuadrarVistaInicial();
+            }});
+
+            map.on('draw.create', (e) => {{
+                if (e.features && e.features[0]) actualizarMedicionCompleta(e.features[0], true);
+                limpiarHerramientasActivas();
+            }});
+            map.on('draw.update', (e) => {{
+                if (e.features && e.features[0]) actualizarMedicionCompleta(e.features[0], false);
+            }});
+            map.on('draw.selectionchange', (e) => {{
+                if (e.features && e.features.length > 0) actualizarMedicionCompleta(e.features[0], true);
+            }});
+            map.on('draw.delete', () => {{
+                document.getElementById('draw-measure-box').style.display = 'none';
+                limpiarRotulosLinea();
+                if (popupDibujoActivo) popupDibujoActivo.remove();
+            }});
+
+            map.on('click', (e) => {{
+                if (modoBufferActivo) {{
+                    const coords = [e.lngLat.lng, e.lngLat.lat];
+                    const radioKm = radioBufferMetros / 1000.0;
+                    const circlePoly = turf.circle(coords, radioKm, {{ steps: 64, units: 'kilometers' }});
+                    const areaHa = (turf.area(circlePoly) / 10000).toFixed(2);
+                    circlePoly.properties = {{
+                        esCirculo: true,
+                        radioM: radioBufferMetros,
+                        areaHa: areaHa
+                    }};
+                    draw.add(circlePoly);
+                    detenerModoBuffer();
+                    actualizarMedicionCompleta(circlePoly, true);
                 }}
-            </script>
-        </body>
-        </html>
-        """
-        st.iframe(html_maplibre, height=680)
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_maplibre, height=680)
 
 # -----------------------------------------------------------------------------
 # TAB 7: EXPORTACIÓN PERICIAL
