@@ -256,6 +256,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             cursor: pointer; transition: background 0.15s ease;
         }
         .btn-focus-aq:hover { background: #F1E8D9 !important; }
+        .docked-reopen-btn {
+            position: absolute; top: 10px; right: 58px; z-index: 8900;
+            display: none; align-items: center; gap: 6px;
+            background: #691C32 !important; color: #ffffff !important;
+            border: 1.5px solid #BC955C !important; border-radius: 999px;
+            padding: 6px 13px; font-size: 12px; font-weight: 600; cursor: pointer;
+            box-shadow: 0 3px 12px rgba(105, 28, 50, 0.35);
+            transition: background 0.15s ease, transform 0.15s ease;
+        }
+        .docked-reopen-btn:hover { background: #4A1424 !important; transform: translateY(-1px); }
+        .search-wrap { position: relative; width: 100%; }
+        .search-wrap input { padding-right: 26px !important; }
+        .btn-clear-search {
+            position: absolute; right: 6px; top: 50%; transform: translateY(-56%);
+            width: 18px; height: 18px; border: none; border-radius: 50%;
+            background: #E2D9C8 !important; color: #691C32 !important;
+            font-size: 13px; font-weight: 700; line-height: 16px; text-align: center;
+            cursor: pointer; display: none; padding: 0;
+        }
+        .btn-clear-search:hover { background: #BC955C !important; color: #ffffff !important; }
 
         /* Tooltip Minimalista (siempre por encima de la ficha lateral) */
         .maplibregl-popup { z-index: 9500 !important; }
@@ -486,7 +506,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         `), 'top-right');
 
         map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), 'top-right');
-        document.getElementById('map').insertAdjacentHTML('beforeend', '<div id="docked-panel" class="docked-panel"></div>');
+        document.getElementById('map').insertAdjacentHTML(
+            'beforeend',
+            '<div id="docked-panel" class="docked-panel"></div>' +
+            '<button type="button" id="btn-reopen-dock" class="docked-reopen-btn" title="Mostrar ficha del acuífero seleccionado">ℹ️ Ver ficha</button>'
+        );
 
         const selectorMapasHtml = CATALOGO_MAPAS.length > 1
             ? `<div class="control-section"><label>Capa Temática:</label><div class="theme-switch" id="catalog-switch">${
@@ -503,7 +527,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 ${selectorMapasHtml}
                 <div class="control-section custom-dropdown">
                     <label>Buscar Acuífero (${totalAq}):</label>
-                    <input type="text" id="search-input" placeholder="-- Escribe clave o nombre --" autocomplete="off">
+                    <div class="search-wrap">
+                        <input type="text" id="search-input" placeholder="-- Escribe clave o nombre --" autocomplete="off">
+                        <button type="button" id="btn-clear-search" class="btn-clear-search" title="Quitar acuífero seleccionado">&times;</button>
+                    </div>
                     <div id="search-list" class="custom-dropdown-list"></div>
                 </div>
                 <div class="control-section">
@@ -641,8 +668,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 </div>
             `;
             panel.style.display = 'flex';
-            panel.querySelector('.docked-close').onclick = clearSelection;
+            const reopenBtn = document.getElementById('btn-reopen-dock');
+            if (reopenBtn) reopenBtn.style.display = 'none';
+            panel.querySelector('.docked-close').onclick = hideDockedPanel;
             panel.querySelector('#btn-focus-aq').onclick = () => triggerSearch(aquiferKey);
+        }
+
+        function hideDockedPanel() {
+            document.getElementById('docked-panel').style.display = 'none';
+            setClickedFeature(null);
+            selectedPolygonProps = null;
+            const reopenBtn = document.getElementById('btn-reopen-dock');
+            if (reopenBtn) reopenBtn.style.display = searchedName ? 'inline-flex' : 'none';
         }
 
         function getVulnFillOpacityExpr() {
@@ -712,7 +749,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (clickedFeatureId !== null) _setLineStateSafe(clickedFeatureId, { selected: true });
         }
 
-        function clearSelection() {
+        function syncClearSearchBtn() {
+            const inp = document.getElementById('search-input');
+            const btn = document.getElementById('btn-clear-search');
+            if (!inp || !btn) return;
+            btn.style.display = (inp.value.trim().length > 0 || searchedName) ? 'block' : 'none';
+        }
+
+        function clearSelection(clearSearchBox = true) {
             setClickedFeature(null);
             searchedClave = null;
             searchedName = null;
@@ -722,15 +766,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 map.setFilter('vuln-search-line', ['==', ['get', 'c'], '__NONE__']);
             }
             document.getElementById('docked-panel').style.display = 'none';
+            const reopenBtn = document.getElementById('btn-reopen-dock');
+            if (reopenBtn) reopenBtn.style.display = 'none';
+            if (clearSearchBox) {
+                const inp = document.getElementById('search-input');
+                if (inp) inp.value = '';
+            }
+            syncClearSearchBtn();
         }
 
         function triggerSearch(aqKey) {
             const meta = AQUIFER_INDEX[aqKey];
             if (!meta) return;
 
-            clearSelection();
+            clearSelection(false);
             searchedClave = meta.clave;
             searchedName = aqKey;
+            const inp = document.getElementById('search-input');
+            if (inp) inp.value = aqKey;
+            syncClearSearchBtn();
 
             if (map.getLayer('vuln-search-fill')) {
                 map.setFilter('vuln-search-fill', ['==', ['get', 'c'], searchedClave]);
@@ -905,9 +959,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const feats = map.queryRenderedFeatures(e.point, { layers: ['vuln-fill'] });
                 if (!feats.length) {
                     setClickedFeature(null);
-                    if (searchedName) {
+                    const panelVisible = document.getElementById('docked-panel').style.display !== 'none';
+                    if (searchedName && panelVisible) {
                         showDockedInfo(searchedName, null);
-                    } else {
+                    } else if (!searchedName) {
                         document.getElementById('docked-panel').style.display = 'none';
                     }
                 }
@@ -996,7 +1051,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 searchList.style.display = count > 0 ? 'block' : 'none';
             }
             searchInput.onfocus = () => renderDropdown(searchInput.value);
-            searchInput.oninput = (e) => renderDropdown(e.target.value);
+            searchInput.oninput = (e) => {
+                syncClearSearchBtn();
+                renderDropdown(e.target.value);
+            };
+            document.getElementById('btn-clear-search').onclick = () => {
+                clearSelection(true);
+                searchList.style.display = 'none';
+                searchInput.focus();
+            };
+            document.getElementById('btn-reopen-dock').onclick = () => {
+                if (searchedName) showDockedInfo(searchedName, null);
+            };
             document.addEventListener('click', (e) => {
                 if (!searchInput.contains(e.target) && !searchList.contains(e.target)) {
                     searchList.style.display = 'none';
