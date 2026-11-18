@@ -129,13 +129,13 @@ def generar_enlace_descarga(data, filename, mime, label, icon="📥"):
     """
 
 # =============================================================================
-# 📂 2. MUESTRAS DE DEMOSTRACIÓN OFICIALES (MEMO CONAGUA JALACINGO / ALTOTONGA)
+# 📂 2. MUESTRAS DE DEMOSTRACIÓN GENÉRICAS
 # =============================================================================
 def obtener_muestras_demostracion():
-    """Genera el dataset de demostración basado en el informe de laboratorio F-PRR1 CONAGUA."""
+    """Genera un set sintético de muestras de demostración para pruebas hidrogeoquímicas."""
     return pd.DataFrame([
         {
-            'Muestra': 'MAN-01_Pancho_Poza',
+            'Muestra': 'MANANTIAL-01',
             'Tipo_Fuente': 'Manantial',
             'Fecha': '2026-10-07',
             'Latitud': 19.7485,
@@ -163,7 +163,7 @@ def obtener_muestras_demostracion():
             'E_Coli': 0.0
         },
         {
-            'Muestra': 'MAN-02_Nixcamalonoa',
+            'Muestra': 'MANANTIAL-02',
             'Tipo_Fuente': 'Manantial',
             'Fecha': '2026-10-07',
             'Latitud': 19.7550,
@@ -191,7 +191,7 @@ def obtener_muestras_demostracion():
             'E_Coli': 0.0
         },
         {
-            'Muestra': 'MAN-03_Techocoapa',
+            'Muestra': 'MANANTIAL-03',
             'Tipo_Fuente': 'Manantial',
             'Fecha': '2026-10-07',
             'Latitud': 19.7610,
@@ -219,7 +219,7 @@ def obtener_muestras_demostracion():
             'E_Coli': 0.0
         },
         {
-            'Muestra': 'MAN-04_Calpulalpan',
+            'Muestra': 'MANANTIAL-04',
             'Tipo_Fuente': 'Manantial',
             'Fecha': '2026-10-07',
             'Latitud': 19.7712,
@@ -247,7 +247,7 @@ def obtener_muestras_demostracion():
             'E_Coli': 17.0  # Alerta biológica
         },
         {
-            'Muestra': 'PZ-01_Jesus_Orozco',
+            'Muestra': 'POZO-01',
             'Tipo_Fuente': 'Pozo Profundo',
             'Fecha': '2026-10-07',
             'Latitud': 19.7820,
@@ -275,7 +275,7 @@ def obtener_muestras_demostracion():
             'E_Coli': 3.0  # Excede NOM-127 (LMP 0)
         },
         {
-            'Muestra': 'PZ-02_Agricola_Sur',
+            'Muestra': 'POZO-02',
             'Tipo_Fuente': 'Pozo Profundo',
             'Fecha': '2026-10-08',
             'Latitud': 19.7315,
@@ -319,29 +319,21 @@ with st.sidebar:
     st.markdown("<p style='font-size:12px; color:#475569;'>Auditoría de calidad del agua, clasificación de facies y evaluación agronómica / normativa.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # 1. Selector de Acuífero Oficial con Auto-detección Inteligente
+    # 1. Selector de Acuífero Oficial
     df_cat = cargar_catalogo()
     clave_sel = None
     nombre_sel = None
 
     if df_cat is not None and not df_cat.empty:
         estados = sorted([str(e) for e in df_cat['ESTADO'].dropna().unique()])
-        idx_edo = estados.index('VERACRUZ') if 'VERACRUZ' in estados else 0
-        edo_sel = st.selectbox("1. Selecciona el Estado:", estados, index=idx_edo, key="sel_edo_hidro")
+        edo_sel = st.selectbox("1. Selecciona el Estado:", estados, index=0, key="sel_edo_hidro")
 
         df_sub = df_cat[df_cat['ESTADO'] == edo_sel]
         col_nom = next((c for c in ['NOM_ACUI', 'ACUÍFERO', 'ACUIFERO', 'NOMBRE_ACUIFERO'] if c in df_sub.columns), df_sub.columns[0])
         col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'cve_num', 'CLAVE'] if c in df_sub.columns), df_sub.columns[1])
         acuiferos = sorted(df_sub[col_nom].dropna().astype(str).unique().tolist())
 
-        # Seleccionar por defecto PEROTE-ZALAYETA si está disponible (coincide con Jalacingo / Altotonga)
-        idx_ac = 0
-        for i_ac, nom_ac_i in enumerate(acuiferos):
-            if "PEROTE" in nom_ac_i.upper():
-                idx_ac = i_ac
-                break
-
-        ac_sel = st.selectbox("2. Acuífero Evaluado:", acuiferos, index=idx_ac, key="sel_ac_hidro")
+        ac_sel = st.selectbox("2. Acuífero Evaluado:", acuiferos, index=0, key="sel_ac_hidro")
 
         match_ac = df_sub[df_sub[col_nom] == ac_sel]
         if not match_ac.empty:
@@ -563,12 +555,8 @@ tab_piper, tab_stiff, tab_riego, tab_gibbs, tab_nom, tab_geo, tab_export = st.ta
 # -----------------------------------------------------------------------------
 with tab_piper:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMA TRILINEAL DE PIPER - CLASIFICACIÓN DE FAMILIAS HIDROGEOQUÍMICAS</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Representación simultánea de cationes (Ca²⁺, Mg²⁺, Na⁺+K⁺) y aniones (HCO₃⁻+CO₃²⁻, SO₄²⁻, Cl⁻) en porcentaje de miliequivalentes por litro (meq/L).
-                El diamante central equilátero proyecta la evolución natural del agua subterránea desde facies bicarbonatadas cálcicas hasta cloruradas sódicas.
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMA TRILINEAL DE PIPER - CLASIFICACIÓN DE FAMILIAS HIDROGEOQUÍMICAS</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -830,17 +818,6 @@ with tab_piper:
             if len(familias_activas) == 0 and not id_aislado:
                 st.info("ℹ️ Sin familias seleccionadas. Activa una familia o pulsa 'Mostrar Todas'.")
 
-            st.markdown("---")
-            st.markdown("<p style='font-size:11.5px; font-weight:700; color:#334155; margin-bottom:6px;'>Guía de Cuadrantes del Diamante Central:</p>", unsafe_allow_html=True)
-            st.markdown("""
-            <div style='font-size:11px; color:#475569; line-height:1.5;'>
-                • <b style='color:#166534;'>Oeste (Bicarbonatada Cálcica/Magnésica):</b> Aguas jóvenes de recarga reciente en zonas de infiltración. Predominio de disolución carbonatada.<br>
-                • <b style='color:#6b21a8;'>Sur (Bicarbonatada Sódica):</b> Aguas sujetas a intercambio catiónico natural (ablandamiento natural en medios arcillosos).<br>
-                • <b style='color:#92400e;'>Norte (Sulfatada/Clorurada Cálcica):</b> Disolución de evaporitas (yeso, anhidrita) o dureza permanente no carbónica.<br>
-                • <b style='color:#991b1b;'>Este (Clorurada/Sulfatada Sódica):</b> Aguas altamente evolucionadas, largo tiempo de residencia, salinas o intrusión marina.
-            </div>
-            """, unsafe_allow_html=True)
-
     with col_p_plot:
         mask_piper = df_procesado['Facies_Piper'].isin(familias_activas)
         if id_aislado:
@@ -879,11 +856,8 @@ with tab_piper:
 # -----------------------------------------------------------------------------
 with tab_stiff:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMAS POLIGONALES DE STIFF Y PERFILES DE SCHÖELLER-BERKALOFF</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Los polígonos de Stiff configuran la huella digital iónica en meq/L para cada captación. El perfil semilogarítmico de Schöeller permite trazar la secuencia de evolución geoquímica hidrogeológica.
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMAS POLIGONALES DE STIFF Y PERFILES DE SCHÖELLER-BERKALOFF</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -909,16 +883,10 @@ with tab_stiff:
 # -----------------------------------------------------------------------------
 with tab_riego:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">EVALUACIÓN AGROCLIMÁTICA Y APTITUD DEL AGUA PARA RIEGO</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Análisis del riesgo de salinización y sodificación del suelo. Integra la <b>Relación de Adsorción de Sodio (RAS / SAR)</b>, el <b>Carbonato de Sodio Residual (CSR)</b>, el diagrama de <b>Wilcox</b> y la clasificación de <b>Riverside (USSL)</b>.
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">EVALUACIÓN AGROCLIMÁTICA Y APTITUD DEL AGUA PARA RIEGO</span>
         </div>
     """, unsafe_allow_html=True)
-
-    if not df_procesado.empty and df_procesado.get('CE_Estimada', pd.Series([False])).any():
-        st.info("ℹ️ **Estimación Teórica de Salinidad:** El archivo cargado no incluye mediciones directas de Conductividad Eléctrica (CE) ni Sólidos Disueltos Totales (SDT). Estos parámetros fueron calculados teóricamente a partir del balance iónico canónico según USGS (*Hem, J.D., 1985, Water-Supply Paper 2254, p. 67*) y *Standard Methods for the Examination of Water and Wastewater* (1030 E). En la tabla diagnóstica se identifican con asterisco (*).")
 
     r_col1, r_col2 = st.columns(2, gap="large")
     with r_col1:
@@ -955,39 +923,20 @@ with tab_riego:
 
         st.dataframe(df_riego_v, width="stretch", hide_index=True)
 
-        if df_procesado.get('CE_Estimada', pd.Series([False])).any():
-            st.caption("🔬 ***Nota Metodológica de Auditoría:** Los valores marcados con asterisco (*) fueron derivados por balance iónico teórico según Hem (1985) y Standard Methods 1030 E, y no corresponden a mediciones electrométricas o gravimétricas directas de laboratorio.")
-        st.caption("ℹ️ **Nota Técnica sobre el Carbonato de Sodio Residual (CSR):** Valores negativos reflejan un exceso benéfico de calcio y magnesio sobre los aniones carbonatados ((Ca+Mg) > (HCO3+CO3)), garantizando nulo riesgo de sodificación alcalina y excelente estabilidad para la estructura del suelo (Eaton, 1950; USDA Handbook 60).")
-
 # -----------------------------------------------------------------------------
 # TAB 4: GÉNESIS GEOQUÍMICA (GIBBS)
 # -----------------------------------------------------------------------------
 with tab_gibbs:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMA DE GIBBS Y RELACIONES MOLARES GEOQUÍMICAS</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Identificación del proceso rector de adquisición de solutos: <b>Precipitación / Lluvia</b>, <b>Interacción Agua-Roca (Meteorización de Silicatos y Carbonatos)</b> o <b>Evaporación / Salinidad</b>.
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DIAGRAMA DE GIBBS Y RELACIONES MOLARES GEOQUÍMICAS</span>
         </div>
     """, unsafe_allow_html=True)
-
-    if not df_procesado.empty and df_procesado.get('SDT_Estimado', pd.Series([False])).any():
-        st.info("ℹ️ **Estimación Teórica de Sólidos Disueltos Totales (SDT):** La concentración de SDT fue estimada por suma iónica de residuo seco con pérdida térmica de bicarbonato a 180 °C (factor estequiométrico 0.4917) según USGS (*Hem, J.D., 1985, Water-Supply Paper 2254, p. 67*) y *Standard Methods* 1030 E para su proyección en el eje logarítmico del Diagrama de Gibbs (1970).")
 
     html_gibbs = generar_diagrama_gibbs_d3(df_procesado)
     st.iframe(html_gibbs, height=540)
 
     with st.expander("🔍 Auditoría de Relaciones Iónicas Molares e Índice de Revelle", expanded=True):
-        st.markdown("""
-            <div style="font-size:12px; color:#334155; line-height:1.5; margin-bottom:10px;">
-                • <b>Relación Na⁺ / Cl⁻:</b> Valores ≈ 1.0 evidencian disolución de halita (NaCl). Valores > 1.0 denotan meteorización de silicatos de sodio (albita) o intercambio catiónico natural.<br>
-                • <b>Relación Ca²⁺ / SO₄²⁻:</b> Valores ≈ 1.0 evidencian disolución de yeso (CaSO₄·2H₂O) o anhidrita.<br>
-                • <b>Relación (Ca²⁺ + Mg²⁺) / HCO₃⁻:</b> Evalúa la disolución de carbonatos (calcita y dolomita).<br>
-                • <b>Índice de Revelle (Cl⁻ / HCO₃⁻):</b> Trazador oficial de salinización e intrusión marina (< 1.0 continental no afectada; 1.0 a 2.8 ligera; > 6.6 intrusión crítica).
-            </div>
-        """, unsafe_allow_html=True)
-
         cols_geoq = ['Muestra', 'Tipo_Fuente', 'rNa_rCl', 'rCa_rSO4', 'rCaMg_rHCO3', 'rMg_rCa', 'Indice_Revelle', 'Clasif_Revelle']
         c_g_pres = [c for c in cols_geoq if c in df_procesado.columns]
         df_geo_v = df_procesado[c_g_pres].copy()
@@ -1008,12 +957,8 @@ with tab_gibbs:
 # -----------------------------------------------------------------------------
 with tab_nom:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">AUDITORÍA PERICIAL NOM-127-SSA1-2021 (AGUA PARA USO Y CONSUMO HUMANO)</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Evaluación automatizada frente a los Límites Máximos Permisibles (LMP) de la Norma Oficial Mexicana vigente.
-                Incluye metales tóxicos (Arsénico ≤ 0.010 mg/L, Plomo ≤ 0.010 mg/L, Fluoruros ≤ 1.5 mg/L), parámetros estéticos (SDT, Dureza, Hierro, Manganeso) y microbiológicos (E. coli).
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">AUDITORÍA PERICIAL NOM-127-SSA1-2021 (AGUA PARA USO Y CONSUMO HUMANO)</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1061,11 +1006,8 @@ with tab_nom:
 # -----------------------------------------------------------------------------
 with tab_geo:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 12px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DISTRIBUCIÓN ESPACIAL DE FUENTES DE MONITOREO Y CALIDAD DEL AGUA</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Georreferenciación de pozos y manantiales sobre el acuífero oficial. Plataforma MapLibre GL 3.6.2 WebGL sin marcas de agua de terceros, con soporte de capas base y análisis hidrogeoquímico.
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">DISTRIBUCIÓN ESPACIAL DE FUENTES DE MONITOREO Y CALIDAD DEL AGUA</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1450,11 +1392,8 @@ with tab_geo:
 # -----------------------------------------------------------------------------
 with tab_export:
     st.markdown("""
-        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">CENTRO DE EXPORTACIÓN Y REPORTES PERICIALES (CERO-RERUN)</span><br>
-            <span style="font-size: 11.5px; color: #475569;">
-                Descarga de bases de datos completas procesadas con balances iónicos, clasificaciones agronómicas y dictamen de calidad para Google Earth (Móvil/Desktop) y SIG.
-            </span>
+        <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 14px;">
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">CENTRO DE EXPORTACIÓN Y REPORTES PERICIALES (CERO-RERUN)</span>
         </div>
     """, unsafe_allow_html=True)
 
