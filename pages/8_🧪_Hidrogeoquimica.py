@@ -316,7 +316,7 @@ if "df_hidro_raw" not in st.session_state:
 # =============================================================================
 with st.sidebar:
     st.markdown("<h3 style='color:#691C32; margin-top:0;'>🧪 Módulo Hidrogeoquímico</h3>", unsafe_allow_html=True)
-    st.markdown("<p style='font-size:12px; color:#475569;'>Auditoría de calidad del agua, clasificación de facies y evaluación agronómica / normativa.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='font-size:12px; color:#475569;'>Análisis de calidad del agua, clasificación de facies y evaluación agronómica / normativa.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     # 1. Selector de Acuífero Oficial
@@ -449,12 +449,9 @@ st.markdown(f"""
     <div style="background: linear-gradient(135deg, #f8fafc 0%, #edf2f7 100%); border-left: 5px solid #691C32; padding: 14px 20px; border-radius: 8px; margin-bottom: 16px;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
             <div>
-                <h3 style="color: #691C32; margin: 0 0 4px 0; font-size: 20px; font-weight: 700;">
+                <h3 style="color: #691C32; margin: 0; font-size: 20px; font-weight: 700;">
                     🧪 Plataforma Integral de Hidrogeoquímica y Calidad del Agua Subterránea
                 </h3>
-                <p style="margin: 0; color: #475569; font-size: 13px;">
-                    Acuífero Oficial: <b>{clave_sel or 'N/D'} - {nombre_sel or 'General'}</b> | Marco Normativo: <b>NOM-127-SSA1-2021</b> y Estándares OMM / UNESCO
-                </p>
             </div>
             <div>
                 <span style="background: {'#166534' if not st.session_state.get('es_demostracion_hidro') else '#0369a1'}; color: white; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;">
@@ -545,7 +542,7 @@ tab_piper, tab_stiff, tab_riego, tab_gibbs, tab_nom, tab_geo, tab_export = st.ta
     "📉 Huella Iónica (Stiff / Schöeller)",
     "🌾 Aptitud para Riego",
     "🌍 Génesis Geoquímica (Gibbs)",
-    "🚨 Auditoría NOM-127-SSA1-2021",
+    "🚨 Evaluación NOM-127-SSA1-2021",
     "🗺️ Geovisor Espacial",
     "💾 Exportación Pericial"
 ])
@@ -936,7 +933,7 @@ with tab_gibbs:
     html_gibbs = generar_diagrama_gibbs_d3(df_procesado)
     st.iframe(html_gibbs, height=540)
 
-    with st.expander("🔍 Auditoría de Relaciones Iónicas Molares e Índice de Revelle", expanded=True):
+    with st.expander("🔍 Relaciones Iónicas Molares e Índice de Revelle", expanded=True):
         cols_geoq = ['Muestra', 'Tipo_Fuente', 'rNa_rCl', 'rCa_rSO4', 'rCaMg_rHCO3', 'rMg_rCa', 'Indice_Revelle', 'Clasif_Revelle']
         c_g_pres = [c for c in cols_geoq if c in df_procesado.columns]
         df_geo_v = df_procesado[c_g_pres].copy()
@@ -958,7 +955,7 @@ with tab_gibbs:
 with tab_nom:
     st.markdown("""
         <div style="background-color: #f8fafc; border-left: 4px solid #691C32; padding: 8px 14px; border-radius: 4px; margin-bottom: 12px;">
-            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">AUDITORÍA PERICIAL NOM-127-SSA1-2021 (AGUA PARA USO Y CONSUMO HUMANO)</span>
+            <span style="font-weight: 700; color: #691C32; font-size: 13.5px;">EVALUACIÓN NOM-127-SSA1-2021 (AGUA PARA USO Y CONSUMO HUMANO)</span>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1422,7 +1419,7 @@ with tab_export:
         if tiene_coords:
             bytes_kmz = generar_kmz_hidrogeoquimico(df_valid_geo, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial", poligono_geojson)
             btn_kmz = generar_enlace_descarga(
-                bytes_kmz, f"auditoria_hidroquimica_{clave_sel or 'acuifero'}.kmz",
+                bytes_kmz, f"hidroquimica_{clave_sel or 'acuifero'}.kmz",
                 "application/vnd.google-earth.kmz", "Descargar Paquete KMZ (.kmz)", icon="🌐"
             )
             st.markdown(btn_kmz, unsafe_allow_html=True)
@@ -1467,7 +1464,7 @@ with tab_export:
         """, unsafe_allow_html=True)
         bytes_excel_res = generar_reporte_excel_hidrogeoquimico(df_procesado, df_auditoria, clave_sel or "Acuifero", nombre_sel or "Oficial")
         btn_excel = generar_enlace_descarga(
-            bytes_excel_res, f"Informe_Pericial_Hidroquimico_{clave_sel or 'Acuifero'}.xlsx",
+            bytes_excel_res, f"Informe_Hidroquimico_{clave_sel or 'Acuifero'}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Descargar Libro Excel (.xlsx)", icon="📊"
         )
