@@ -2267,12 +2267,43 @@ with tab_geo:
                 }}
             }}
 
-            function encuadrarVistaInicial() {{
+            function encuadrarVistaInicial(inmediato = false) {{
                 if (boundsEncuadre && boundsEncuadre.length === 4) {{
+                    const el = document.getElementById('map');
+                    if (!el || el.clientWidth < 100 || el.clientHeight < 100) return;
                     map.fitBounds([
                         [boundsEncuadre[0], boundsEncuadre[1]],
                         [boundsEncuadre[2], boundsEncuadre[3]]
-                    ], {{ padding: 48, maxZoom: 13.5, duration: 750 }});
+                    ], {{ padding: 48, maxZoom: 13.5, duration: inmediato ? 0 : 750 }});
+                }}
+            }}
+
+            let _ultimoAnchoVisor = 0;
+            let _ultimoAltoVisor = 0;
+            let _pendienteEncuadreInicial = true;
+
+            function _asegurarTamanoVisor(forzarEncuadre = false) {{
+                const mapEl = document.getElementById('map');
+                if (!mapEl) return;
+                const w = mapEl.clientWidth || 0;
+                const h = mapEl.clientHeight || 0;
+                if (w < 100 || h < 100) return;
+                const canvasEl = map.getCanvas();
+                const canvasDesfasado = canvasEl && (Math.abs((canvasEl.clientWidth || 0) - w) > 2 || Math.abs((canvasEl.clientHeight || 0) - h) > 2);
+                const tamanoCambio = (w !== _ultimoAnchoVisor || h !== _ultimoAltoVisor);
+                const veniaDeOculto = (_ultimoAnchoVisor < 100 || _ultimoAltoVisor < 100);
+                if (tamanoCambio || canvasDesfasado) {{
+                    _ultimoAnchoVisor = w;
+                    _ultimoAltoVisor = h;
+                    map.resize();
+                    if (veniaDeOculto || canvasDesfasado || _pendienteEncuadreInicial || forzarEncuadre) {{
+                        _pendienteEncuadreInicial = false;
+                        encuadrarVistaInicial(true);
+                    }}
+                }} else if (forzarEncuadre || _pendienteEncuadreInicial) {{
+                    _pendienteEncuadreInicial = false;
+                    map.resize();
+                    encuadrarVistaInicial(true);
                 }}
             }}
 
@@ -2493,8 +2524,30 @@ with tab_geo:
                 map.on('mouseenter', 'repda-nacional-layer', () => {{ if (!isDrawingMode()) map.getCanvas().style.cursor = 'pointer'; }});
                 map.on('mouseleave', 'repda-nacional-layer', () => {{ if (!isDrawingMode()) map.getCanvas().style.cursor = ''; }});
 
-                // Encuadre automático inicial
-                encuadrarVistaInicial();
+                // Encuadre automático inicial + observadores de visibilidad / cambio de pestaña
+                _asegurarTamanoVisor(true);
+            }});
+
+            const _mapDomEl = document.getElementById('map');
+            if (_mapDomEl && typeof ResizeObserver !== 'undefined') {{
+                const _roVisor = new ResizeObserver(() => {{ _asegurarTamanoVisor(false); }});
+                _roVisor.observe(_mapDomEl);
+                _roVisor.observe(document.body);
+            }}
+            if (_mapDomEl && typeof IntersectionObserver !== 'undefined') {{
+                const _ioVisor = new IntersectionObserver((entries) => {{
+                    entries.forEach(entry => {{
+                        if (entry.isIntersecting) {{
+                            setTimeout(() => _asegurarTamanoVisor(false), 30);
+                            setTimeout(() => _asegurarTamanoVisor(false), 180);
+                        }}
+                    }});
+                }}, {{ threshold: 0.05 }});
+                _ioVisor.observe(_mapDomEl);
+            }}
+            window.addEventListener('resize', () => _asegurarTamanoVisor(false));
+            document.addEventListener('visibilitychange', () => {{
+                if (!document.hidden) setTimeout(() => _asegurarTamanoVisor(false), 60);
             }});
 
             map.on('draw.create', (e) => {{
