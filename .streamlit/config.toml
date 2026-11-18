@@ -25,4 +25,3 @@ showErrorDetails = true
 maxUploadSize = 500
 enableStaticServing = true
 runOnSave = true
-headless = false
