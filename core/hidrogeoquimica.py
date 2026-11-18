@@ -1396,7 +1396,7 @@ def generar_plantilla_excel_hidroquimica():
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_ejemplo = pd.DataFrame([
             {
-                'Muestra': 'MAN-01_Pancho_Poza',
+                'Muestra': 'MANANTIAL-01',
                 'Tipo_Fuente': 'Manantial',
                 'Fecha': '2026-10-07',
                 'Latitud': 19.7485,
@@ -1424,7 +1424,7 @@ def generar_plantilla_excel_hidroquimica():
                 'E_Coli': 0.0
             },
             {
-                'Muestra': 'MAN-02_Techocoapa',
+                'Muestra': 'MANANTIAL-02',
                 'Tipo_Fuente': 'Manantial',
                 'Fecha': '2026-10-07',
                 'Latitud': 19.7610,
@@ -1452,7 +1452,7 @@ def generar_plantilla_excel_hidroquimica():
                 'E_Coli': 0.0
             },
             {
-                'Muestra': 'PZ-01_Jesus_Orozco',
+                'Muestra': 'POZO-01',
                 'Tipo_Fuente': 'Pozo Profundo',
                 'Fecha': '2026-10-07',
                 'Latitud': 19.7820,
@@ -1480,7 +1480,7 @@ def generar_plantilla_excel_hidroquimica():
                 'E_Coli': 3.0  # No conforme microbiológico
             },
             {
-                'Muestra': 'PZ-02_Agricola_Sur',
+                'Muestra': 'POZO-02',
                 'Tipo_Fuente': 'Pozo Profundo',
                 'Fecha': '2026-10-08',
                 'Latitud': 19.7315,
