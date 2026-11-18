@@ -311,6 +311,9 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           <button class="btn-toolbar active" id="btn-diamond-labels" onclick="toggleDiamondLabels()" title="Mostrar/Ocultar Rótulos de Ejes del Rombo">
             <span>🏷️ Rótulos Ejes</span>
           </button>
+          <button class="btn-toolbar active" id="btn-piper-rayos" onclick="toggleRayosPiper()" title="Mostrar/Ocultar Líneas de Proyección Trilineal">
+            <span>📐 Rayos</span>
+          </button>
           <span id="zoom-level" style="font-size:11px; font-weight:600; color:#64748b; margin: 0 2px;">100%</span>
           <button class="btn-toolbar" onclick="descargarSVG()" title="Exportar vector SVG original"><span>📥 SVG</span></button>
           <button class="btn-toolbar" onclick="descargarPNG()" title="Exportar imagen de alta resolución (300 DPI)"><span>📷 PNG</span></button>
@@ -818,6 +821,16 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           }}
         }}
 
+        let rayosVisible = true;
+        function toggleRayosPiper() {{
+          rayosVisible = !rayosVisible;
+          d3.select("#connections-group")
+            .style("display", rayosVisible ? "block" : "none")
+            .attr("display", rayosVisible ? "inline" : "none");
+          const btn = document.getElementById("btn-piper-rayos");
+          if (btn) btn.classList.toggle("active", rayosVisible);
+        }}
+
         // Lupa de Aumento Dinámica (2.5x)
         const lensGroup = svg.append("g").attr("id", "lens-group").style("display", "none").style("pointer-events", "none");
         const lensRadius = 85;
@@ -915,6 +928,10 @@ def generar_diagrama_piper_d3(df_procesado, muestra_aislada=None):
           
           const cloneLens = clone.querySelector("#lens-group");
           if (cloneLens) cloneLens.remove();
+          if (!rayosVisible) {{
+            const cloneConn = clone.querySelector("#connections-group");
+            if (cloneConn) cloneConn.remove();
+          }}
 
           const cloneZoom = clone.querySelector("#zoom-group");
           if (cloneZoom) {{
