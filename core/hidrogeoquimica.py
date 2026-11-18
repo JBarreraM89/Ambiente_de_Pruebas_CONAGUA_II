@@ -1562,7 +1562,7 @@ def generar_kmz_hidrogeoquimico(df_procesado, df_auditoria=None, clave_ac="Acuif
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<kml xmlns="http://www.opengis.net/kml/2.2">',
         '<Document>',
-        f'  <name>Auditoría Hidrogeoquímica - {html.escape(str(nom_ac))} ({clave_ac})</name>',
+        f'  <name>Análisis Hidrogeoquímico - {html.escape(str(nom_ac))} ({clave_ac})</name>',
         '  <open>1</open>',
         '  <LookAt>',
         f'    <longitude>{c_lon:.6f}</longitude>',
