@@ -1196,9 +1196,6 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
           <button class="btn-toolbar" onclick="resetTamanoTarjetas()" title="Restablecer tamaño normal">
             <span>🔄</span> Normal
           </button>
-          <button class="btn-toolbar active" id="btn-stiff-guias" onclick="toggleLineasGuia()" title="Ocultar o mostrar ejes horizontales, eje central y retícula">
-            <span>📏</span> Líneas Guía
-          </button>
           <div style="height: 18px; width: 1px; background: #cbd5e1; margin: 0 4px;"></div>
           <button class="btn-toolbar" onclick="descargarMosaicoSVG()">
             <span>📥</span> Mosaico SVG
@@ -1215,17 +1212,6 @@ def generar_diagrama_stiff_d3(df_procesado, muestra_sel=None):
       <script>
         const data = {json_stiff};
         let curMinW = 440;
-        let mostrarLineasGuia = true;
-
-        function toggleLineasGuia() {{
-          mostrarLineasGuia = !mostrarLineasGuia;
-          const btn = document.getElementById('btn-stiff-guias');
-          if (btn) btn.classList.toggle('active', mostrarLineasGuia);
-          document.querySelectorAll('#stiff-grid-container .axis-line, #stiff-grid-container .center-axis, #stiff-grid-container .grid-tick').forEach(el => {{
-            el.setAttribute('display', mostrarLineasGuia ? 'inline' : 'none');
-            el.style.display = mostrarLineasGuia ? '' : 'none';
-          }});
-        }}
 
         function cambiarTamanoTarjetas(delta) {{
           curMinW = Math.max(300, Math.min(800, curMinW + delta));
