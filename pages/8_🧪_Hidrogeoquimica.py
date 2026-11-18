@@ -306,11 +306,137 @@ def obtener_muestras_demostracion():
     ])
 
 # =============================================================================
-# 📌 3. GESTIÓN DE SESIÓN Y CARGA DE DATOS
+# 📌 3. GESTIÓN DE SESIÓN, AUTODETECCIÓN ESPACIAL Y LIMPIEZA INTEGRAL
 # =============================================================================
 if "df_hidro_raw" not in st.session_state:
     st.session_state["df_hidro_raw"] = pd.DataFrame()
     st.session_state["es_demostracion_hidro"] = False
+if "hidro_uploader_key" not in st.session_state:
+    st.session_state["hidro_uploader_key"] = 0
+if "hidro_ultimo_archivo_sig" not in st.session_state:
+    st.session_state["hidro_ultimo_archivo_sig"] = None
+if "hidro_acuifero_auto_msg" not in st.session_state:
+    st.session_state["hidro_acuifero_auto_msg"] = None
+
+# Aplicar selección/limpieza pendiente de Estado y Acuífero ANTES de instanciar selectboxes
+_pending_ac_hidro = st.session_state.pop("_hidro_pending_edo_ac", "__UNSET__")
+if _pending_ac_hidro != "__UNSET__":
+    _edo_p, _ac_p = _pending_ac_hidro
+    st.session_state["sel_edo_hidro"] = _edo_p
+    st.session_state["sel_ac_hidro"] = _ac_p
+
+_HIDRO_TAB_FILTER_KEYS = [
+    "piper_familias_dataset_cache",
+    "piper_familias_activas",
+    "sel_piper_muestra_aislada",
+    "sel_stiff_focus",
+    "radio_filtro_nom127",
+    "radio_geo_criterio",
+]
+
+def _limpiar_filtros_tabs_hidro():
+    for _k in _HIDRO_TAB_FILTER_KEYS:
+        st.session_state.pop(_k, None)
+
+def _cb_limpiar_todo_hidro():
+    st.session_state["df_hidro_raw"] = pd.DataFrame()
+    st.session_state["es_demostracion_hidro"] = False
+    st.session_state["hidro_ultimo_archivo_sig"] = None
+    st.session_state["hidro_acuifero_auto_msg"] = None
+    st.session_state["hidro_uploader_key"] = st.session_state.get("hidro_uploader_key", 0) + 1
+    st.session_state.pop("sel_edo_hidro", None)
+    st.session_state.pop("sel_ac_hidro", None)
+    st.session_state.pop("_hidro_pending_edo_ac", None)
+    _limpiar_filtros_tabs_hidro()
+
+def auto_identificar_acuifero_hidro(df_mapeado, df_cat):
+    """Identifica el acuífero oficial mayoritario a partir de coordenadas decimales WGS84."""
+    if df_mapeado is None or df_mapeado.empty:
+        return None
+    if 'Latitud' not in df_mapeado.columns or 'Longitud' not in df_mapeado.columns:
+        return None
+
+    lats = pd.to_numeric(df_mapeado['Latitud'], errors='coerce')
+    lons = pd.to_numeric(df_mapeado['Longitud'], errors='coerce')
+    mask_val = lats.between(-90.0, 90.0) & lons.between(-180.0, 180.0) & (lats.abs() > 0.0) & (lons.abs() > 0.0)
+    if not mask_val.any():
+        return None
+
+    try:
+        gdf_maestro = cargar_datos_maestros()
+        if gdf_maestro is None or gdf_maestro.empty:
+            return None
+        if gdf_maestro.crs is None:
+            gdf_maestro = gdf_maestro.set_crs(epsg=4326)
+
+        conteos = {}
+        meta_gdf = {}
+        for la, lo in zip(lats[mask_val], lons[mask_val]):
+            pt_geom = Point(float(lo), float(la))
+            idx_pos = list(gdf_maestro.sindex.intersection(pt_geom.bounds))
+            if not idx_pos:
+                idx_pos = list(gdf_maestro.sindex.intersection(pt_geom.buffer(0.005).bounds))
+            if not idx_pos:
+                continue
+            cand = gdf_maestro.iloc[idx_pos]
+            hits = cand[cand.geometry.contains(pt_geom)]
+            if hits.empty:
+                hits = cand[cand.geometry.intersects(pt_geom.buffer(0.001))]
+            if hits.empty:
+                continue
+            fila = hits.iloc[0]
+            cve = normalizar_clave(fila.get('CLV_ACUI', fila.get('CLAVE_SIGM', '')))
+            if not cve:
+                continue
+            conteos[cve] = conteos.get(cve, 0) + 1
+            if cve not in meta_gdf:
+                meta_gdf[cve] = {
+                    "estado": str(fila.get('NOM_EDO', fila.get('ESTADO', ''))).strip(),
+                    "nombre": str(fila.get('NOM_ACUI', fila.get('ACUÍFERO', ''))).strip(),
+                }
+
+        if not conteos:
+            return None
+
+        cve_ganadora = max(conteos.keys(), key=lambda c: conteos[c])
+        edo_final = meta_gdf[cve_ganadora]["estado"]
+        nom_final = meta_gdf[cve_ganadora]["nombre"]
+
+        # Emparejar con las etiquetas exactas del catálogo usado por los selectbox
+        if df_cat is not None and not df_cat.empty:
+            col_nom = next((c for c in ['NOM_ACUI', 'ACUÍFERO', 'ACUIFERO', 'NOMBRE_ACUIFERO'] if c in df_cat.columns), df_cat.columns[0])
+            col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'cve_num', 'CLAVE'] if c in df_cat.columns), df_cat.columns[1])
+            match_cat = df_cat[df_cat[col_cve].apply(normalizar_clave) == cve_ganadora]
+            if not match_cat.empty:
+                r_cat = match_cat.iloc[0]
+                edo_final = str(r_cat.get('ESTADO', edo_final)).strip()
+                nom_final = str(r_cat.get(col_nom, nom_final)).strip()
+
+        return {"clave": cve_ganadora, "nombre": nom_final, "estado": edo_final, "conteo": conteos[cve_ganadora]}
+    except Exception:
+        return None
+
+def _registrar_dataset_hidro(df_nuevo, es_demo, df_cat, archivo_sig=None, bump_uploader=False):
+    """Carga un dataset nuevo, limpia filtros/acuífero previos y autodetecta acuífero si hay coordenadas."""
+    _limpiar_filtros_tabs_hidro()
+    st.session_state["df_hidro_raw"] = df_nuevo
+    st.session_state["es_demostracion_hidro"] = bool(es_demo)
+    st.session_state["hidro_ultimo_archivo_sig"] = archivo_sig
+    if bump_uploader:
+        st.session_state["hidro_uploader_key"] = st.session_state.get("hidro_uploader_key", 0) + 1
+
+    df_norm_tmp = mapear_dataframe_hidroquimico(df_nuevo) if df_nuevo is not None and not df_nuevo.empty else pd.DataFrame()
+    det = auto_identificar_acuifero_hidro(df_norm_tmp, df_cat)
+    if det:
+        st.session_state["_hidro_pending_edo_ac"] = (det["estado"], det["nombre"])
+        st.session_state["hidro_acuifero_auto_msg"] = f"📍 Acuífero autodetectado: **{det['clave']} - {det['nombre']}** ({det['estado']})."
+    else:
+        st.session_state["_hidro_pending_edo_ac"] = (None, None)
+        st.session_state["hidro_acuifero_auto_msg"] = None
+
+def _cb_cargar_demo_hidro():
+    _df_cat = cargar_catalogo()
+    _registrar_dataset_hidro(obtener_muestras_demostracion(), es_demo=True, df_cat=_df_cat, archivo_sig=None, bump_uploader=True)
 
 # =============================================================================
 # 🎛️ 4. BARRA LATERAL (INGESTA Y CONTROL DE MUESTRAS)
@@ -320,55 +446,78 @@ with st.sidebar:
     st.markdown("<p style='font-size:12px; color:#475569;'>Análisis de calidad del agua, clasificación de facies y evaluación agronómica / normativa.</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # 1. Selector de Acuífero Oficial
+    # 1. Selector de Acuífero Oficial (sin selección por defecto fantasma)
     df_cat = cargar_catalogo()
     clave_sel = None
     nombre_sel = None
 
     if df_cat is not None and not df_cat.empty:
         estados = sorted([str(e) for e in df_cat['ESTADO'].dropna().unique()])
-        edo_sel = st.selectbox("1. Selecciona el Estado:", estados, index=0, key="sel_edo_hidro")
+        edo_sel = st.selectbox(
+            "1. Selecciona el Estado:",
+            estados,
+            index=None,
+            placeholder="Elige un estado...",
+            key="sel_edo_hidro"
+        )
 
-        df_sub = df_cat[df_cat['ESTADO'] == edo_sel]
-        col_nom = next((c for c in ['NOM_ACUI', 'ACUÍFERO', 'ACUIFERO', 'NOMBRE_ACUIFERO'] if c in df_sub.columns), df_sub.columns[0])
-        col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'cve_num', 'CLAVE'] if c in df_sub.columns), df_sub.columns[1])
-        acuiferos = sorted(df_sub[col_nom].dropna().astype(str).unique().tolist())
+        acuiferos = []
+        df_sub = pd.DataFrame()
+        col_nom = next((c for c in ['NOM_ACUI', 'ACUÍFERO', 'ACUIFERO', 'NOMBRE_ACUIFERO'] if c in df_cat.columns), df_cat.columns[0])
+        col_cve = next((c for c in ['CLV_ACUI', 'CLAVE_SIGM', 'cve_num', 'CLAVE'] if c in df_cat.columns), df_cat.columns[1])
+        if edo_sel:
+            df_sub = df_cat[df_cat['ESTADO'] == edo_sel]
+            acuiferos = sorted(df_sub[col_nom].dropna().astype(str).unique().tolist())
 
-        ac_sel = st.selectbox("2. Acuífero Evaluado:", acuiferos, index=0, key="sel_ac_hidro")
+        ac_sel = st.selectbox(
+            "2. Acuífero Evaluado:",
+            acuiferos,
+            index=None,
+            placeholder="Elige un acuífero...",
+            key="sel_ac_hidro"
+        )
 
-        match_ac = df_sub[df_sub[col_nom] == ac_sel]
-        if not match_ac.empty:
-            clave_sel = normalizar_clave(match_ac.iloc[0][col_cve])
-            nombre_sel = ac_sel
+        if edo_sel and ac_sel and not df_sub.empty:
+            match_ac = df_sub[df_sub[col_nom] == ac_sel]
+            if not match_ac.empty:
+                clave_sel = normalizar_clave(match_ac.iloc[0][col_cve])
+                nombre_sel = ac_sel
+
+        if st.session_state.get("hidro_acuifero_auto_msg"):
+            st.caption(st.session_state["hidro_acuifero_auto_msg"])
 
     st.markdown("---")
 
     # 2. Panel de Ingesta y Plantilla Excel
     st.markdown("<p style='font-weight:700; color:#691C32; font-size:13px; margin-bottom:4px;'>📥 CARGA DE DATOS DE LABORATORIO</p>", unsafe_allow_html=True)
+    _up_ver = st.session_state.get("hidro_uploader_key", 0)
     archivo_subido = st.file_uploader(
         "Subir análisis (Excel .xlsx / CSV):",
         type=['xlsx', 'xls', 'csv'],
-        key="file_uploader_hidro",
-        help="El sistema mapea automáticamente los nombres de columnas de cualquier laboratorio (Ca, Mg, Na, K, HCO3, Cl, SO4, As, Pb, etc.)."
+        key=f"file_uploader_hidro_{_up_ver}",
+        help="Mapea automáticamente iones y parámetros (Ca, Mg, Na, K, HCO3, Cl, SO4, As, Pb, etc.). Si incluye georreferenciación, ingresa 'Latitud' y 'Longitud' en grados decimales WGS84 (ej. 19.7485, -97.2452) para ubicar en mapa y autodetectar el acuífero."
     )
 
     if archivo_subido is not None:
-        try:
-            if archivo_subido.name.lower().endswith(('.xlsx', '.xls')):
-                df_cargado = pd.read_excel(archivo_subido)
-            else:
-                try:
-                    contenido_raw = archivo_subido.getvalue().decode('utf-8-sig')
-                except Exception:
-                    contenido_raw = archivo_subido.getvalue().decode('latin1', errors='replace')
-                df_cargado = parse_concatenated_csv(contenido_raw)
+        sig_subido = (getattr(archivo_subido, "file_id", None), archivo_subido.name, getattr(archivo_subido, "size", None))
+        if sig_subido != st.session_state.get("hidro_ultimo_archivo_sig"):
+            try:
+                if archivo_subido.name.lower().endswith(('.xlsx', '.xls')):
+                    df_cargado = pd.read_excel(archivo_subido)
+                else:
+                    try:
+                        contenido_raw = archivo_subido.getvalue().decode('utf-8-sig')
+                    except Exception:
+                        contenido_raw = archivo_subido.getvalue().decode('latin1', errors='replace')
+                    df_cargado = parse_concatenated_csv(contenido_raw)
 
-            if not df_cargado.empty:
-                st.session_state["df_hidro_raw"] = df_cargado
-                st.session_state["es_demostracion_hidro"] = False
-                st.success(f"✅ Archivo cargado con éxito ({len(df_cargado)} muestras identificadas).")
-        except Exception as e_carga:
-            st.error(f"Error al leer el archivo: {e_carga}")
+                if not df_cargado.empty:
+                    _registrar_dataset_hidro(df_cargado, es_demo=False, df_cat=df_cat, archivo_sig=sig_subido, bump_uploader=False)
+                    st.rerun()
+            except Exception as e_carga:
+                st.error(f"Error al leer el archivo: {e_carga}")
+        elif not st.session_state.get("df_hidro_raw", pd.DataFrame()).empty:
+            st.success(f"✅ Archivo cargado con éxito ({len(st.session_state['df_hidro_raw'])} muestras identificadas).")
 
     # Descarga de Plantilla Oficial
     st.markdown("<div style='margin-top:10px;'></div>", unsafe_allow_html=True)
@@ -383,15 +532,9 @@ with st.sidebar:
 
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
-        if st.button("🧪 Cargar Demo", key="btn_demo_hidro", use_container_width=True, help="Carga datos de demostración oficiales"):
-            st.session_state["df_hidro_raw"] = obtener_muestras_demostracion()
-            st.session_state["es_demostracion_hidro"] = True
-            st.rerun()
+        st.button("🧪 Cargar Demo", key="btn_demo_hidro", use_container_width=True, on_click=_cb_cargar_demo_hidro, help="Carga datos de demostración oficiales")
     with col_btn2:
-        if st.button("🗑️ Limpiar", key="btn_clean_hidro", use_container_width=True, help="Limpia los datos cargados"):
-            st.session_state["df_hidro_raw"] = pd.DataFrame()
-            st.session_state["es_demostracion_hidro"] = False
-            st.rerun()
+        st.button("🗑️ Limpiar", key="btn_clean_hidro", use_container_width=True, on_click=_cb_limpiar_todo_hidro, help="Limpia toda el área de trabajo (muestras, archivo subido, filtros y acuífero)")
 
     st.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
     st.markdown("<p style='font-size:11.5px; font-weight:700; color:#691C32; margin-bottom:2px;'>⚙️ CONFIGURACIÓN ANALÍTICA</p>", unsafe_allow_html=True)
@@ -472,7 +615,7 @@ if df_procesado.empty:
         </h3>
         <p style="color: #475569; font-size: 13.5px; max-width: 650px; margin: 0 auto 18px auto; line-height: 1.55;">
             Arrastra o selecciona tu archivo en formato <b>Excel (.xlsx / .xls)</b> o <b>CSV</b> con tus análisis fisicoquímicos (iones mayores Ca²⁺, Mg²⁺, Na⁺, K⁺, HCO₃⁻, Cl⁻, SO₄²⁻, etc.).
-            El sistema mapeará automáticamente los nombres de columnas de laboratorio y generará todos los diagramas hidrogeoquímicos vectoriales interactivos.
+            Si incluyes coordenadas (<b>Latitud</b> y <b>Longitud</b>), deben proporcionarse en <b>grados decimales WGS84</b> (ej. <code>19.7485</code>, <code>-97.2452</code>) para ubicar las muestras y detectar el acuífero automáticamente.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -482,34 +625,31 @@ if df_procesado.empty:
         archivo_main = st.file_uploader(
             "Seleccionar o arrastrar archivo Excel (.xlsx / .xls) o CSV:",
             type=['xlsx', 'xls', 'csv'],
-            key="file_uploader_main_hero"
+            key=f"file_uploader_main_hero_{_up_ver}"
         )
         if archivo_main is not None:
-            try:
-                if archivo_main.name.lower().endswith(('.xlsx', '.xls')):
-                    df_cargado_hero = pd.read_excel(archivo_main)
-                else:
-                    try:
-                        raw_c = archivo_main.getvalue().decode('utf-8-sig')
-                    except Exception:
-                        raw_c = archivo_main.getvalue().decode('latin1', errors='replace')
-                    df_cargado_hero = parse_concatenated_csv(raw_c)
-                if not df_cargado_hero.empty:
-                    st.session_state["df_hidro_raw"] = df_cargado_hero
-                    st.session_state["es_demostracion_hidro"] = False
-                    st.success(f"✅ Archivo cargado con éxito ({len(df_cargado_hero)} muestras identificadas).")
-                    st.rerun()
-            except Exception as e_hero:
-                st.error(f"Error al leer archivo: {e_hero}")
+            sig_hero = (getattr(archivo_main, "file_id", None), archivo_main.name, getattr(archivo_main, "size", None))
+            if sig_hero != st.session_state.get("hidro_ultimo_archivo_sig"):
+                try:
+                    if archivo_main.name.lower().endswith(('.xlsx', '.xls')):
+                        df_cargado_hero = pd.read_excel(archivo_main)
+                    else:
+                        try:
+                            raw_c = archivo_main.getvalue().decode('utf-8-sig')
+                        except Exception:
+                            raw_c = archivo_main.getvalue().decode('latin1', errors='replace')
+                        df_cargado_hero = parse_concatenated_csv(raw_c)
+                    if not df_cargado_hero.empty:
+                        _registrar_dataset_hidro(df_cargado_hero, es_demo=False, df_cat=df_cat, archivo_sig=sig_hero, bump_uploader=False)
+                        st.rerun()
+                except Exception as e_hero:
+                    st.error(f"Error al leer archivo: {e_hero}")
 
     col_h_b1, col_h_b2 = st.columns([1, 1])
     with col_h_b1:
         st.markdown(btn_plantilla, unsafe_allow_html=True)
     with col_h_b2:
-        if st.button("🧪 Cargar Muestras Demo Oficiales", key="btn_hero_demo", use_container_width=True):
-            st.session_state["df_hidro_raw"] = obtener_muestras_demostracion()
-            st.session_state["es_demostracion_hidro"] = True
-            st.rerun()
+        st.button("🧪 Cargar Muestras Demo Oficiales", key="btn_hero_demo", use_container_width=True, on_click=_cb_cargar_demo_hidro)
 
     st.stop()
 
@@ -1022,7 +1162,10 @@ with tab_geo:
 
     tiene_muestras_geo = not df_geo_pts.empty
     if not tiene_muestras_geo:
-        st.info("ℹ️ El archivo cargado no incluye columnas 'Latitud' y 'Longitud'; se despliega el polígono del acuífero evaluado y las capas de contexto.")
+        if poligono_geojson is not None:
+            st.info("ℹ️ El archivo cargado no incluye coordenadas en grados decimales ('Latitud' y 'Longitud'); se despliega el polígono del acuífero seleccionado y las capas de contexto.")
+        else:
+            st.info("ℹ️ El archivo cargado no incluye coordenadas en grados decimales ('Latitud' y 'Longitud') y no hay acuífero seleccionado. Se muestra la vista nacional; selecciona un Estado y Acuífero en la barra lateral o ubica coordenadas decimales en el panel SIG.")
 
     if tiene_muestras_geo:
         if 'Estatus_NOM127' not in df_geo_pts.columns and not df_auditoria.empty:
@@ -1417,17 +1560,17 @@ with tab_geo:
                 </div>
                 <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
                 <div class="dock-section">
-                    <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">📍 IR A COORDENADAS</span>
+                    <span style="font-weight:700; color:#691C32; display:block; margin-bottom:6px; font-size:11px;">📍 IR A COORDENADAS (GRADOS DECIMALES)</span>
                     <div class="coord-row">
-                        <input type="number" id="coord-lat" placeholder="Lat (°N)" step="any">
-                        <input type="number" id="coord-lon" placeholder="Lon (°W)" step="any">
+                        <input type="text" id="coord-lat" inputmode="decimal" placeholder="Lat (ej. 19.7485)">
+                        <input type="text" id="coord-lon" inputmode="decimal" placeholder="Lon (ej. -97.2452)">
                     </div>
                     <div style="display:flex; gap:6px;">
                         <button id="btn-coords" class="btn-dock-primary" type="button">Ubicar</button>
                         <button id="btn-clear-coord" class="btn-dock-clear" type="button" title="Borrar marcador">🗑️</button>
                     </div>
                     <div id="coord-error" style="display:none; color:#dc2626; font-size:10.5px; margin-top:4px; font-weight:600;">
-                        ⚠️ Ingresa Latitud (-90 a 90) y Longitud (-180 a 180) válidas.
+                        ⚠️ Ingresa Latitud (-90 a 90) y Longitud (-180 a 180) en grados decimales (ej. 19.7485, -97.2452).
                     </div>
                 </div>
                 <button id="btn-reset-view" class="btn-reset-view" type="button" onclick="encuadrarVistaInicial()">↺ Restablecer Vista</button>
@@ -2150,20 +2293,28 @@ with tab_geo:
                 }}
             }};
 
-            // Buscador rápido Ir a Coordenadas
+            // Buscador rápido Ir a Coordenadas (validación estricta en grados decimales)
             document.getElementById('btn-coords').onclick = () => {{
-                const lat = parseFloat(document.getElementById('coord-lat').value);
-                const lon = parseFloat(document.getElementById('coord-lon').value);
+                const latRaw = (document.getElementById('coord-lat').value || '').trim().replace(',', '.');
+                const lonRaw = (document.getElementById('coord-lon').value || '').trim().replace(',', '.');
+                const reDecimal = /^-?\\d+(?:\\.\\d+)?$/;
                 const err = document.getElementById('coord-error');
+                if (!reDecimal.test(latRaw) || !reDecimal.test(lonRaw)) {{
+                    err.style.display = 'block';
+                    setTimeout(() => {{ err.style.display = 'none'; }}, 3500);
+                    return;
+                }}
+                const lat = parseFloat(latRaw);
+                const lon = parseFloat(lonRaw);
                 if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {{
                     err.style.display = 'block';
-                    setTimeout(() => {{ err.style.display = 'none'; }}, 3000);
+                    setTimeout(() => {{ err.style.display = 'none'; }}, 3500);
                     return;
                 }}
                 err.style.display = 'none';
                 if (tempCoordMarker) tempCoordMarker.remove();
                 const pop = new maplibregl.Popup({{ offset: 28, className: 'gis-badge-popup', closeButton: true }})
-                    .setHTML(`<div style="font-size:11px;"><b>📍 Punto Buscado</b><br>Lat: ${{lat.toFixed(5)}}°<br>Lon: ${{lon.toFixed(5)}}°</div>`);
+                    .setHTML(`<div style="font-size:11px;"><b>📍 Punto Buscado (Decimal)</b><br>Lat: ${{lat.toFixed(5)}}°<br>Lon: ${{lon.toFixed(5)}}°</div>`);
                 tempCoordMarker = new maplibregl.Marker({{ color: '#691C32' }})
                     .setLngLat([lon, lat])
                     .setPopup(pop)
@@ -2182,6 +2333,9 @@ with tab_geo:
             map.on('mousemove', (e) => {{
                 document.getElementById('hud-lon').innerText = e.lngLat.lng.toFixed(4);
                 document.getElementById('hud-lat').innerText = e.lngLat.lat.toFixed(4);
+                document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
+            }});
+            map.on('zoomend', () => {{
                 document.getElementById('hud-zoom').innerText = map.getZoom().toFixed(1);
             }});
 
