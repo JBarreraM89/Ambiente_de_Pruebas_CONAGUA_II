@@ -36,10 +36,6 @@ COLUMNAS_VULNERABILIDAD = ["CLAVE_ACUI", "NOM_ACUIF", "VULNERABIL"]
 VERSION_ALGORITMO = 2
 _CANDADO = threading.Lock()
 
-def asegurar_vulnerabilidad_web(carpeta_datos, tolerancia=0.00005, decimales=7, forzar=False):
-    print(f"\n>>> EJECUTANDO con tolerancia={tolerancia}, decimales={decimales}, forzar={forzar} <<<\n")
-    carpeta = Path(carpeta_datos)
-
 def _solo_poligonos(geom):
     """Deja solo las partes poligonales de una geometría (make_valid puede devolver colecciones)."""
     if geom is None or geom.is_empty:
