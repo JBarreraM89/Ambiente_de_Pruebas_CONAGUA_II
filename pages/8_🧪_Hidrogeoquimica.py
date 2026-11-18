@@ -313,17 +313,21 @@ if "df_hidro_raw" not in st.session_state:
     st.session_state["es_demostracion_hidro"] = False
 if "hidro_uploader_key" not in st.session_state:
     st.session_state["hidro_uploader_key"] = 0
+if "hidro_sel_ac_ver" not in st.session_state:
+    st.session_state["hidro_sel_ac_ver"] = 0
 if "hidro_ultimo_archivo_sig" not in st.session_state:
     st.session_state["hidro_ultimo_archivo_sig"] = None
 if "hidro_acuifero_auto_msg" not in st.session_state:
     st.session_state["hidro_acuifero_auto_msg"] = None
 
 # Aplicar selección/limpieza pendiente de Estado y Acuífero ANTES de instanciar selectboxes
+_ac_ver_cur = st.session_state.get("hidro_sel_ac_ver", 0)
 _pending_ac_hidro = st.session_state.pop("_hidro_pending_edo_ac", "__UNSET__")
 if _pending_ac_hidro != "__UNSET__":
     _edo_p, _ac_p = _pending_ac_hidro
-    st.session_state["sel_edo_hidro"] = _edo_p
-    st.session_state["sel_ac_hidro"] = _ac_p
+    if _edo_p is not None or _ac_p is not None:
+        st.session_state[f"sel_edo_hidro_{_ac_ver_cur}"] = _edo_p
+        st.session_state[f"sel_ac_hidro_{_ac_ver_cur}"] = _ac_p
 
 _HIDRO_TAB_FILTER_KEYS = [
     "piper_familias_dataset_cache",
@@ -339,13 +343,15 @@ def _limpiar_filtros_tabs_hidro():
         st.session_state.pop(_k, None)
 
 def _cb_limpiar_todo_hidro():
+    _old_ac_ver = st.session_state.get("hidro_sel_ac_ver", 0)
     st.session_state["df_hidro_raw"] = pd.DataFrame()
     st.session_state["es_demostracion_hidro"] = False
     st.session_state["hidro_ultimo_archivo_sig"] = None
     st.session_state["hidro_acuifero_auto_msg"] = None
     st.session_state["hidro_uploader_key"] = st.session_state.get("hidro_uploader_key", 0) + 1
-    st.session_state.pop("sel_edo_hidro", None)
-    st.session_state.pop("sel_ac_hidro", None)
+    st.session_state["hidro_sel_ac_ver"] = _old_ac_ver + 1
+    st.session_state.pop(f"sel_edo_hidro_{_old_ac_ver}", None)
+    st.session_state.pop(f"sel_ac_hidro_{_old_ac_ver}", None)
     st.session_state.pop("_hidro_pending_edo_ac", None)
     _limpiar_filtros_tabs_hidro()
 
@@ -419,6 +425,11 @@ def auto_identificar_acuifero_hidro(df_mapeado, df_cat):
 def _registrar_dataset_hidro(df_nuevo, es_demo, df_cat, archivo_sig=None, bump_uploader=False):
     """Carga un dataset nuevo, limpia filtros/acuífero previos y autodetecta acuífero si hay coordenadas."""
     _limpiar_filtros_tabs_hidro()
+    _old_ac_ver = st.session_state.get("hidro_sel_ac_ver", 0)
+    st.session_state.pop(f"sel_edo_hidro_{_old_ac_ver}", None)
+    st.session_state.pop(f"sel_ac_hidro_{_old_ac_ver}", None)
+    st.session_state["hidro_sel_ac_ver"] = _old_ac_ver + 1
+
     st.session_state["df_hidro_raw"] = df_nuevo
     st.session_state["es_demostracion_hidro"] = bool(es_demo)
     st.session_state["hidro_ultimo_archivo_sig"] = archivo_sig
@@ -431,7 +442,7 @@ def _registrar_dataset_hidro(df_nuevo, es_demo, df_cat, archivo_sig=None, bump_u
         st.session_state["_hidro_pending_edo_ac"] = (det["estado"], det["nombre"])
         st.session_state["hidro_acuifero_auto_msg"] = f"📍 Acuífero autodetectado: **{det['clave']} - {det['nombre']}** ({det['estado']})."
     else:
-        st.session_state["_hidro_pending_edo_ac"] = (None, None)
+        st.session_state.pop("_hidro_pending_edo_ac", None)
         st.session_state["hidro_acuifero_auto_msg"] = None
 
 def _cb_cargar_demo_hidro():
@@ -450,6 +461,7 @@ with st.sidebar:
     df_cat = cargar_catalogo()
     clave_sel = None
     nombre_sel = None
+    _ac_ver = st.session_state.get("hidro_sel_ac_ver", 0)
 
     if df_cat is not None and not df_cat.empty:
         estados = sorted([str(e) for e in df_cat['ESTADO'].dropna().unique()])
@@ -458,7 +470,7 @@ with st.sidebar:
             estados,
             index=None,
             placeholder="Elige un estado...",
-            key="sel_edo_hidro"
+            key=f"sel_edo_hidro_{_ac_ver}"
         )
 
         acuiferos = []
@@ -474,7 +486,7 @@ with st.sidebar:
             acuiferos,
             index=None,
             placeholder="Elige un acuífero...",
-            key="sel_ac_hidro"
+            key=f"sel_ac_hidro_{_ac_ver}"
         )
 
         if edo_sel and ac_sel and not df_sub.empty:
