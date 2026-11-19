@@ -95,6 +95,8 @@ for capa in CATALOGO_MAPAS:
     pmtiles_url = obtener_url_pmtiles(nombre_archivo=capa["pmtiles"])
     catalogo_runtime.append({**capa, "url": pmtiles_url})
 
+repda_pmtiles_url = obtener_url_pmtiles(nombre_archivo="repda_nacional.pmtiles")
+
 # ==========================================
 # 3. PLANTILLA FRONTEND (MAPLIBRE GL JS + PMTILES)
 # ==========================================
@@ -156,6 +158,81 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         #custom-fs-container { order: 1; }
         #custom-layer-container { order: 2; }
         .maplibregl-ctrl-top-right .maplibregl-ctrl-group { order: 3 !important; box-shadow: 0 1px 5px rgba(0,0,0,0.45) !important; }
+        #custom-measure-container { order: 4; }
+
+        .measure-toggle-btn {
+            width: 32px; height: 32px; background: #ffffff; border-radius: 4px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 1px 5px rgba(0,0,0,0.45); border: 1px solid rgba(0,0,0,0.12);
+            box-sizing: border-box; font-size: 16px; transition: all 0.15s ease;
+        }
+        .measure-toggle-btn:hover { background: #f4f4f4; }
+        .measure-toggle-btn.active {
+            background: #691C32 !important; color: #ffffff !important;
+            border-color: #BC955C !important; box-shadow: 0 2px 10px rgba(105, 28, 50, 0.45);
+        }
+
+        /* Barra flotante de medición geodésica (centrada abajo para no chocar con Controles ni la ficha) */
+        .measure-bar {
+            position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+            z-index: 9600; display: none; align-items: center; gap: 6px;
+            background: rgba(255, 255, 255, 0.96); padding: 6px 10px; border-radius: 999px;
+            border: 1.5px solid #BC955C; box-shadow: 0 4px 16px rgba(0,0,0,0.22);
+            font-size: 12px; color: #1E293B; white-space: nowrap;
+        }
+        .measure-mode-btn {
+            border: 1px solid #D1D5DB; background: #FAF8F5; color: #334155;
+            border-radius: 999px; padding: 4px 10px; font-size: 11.5px; font-weight: 600; cursor: pointer;
+        }
+        .measure-mode-btn.active { background: #691C32; color: #ffffff; border-color: #691C32; }
+        .measure-readout {
+            font-weight: 700; color: #691C32; padding: 0 6px; min-width: 92px; text-align: center;
+        }
+        .measure-icon-btn {
+            border: none; background: #F1ECE4; color: #334155; border-radius: 50%;
+            width: 24px; height: 24px; cursor: pointer; font-size: 12px; font-weight: 700;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+        .measure-icon-btn:hover { background: #E2D9C8; color: #691C32; }
+
+        .docked-actions { display: flex; gap: 6px; margin-top: 9px; }
+        .docked-actions button { margin-top: 0 !important; flex: 1; }
+        .btn-export-csv {
+            padding: 6px 8px; border-radius: 5px; background: #691C32 !important; color: #ffffff !important;
+            border: 1px solid #BC955C !important; font-size: 11.5px; font-weight: 600; cursor: pointer;
+        }
+        .btn-export-csv:hover { background: #4A1424 !important; }
+        .label-row-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; }
+        .label-row-flex label { margin-bottom: 0 !important; }
+        .btn-mini-csv {
+            display: inline-flex; align-items: center; gap: 4px;
+            background: #FAF6F0; color: #691C32; border: 1px solid #BC955C; border-radius: 4px;
+            padding: 2px 7px; font-size: 10.5px; font-weight: 700; cursor: pointer;
+        }
+        .btn-mini-csv:hover { background: #691C32; color: #ffffff; }
+        .ui-ico { display: inline-block; vertical-align: -2px; flex-shrink: 0; }
+        .btn-ico-flex { display: inline-flex !important; align-items: center; justify-content: center; gap: 5px; }
+        @keyframes spinSvg { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .spin-ico { animation: spinSvg 0.9s linear infinite; }
+        .coord-dictamen-box {
+            margin-top: 7px; padding-top: 7px; border-top: 1px solid #EAE4DA; text-align: center;
+        }
+        .coord-dictamen-badge {
+            display: inline-block; padding: 3px 9px; border-radius: 10px; color: #ffffff;
+            font-size: 11px; font-weight: 700; text-shadow: 0 1px 1px rgba(0,0,0,0.3); margin-bottom: 4px;
+        }
+        .coord-dictamen-aq { font-size: 11px; font-weight: 600; color: #1E293B; display: block; margin-bottom: 5px; }
+        .coord-dictamen-btn {
+            background: #FAF6F0; color: #691C32; border: 1px solid #BC955C; border-radius: 4px;
+            padding: 3px 8px; font-size: 11px; font-weight: 600; cursor: pointer;
+        }
+        .coord-dictamen-btn:hover { background: #691C32; color: #ffffff; }
+        .repda-popup-card { min-width: 220px; font-size: 11.5px; color: #1E293B; }
+        .repda-popup-card b.rp-title { color: #691C32; font-size: 12.5px; display: block; margin-bottom: 4px; }
+        .repda-popup-table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+        .repda-popup-table td { padding: 2px 0; border-bottom: 1px solid #F1ECE4; }
+        .repda-popup-table td.rk { color: #64748B; padding-right: 8px; }
+        .repda-popup-table td.rv { font-weight: 600; text-align: right; }
 
         /* BOTTOM-RIGHT */
         .maplibregl-ctrl-bottom-right {
@@ -408,7 +485,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         // ==========================================
         const CATALOGO_MAPAS = __CATALOGO_MAPAS__;
         const INDICE_META = __INDICE_META__;
+        const REPDA_PMTILES_URL = __REPDA_PMTILES_URL__;
         const AQUIFER_INDEX = INDICE_META.acuiferos || {};
+
+        const repdaUseColors = {
+            'AGRICOLA': '#16a34a',
+            'PUBLICO URBANO': '#2563eb',
+            'DOMESTICO': '#0284c7',
+            'INDUSTRIAL': '#dc2626',
+            'SERVICIOS': '#9333ea',
+            'PECUARIO': '#ca8a04',
+            'DIFERENTES USOS': '#0d9488',
+            'ACUACULTURA': '#06b6d4',
+            'AGROINDUSTRIAL': '#65a30d',
+            'COMERCIO': '#ea580c',
+            'ENERGIA ELECTRICA': '#eab308',
+            'OTROS': '#64748b'
+        };
 
         const vulnColors = {
             '5': '#D90404', '4': '#F25C05', '3': '#F2B705',
@@ -461,14 +554,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let clickedFeatureId = null;
         let searchedClave = null;
         let searchedName = null;
-        let selectedPolygonProps = null;
         let activeCoordPoint = null;
+        let coordEvalToken = 0;
         let latestGraticuleData = { type: 'FeatureCollection', features: [] };
 
         const hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: 'minimal-popup' });
 
         // ==========================================
-        // 2. CONTROLES PERSONALIZADOS (UI)
+        // 2. CONTROLES PERSONALIZADOS (UI + SVGs MONOCROMÁTICOS)
         // ==========================================
         class CustomControl {
             constructor(id, html) { this.id = id; this.html = html; }
@@ -482,8 +575,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             onRemove() { if (this._container.parentNode) this._container.parentNode.removeChild(this._container); }
         }
 
-        const iconExpand = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
-        const iconCompress = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+        const iconExpand = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`;
+        const iconCompress = `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>`;
+        const iconRuler = `<svg class="ui-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4Z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/><path d="m4.5 13.5 2 2"/></svg>`;
+        const iconRulerSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.3 8.7 8.7 21.3a1 1 0 0 1-1.4 0l-4.6-4.6a1 1 0 0 1 0-1.4L15.3 2.7a1 1 0 0 1 1.4 0l4.6 4.6a1 1 0 0 1 0 1.4Z"/><path d="m7.5 10.5 2 2"/><path d="m10.5 7.5 2 2"/><path d="m13.5 4.5 2 2"/></svg>`;
+        const iconPolygonSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 3 21 9 17.5 20 6.5 20 3 9 12 3"/></svg>`;
+        const iconPrint = `<svg class="ui-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>`;
+        const iconSpinner = `<svg class="ui-ico spin-ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#691C32" stroke-width="2.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>`;
+        const iconDownloadSm = `<svg class="ui-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
+        const iconInfoSm = `<svg class="ui-ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`;
+        const iconFocusSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>`;
+        const iconTrashSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+        const iconUndoSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/></svg>`;
+        const iconCloseSm = `<svg class="ui-ico" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+        const iconSlidersSm = `<svg class="ui-ico" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>`;
+        const iconResetSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
+        const iconDropSm = `<svg class="ui-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#691C32" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>`;
+
         map.addControl(new CustomControl('custom-fs-container', `<div id="fs-btn" class="custom-fullscreen-btn" title="Pantalla completa">${iconExpand}</div>`), 'top-right');
 
         const basemapsUrls = {
@@ -506,10 +614,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         `), 'top-right');
 
         map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), 'top-right');
+        map.addControl(new CustomControl('custom-measure-container', `<button type="button" id="btn-measure" class="measure-toggle-btn" title="Medir distancias o áreas en el mapa">${iconRuler}</button>`), 'top-right');
         document.getElementById('map').insertAdjacentHTML(
             'beforeend',
             '<div id="docked-panel" class="docked-panel"></div>' +
-            '<button type="button" id="btn-reopen-dock" class="docked-reopen-btn" title="Mostrar ficha del acuífero seleccionado">ℹ️ Ver ficha</button>'
+            `<button type="button" id="btn-reopen-dock" class="docked-reopen-btn" title="Mostrar ficha del acuífero seleccionado">${iconInfoSm} Ver ficha</button>` +
+            '<div id="measure-bar" class="measure-bar">' +
+                `<button type="button" id="btn-m-dist" class="measure-mode-btn btn-ico-flex active">${iconRulerSm} Distancia</button>` +
+                `<button type="button" id="btn-m-area" class="measure-mode-btn btn-ico-flex">${iconPolygonSm} Área</button>` +
+                '<span id="measure-readout" class="measure-readout">Haz clic en el mapa</span>' +
+                `<button type="button" id="btn-m-undo" class="measure-icon-btn" title="Deshacer último vértice">${iconUndoSm}</button>` +
+                `<button type="button" id="btn-m-clear" class="measure-icon-btn" title="Limpiar medición">${iconTrashSm}</button>` +
+                `<button type="button" id="btn-m-exit" class="measure-icon-btn" title="Salir de medición (Esc)">${iconCloseSm}</button>` +
+            '</div>'
         );
 
         const selectorMapasHtml = CATALOGO_MAPAS.length > 1
@@ -523,10 +640,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div id="btn-open-panel" class="leaflet-open-button" title="Mostrar controles">☰</div>
             <div id="panel-container" class="leaflet-custom-controls">
                 <span id="btn-close-panel" class="panel-close-button" title="Ocultar controles">&times;</span>
-                <h3 style="margin:0 0 10px 0; color:#691C32; font-size:15px;">⚙️ Controles</h3>
+                <h3 style="margin:0 0 10px 0; color:#691C32; font-size:15px; display:flex; align-items:center; gap:6px;">${iconSlidersSm}<span>Controles</span></h3>
                 ${selectorMapasHtml}
                 <div class="control-section custom-dropdown">
-                    <label>Buscar Acuífero (${totalAq}):</label>
+                    <div class="label-row-flex">
+                        <label>Buscar Acuífero (${totalAq}):</label>
+                        <button type="button" id="btn-export-all-csv" class="btn-mini-csv" title="Descargar resumen nacional de los ${totalAq} acuíferos en CSV">${iconDownloadSm} CSV</button>
+                    </div>
                     <div class="search-wrap">
                         <input type="text" id="search-input" placeholder="-- Escribe clave o nombre --" autocomplete="off">
                         <button type="button" id="btn-clear-search" class="btn-clear-search" title="Quitar acuífero seleccionado">&times;</button>
@@ -557,22 +677,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     </div>
                     <div class="flex-row" style="margin-top: 4px;">
                         <button id="btn-coords" class="action-button" style="flex: 1;">Ubicar en Mapa</button>
-                        <button id="btn-clear-coord" class="btn-clear-point" title="Borrar punto">🗑️</button>
+                        <button id="btn-clear-coord" class="btn-clear-point btn-ico-flex" title="Borrar punto">${iconTrashSm}</button>
                     </div>
                     <div id="coord-error" style="display:none; color:#D90404; font-size:11px; margin-top:5px; font-weight:600; text-align:center;"></div>
                 </div>
                 <div class="control-section">
                     <label>Capas Adicionales:</label>
+                    <label id="lbl-repda" class="chk-row"><input type="checkbox" id="chk-repda"> Aprovechamientos REPDA</label>
                     <label id="lbl-c10" class="chk-row"><input type="checkbox" id="chk-c10"> Línea Costa (10 km)</label>
                     <label id="lbl-c1" class="chk-row"><input type="checkbox" id="chk-c1"> Línea Costa (1 km)</label>
                     <label class="chk-row"><input type="checkbox" id="chk-malla"> Mallado (Lat/Lon)</label>
                 </div>
-                <button id="btn-reset" class="btn-reset-view">↺ Restablecer Vista</button>
+                <button id="btn-reset" class="btn-reset-view btn-ico-flex">${iconResetSm} Restablecer Vista</button>
             </div>
         `;
         map.addControl(new CustomControl('main-menu-container', menuHtml), 'top-left');
 
-        map.addControl(new CustomControl('print-ctrl-container', `<button id="btn-print" class="print-btn" title="Descargar mapa en PNG">🖨️</button>`), 'bottom-right');
+        map.addControl(new CustomControl('print-ctrl-container', `<button id="btn-print" class="print-btn" title="Descargar lámina HD en PNG">${iconPrint}</button>`), 'bottom-right');
         map.addControl(new maplibregl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-right');
         map.addControl(new CustomControl('logo-ctrl-container', `<img class="custom-logo" src="https://raw.githubusercontent.com/Dchable16/geovisor_vulnerabilidad/main/logos/Logo_SSIG.png" crossorigin="anonymous">`), 'bottom-right');
 
@@ -664,7 +785,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                             <td class="val" style="color:#691C32 !important;">${meta.area_km2.toLocaleString('es-MX', { maximumFractionDigits: 1 })} km² (${meta.poligonos} pol.)</td>
                         </tr>
                     </table>
-                    <button id="btn-focus-aq" class="btn-focus-aq">🔎 Enfocar Acuífero completo</button>
+                    <div class="docked-actions">
+                        <button id="btn-focus-aq" class="btn-focus-aq btn-ico-flex">${iconFocusSm} Enfocar</button>
+                        <button id="btn-export-aq-csv" class="btn-export-csv btn-ico-flex" title="Descargar tabla oficial en CSV (Excel)">${iconDownloadSm} CSV</button>
+                    </div>
                 </div>
             `;
             panel.style.display = 'flex';
@@ -672,12 +796,71 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (reopenBtn) reopenBtn.style.display = 'none';
             panel.querySelector('.docked-close').onclick = hideDockedPanel;
             panel.querySelector('#btn-focus-aq').onclick = () => triggerSearch(aquiferKey);
+            panel.querySelector('#btn-export-aq-csv').onclick = () => exportAquiferCsv(aquiferKey);
+        }
+
+        function _downloadCsvText(filename, rows) {
+            const esc = (v) => {
+                const s = v == null ? '' : String(v);
+                return /[",\\n\\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+            };
+            const csv = '\\uFEFF' + rows.map(r => r.map(esc).join(',')).join('\\r\\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        function exportAquiferCsv(aquiferKey) {
+            const meta = AQUIFER_INDEX[aquiferKey];
+            if (!meta) return;
+            const rows = [
+                ['Clave_Acuifero', 'Nombre_Acuifero', 'Metodologia', 'Clase', 'Categoria', 'Poligonos', 'Superficie_km2', 'Porcentaje_%']
+            ];
+            ['5', '4', '3', '2', '1'].forEach(c => {
+                const info = meta.clases ? meta.clases[c] : null;
+                if (!info || !info.count) return;
+                rows.push([
+                    meta.clave, meta.nombre, activeMapCfg.metodologia, c,
+                    vulnLabels[c], info.count, info.area_km2.toFixed(3), info.pct.toFixed(2)
+                ]);
+            });
+            rows.push([meta.clave, meta.nombre, activeMapCfg.metodologia, 'TOTAL', 'Superficie Total', meta.poligonos, meta.area_km2.toFixed(2), '100.00']);
+            const safeNom = meta.nombre.replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 35);
+            _downloadCsvText(`Vulnerabilidad_${meta.clave}_${safeNom}.csv`, rows);
+        }
+
+        function exportAllAquifersCsv() {
+            const rows = [[
+                'Clave_Acuifero', 'Nombre_Acuifero', 'Poligonos', 'Superficie_Total_km2', 'Clase_Predominante',
+                'Pct_5_Muy_Alta', 'km2_5_Muy_Alta',
+                'Pct_4_Alta', 'km2_4_Alta',
+                'Pct_3_Media', 'km2_3_Media',
+                'Pct_2_Baja', 'km2_2_Baja',
+                'Pct_1_Muy_Baja', 'km2_1_Muy_Baja'
+            ]];
+            Object.keys(AQUIFER_INDEX).sort().forEach(k => {
+                const m = AQUIFER_INDEX[k];
+                const g = (c, f) => (m.clases && m.clases[c] ? m.clases[c][f] : 0);
+                rows.push([
+                    m.clave, m.nombre, m.poligonos, m.area_km2.toFixed(2),
+                    vulnLabels[String(m.clase_predominante || '')] || 'S/D',
+                    g('5', 'pct').toFixed(2), g('5', 'area_km2').toFixed(3),
+                    g('4', 'pct').toFixed(2), g('4', 'area_km2').toFixed(3),
+                    g('3', 'pct').toFixed(2), g('3', 'area_km2').toFixed(3),
+                    g('2', 'pct').toFixed(2), g('2', 'area_km2').toFixed(3),
+                    g('1', 'pct').toFixed(2), g('1', 'area_km2').toFixed(3)
+                ]);
+            });
+            _downloadCsvText(`Resumen_Vulnerabilidad_Nacional_${Object.keys(AQUIFER_INDEX).length}_Acuiferos.csv`, rows);
         }
 
         function hideDockedPanel() {
             document.getElementById('docked-panel').style.display = 'none';
             setClickedFeature(null);
-            selectedPolygonProps = null;
             const reopenBtn = document.getElementById('btn-reopen-dock');
             if (reopenBtn) reopenBtn.style.display = searchedName ? 'inline-flex' : 'none';
         }
@@ -760,7 +943,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             setClickedFeature(null);
             searchedClave = null;
             searchedName = null;
-            selectedPolygonProps = null;
             if (map.getLayer('vuln-search-fill')) {
                 map.setFilter('vuln-search-fill', ['==', ['get', 'c'], '__NONE__']);
                 map.setFilter('vuln-search-line', ['==', ['get', 'c'], '__NONE__']);
@@ -912,6 +1094,232 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 paint: { 'text-color': '#1E293B', 'text-halo-color': '#FFFFFF', 'text-halo-width': 2 }
             });
 
+            // Capas de Medición Geodésica (Distancias y Áreas)
+            map.addSource('measure-src', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+            map.addLayer({
+                id: 'measure-fill', type: 'fill', source: 'measure-src',
+                filter: ['==', ['geometry-type'], 'Polygon'],
+                paint: { 'fill-color': '#691C32', 'fill-opacity': 0.18 }
+            });
+            map.addLayer({
+                id: 'measure-line', type: 'line', source: 'measure-src',
+                filter: ['==', ['geometry-type'], 'LineString'],
+                paint: { 'line-color': '#691C32', 'line-width': 2.8, 'line-dasharray': [2.5, 1.5] }
+            });
+            map.addLayer({
+                id: 'measure-pts', type: 'circle', source: 'measure-src',
+                filter: ['==', ['geometry-type'], 'Point'],
+                paint: { 'circle-radius': 5, 'circle-color': '#FFFFFF', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#691C32' }
+            });
+
+            let measureActive = false;
+            let measureMode = 'distance'; // 'distance' | 'area'
+            let measureCoords = [];
+            let latestMeasureGeoJSON = { type: 'FeatureCollection', features: [] };
+            let latestMeasureText = '';
+
+            function haversineMeters(c1, c2) {
+                const R = 6371008.8;
+                const dLat = (c2[1] - c1[1]) * Math.PI / 180;
+                const dLon = (c2[0] - c1[0]) * Math.PI / 180;
+                const lat1 = c1[1] * Math.PI / 180;
+                const lat2 = c2[1] * Math.PI / 180;
+                const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+                return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            }
+
+            function geodesicAreaM2(ring) {
+                if (ring.length < 3) return 0;
+                const R = 6378137.0;
+                let total = 0;
+                const n = ring.length;
+                for (let i = 0; i < n; i++) {
+                    const p1 = ring[i];
+                    const p2 = ring[(i + 1) % n];
+                    const lon1 = p1[0] * Math.PI / 180;
+                    const lon2 = p2[0] * Math.PI / 180;
+                    const lat1 = p1[1] * Math.PI / 180;
+                    const lat2 = p2[1] * Math.PI / 180;
+                    total += (lon2 - lon1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+                }
+                return Math.abs(total * R * R / 2.0);
+            }
+
+            function formatDist(m) {
+                return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
+            }
+
+            function updateMeasureRender() {
+                const feats = [];
+                measureCoords.forEach(c => feats.push({ type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: {} }));
+                let readout = 'Haz clic en el mapa';
+                if (measureCoords.length >= 2) {
+                    const lineCoords = (measureMode === 'area' && measureCoords.length >= 3)
+                        ? [...measureCoords, measureCoords[0]]
+                        : measureCoords;
+                    feats.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: lineCoords }, properties: {} });
+                    let totalM = 0;
+                    for (let i = 1; i < lineCoords.length; i++) totalM += haversineMeters(lineCoords[i - 1], lineCoords[i]);
+                    if (measureMode === 'distance') {
+                        readout = `Distancia: ${formatDist(totalM)}`;
+                    } else if (measureCoords.length >= 3) {
+                        feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [lineCoords] }, properties: {} });
+                        const areaM2 = geodesicAreaM2(measureCoords);
+                        const areaKm2 = areaM2 / 1e6;
+                        const areaHa = areaM2 / 1e4;
+                        readout = areaKm2 >= 1
+                            ? `Área: ${areaKm2.toLocaleString('es-MX', { maximumFractionDigits: 2 })} km² (${Math.round(areaHa).toLocaleString('es-MX')} ha)`
+                            : `Área: ${areaHa.toFixed(2)} ha (${formatDist(totalM)})`;
+                    } else {
+                        readout = `Perímetro: ${formatDist(totalM)} (+1 vértice)`;
+                    }
+                } else if (measureCoords.length === 1) {
+                    readout = '1 punto · agrega siguiente';
+                }
+                latestMeasureText = measureCoords.length >= 2 ? readout : '';
+                latestMeasureGeoJSON = { type: 'FeatureCollection', features: feats };
+                if (map.getSource('measure-src')) map.getSource('measure-src').setData(latestMeasureGeoJSON);
+                const ro = document.getElementById('measure-readout');
+                if (ro) ro.innerText = readout;
+            }
+
+            function setMeasureActive(flag) {
+                measureActive = Boolean(flag);
+                const btn = document.getElementById('btn-measure');
+                const bar = document.getElementById('measure-bar');
+                if (btn) btn.classList.toggle('active', measureActive);
+                if (bar) bar.style.display = measureActive ? 'flex' : 'none';
+                map.getCanvas().style.cursor = measureActive ? 'crosshair' : '';
+                if (measureActive) {
+                    map.doubleClickZoom.disable();
+                    setHoverFeature(null);
+                    hoverPopup.remove();
+                    if (repdaPopup) repdaPopup.remove();
+                    updateMeasureRender();
+                } else {
+                    map.doubleClickZoom.enable();
+                }
+            }
+
+            document.getElementById('btn-measure').onclick = () => setMeasureActive(!measureActive);
+            document.getElementById('btn-m-dist').onclick = function() {
+                measureMode = 'distance';
+                this.classList.add('active');
+                document.getElementById('btn-m-area').classList.remove('active');
+                updateMeasureRender();
+            };
+            document.getElementById('btn-m-area').onclick = function() {
+                measureMode = 'area';
+                this.classList.add('active');
+                document.getElementById('btn-m-dist').classList.remove('active');
+                updateMeasureRender();
+            };
+            document.getElementById('btn-m-undo').onclick = () => { measureCoords.pop(); updateMeasureRender(); };
+            document.getElementById('btn-m-clear').onclick = () => { measureCoords = []; updateMeasureRender(); };
+            document.getElementById('btn-m-exit').onclick = () => { measureCoords = []; updateMeasureRender(); setMeasureActive(false); };
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && measureActive) {
+                    measureCoords = [];
+                    updateMeasureRender();
+                    setMeasureActive(false);
+                }
+            });
+
+            // Capa opcional REPDA Nacional (carga perezosa 0 bytes hasta activar checkbox)
+            let repdaInitialized = false;
+            let repdaHovered = false;
+            const repdaPopup = new maplibregl.Popup({ offset: 12, className: 'marker-popup', closeButton: true });
+
+            function ensureRepdaLayer() {
+                if (repdaInitialized || !REPDA_PMTILES_URL) return;
+                repdaInitialized = true;
+                map.addSource('repda-src', {
+                    type: 'vector',
+                    url: 'pmtiles://' + REPDA_PMTILES_URL,
+                    minzoom: 4,
+                    maxzoom: 8
+                });
+                const colorMatch = ['match', ['get', 'u']];
+                Object.entries(repdaUseColors).forEach(([uso, col]) => colorMatch.push(uso, col));
+                colorMatch.push('#64748b');
+
+                map.addLayer({
+                    id: 'repda-points',
+                    type: 'circle',
+                    source: 'repda-src',
+                    'source-layer': 'repda',
+                    layout: { visibility: 'visible' },
+                    paint: {
+                        'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 1.4, 7, 2.8, 10, 4.8, 14, 7.2],
+                        'circle-color': colorMatch,
+                        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 4, 0.3, 9, 1.1],
+                        'circle-stroke-color': '#FFFFFF',
+                        'circle-opacity': 0.9
+                    }
+                }, 'measure-fill');
+
+                let lastRepdaFolio = null;
+                map.on('mousemove', 'repda-points', (e) => {
+                    if (measureActive || !e.features || !e.features.length) return;
+                    repdaHovered = true;
+                    map.getCanvas().style.cursor = 'pointer';
+                    const p = e.features[0].properties;
+                    const folioKey = `${p.f || ''}|${p.u || ''}|${p.v || ''}`;
+                    if (lastRepdaFolio !== folioKey) {
+                        lastRepdaFolio = folioKey;
+                        const vol = Number(p.v || 0).toLocaleString('es-MX');
+                        hoverPopup.setLngLat(e.lngLat).setHTML(
+                            `<b>REPDA · ${escapeHtml(p.u || 'OTROS')}</b><br>` +
+                            `<span style="color:#D4C19C;">Folio: ${escapeHtml(p.f || 'S/D')} · ${vol} m³/año</span>`
+                        );
+                        if (!hoverPopup.isOpen()) hoverPopup.addTo(map);
+                    } else {
+                        hoverPopup.setLngLat(e.lngLat);
+                        if (!hoverPopup.isOpen()) hoverPopup.addTo(map);
+                    }
+                });
+                map.on('mouseleave', 'repda-points', () => {
+                    repdaHovered = false;
+                    lastRepdaFolio = null;
+                    map.getCanvas().style.cursor = measureActive ? 'crosshair' : '';
+                    hoverPopup.remove();
+                });
+                map.on('click', 'repda-points', (e) => {
+                    if (measureActive || !e.features || !e.features.length) return;
+                    const p = e.features[0].properties;
+                    const vol = Number(p.v || 0).toLocaleString('es-MX');
+                    const usoCol = repdaUseColors[p.u] || '#64748b';
+                    // Cruce espacial directo con la vulnerabilidad subyacente
+                    const vulnUnder = map.queryRenderedFeatures(e.point, { layers: ['vuln-fill'] });
+                    let vulnBadgeHtml = '<span style="color:#64748B;font-size:11px;">Fuera de polígonos de vulnerabilidad</span>';
+                    if (vulnUnder && vulnUnder.length) {
+                        const vp = vulnUnder[0].properties;
+                        const vc = String(vp.v || '');
+                        const vCol = vulnColors[vc] || vulnColors.default;
+                        const vLbl = vulnLabels[vc] || 'Sin Datos';
+                        vulnBadgeHtml = `<span class="coord-dictamen-badge" style="background:${vCol};">${escapeHtml(vLbl)}</span>` +
+                            `<div style="font-size:10.5px;color:#475569;">Acuífero ${escapeHtml(String(vp.c || '').padStart(4, '0'))} - ${escapeHtml(vp.n || '')}</div>`;
+                    }
+                    const html = `
+                        <div class="repda-popup-card">
+                            <b class="rp-title">${iconDropSm} Aprovechamiento REPDA</b>
+                            <span class="coord-dictamen-badge" style="background:${usoCol};">${escapeHtml(p.u || 'OTROS')}</span>
+                            <table class="repda-popup-table">
+                                <tr><td class="rk">Folio:</td><td class="rv">${escapeHtml(p.f || 'S/D')}</td></tr>
+                                <tr><td class="rk">Expediente:</td><td class="rv">${escapeHtml(p.e || 'S/D')}</td></tr>
+                                <tr><td class="rk">Titular:</td><td class="rv">${escapeHtml(p.t || 'S/D')}</td></tr>
+                                <tr><td class="rk">Volumen:</td><td class="rv">${vol} m³/año</td></tr>
+                            </table>
+                            <div class="coord-dictamen-box">
+                                <div style="font-size:10.5px;font-weight:700;color:#691C32;margin-bottom:3px;">VULNERABILIDAD EN SITIO</div>
+                                ${vulnBadgeHtml}
+                            </div>
+                        </div>
+                    `;
+                    repdaPopup.setLngLat(e.lngLat).setHTML(html).addTo(map);
+                });
+            }
+
             map.once('idle', () => loadingPill.classList.add('hidden'));
             map.on('error', (ev) => {
                 if (ev && ev.error) console.warn('MapLibre aviso:', ev.error.message || ev.error);
@@ -919,7 +1327,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             // Hover & Click sobre polígonos MVT (setFeatureState instantáneo solo en vuln-line)
             map.on('mousemove', 'vuln-fill', (e) => {
-                if (!e.features || !e.features.length) return;
+                if (measureActive || repdaHovered || !e.features || !e.features.length) return;
                 map.getCanvas().style.cursor = 'pointer';
                 const f = e.features[0];
                 const fid = f.properties.fid != null ? f.properties.fid : f.id;
@@ -939,23 +1347,34 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             });
 
             map.on('mouseleave', 'vuln-fill', () => {
-                map.getCanvas().style.cursor = '';
+                if (!repdaHovered) map.getCanvas().style.cursor = measureActive ? 'crosshair' : '';
                 setHoverFeature(null);
-                hoverPopup.remove();
+                if (!repdaHovered) hoverPopup.remove();
             });
 
             map.on('click', 'vuln-fill', (e) => {
-                if (!e.features || !e.features.length) return;
+                if (measureActive || !e.features || !e.features.length) return;
+                if (repdaInitialized && map.getLayoutProperty('repda-points', 'visibility') === 'visible') {
+                    const repdaHits = map.queryRenderedFeatures(e.point, { layers: ['repda-points'] });
+                    if (repdaHits.length) return;
+                }
                 const f = e.features[0];
                 const fid = f.properties.fid != null ? f.properties.fid : f.id;
                 setClickedFeature(fid);
-                selectedPolygonProps = f.properties;
                 const aqKey = findAquiferKeyByClave(f.properties.c);
                 if (aqKey) showDockedInfo(aqKey, f.properties.v);
             });
 
-            // Clic fuera de polígonos
+            // Clic general: modo medición o clic fuera de polígonos
             map.on('click', (e) => {
+                if (measureActive) {
+                    measureCoords.push([e.lngLat.lng, e.lngLat.lat]);
+                    updateMeasureRender();
+                    return;
+                }
+                if (repdaInitialized && map.getLayoutProperty('repda-points', 'visibility') === 'visible') {
+                    if (map.queryRenderedFeatures(e.point, { layers: ['repda-points'] }).length) return;
+                }
                 const feats = map.queryRenderedFeatures(e.point, { layers: ['vuln-fill'] });
                 if (!feats.length) {
                     setClickedFeature(null);
@@ -1018,12 +1437,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 };
             });
 
+            document.getElementById('chk-repda').onchange = e => {
+                if (e.target.checked) {
+                    ensureRepdaLayer();
+                    if (map.getLayer('repda-points')) map.setLayoutProperty('repda-points', 'visibility', 'visible');
+                } else {
+                    if (map.getLayer('repda-points')) map.setLayoutProperty('repda-points', 'visibility', 'none');
+                    repdaPopup.remove();
+                }
+            };
             document.getElementById('chk-c10').onchange = e => {
                 if (map.getLayer('c10-line')) map.setLayoutProperty('c10-line', 'visibility', e.target.checked ? 'visible' : 'none');
             };
             document.getElementById('chk-c1').onchange = e => {
                 if (map.getLayer('c1-line')) map.setLayoutProperty('c1-line', 'visibility', e.target.checked ? 'visible' : 'none');
             };
+            document.getElementById('btn-export-all-csv').onclick = exportAllAquifersCsv;
 
             // Buscador predictivo de acuíferos
             const searchInput = document.getElementById('search-input');
@@ -1096,7 +1525,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (tempMarker) tempMarker.remove();
 
                 const box = document.createElement('div');
-                box.style.cssText = 'color:#333;text-align:center;min-width:120px;';
+                box.style.cssText = 'color:#333;text-align:center;min-width:170px;';
                 const titleEl = document.createElement('b');
                 titleEl.style.cssText = 'color:#691C32;font-size:13px;display:block;margin-bottom:4px;';
                 titleEl.textContent = rawName;
@@ -1106,21 +1535,93 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const lonEl = document.createElement('span');
                 lonEl.style.cssText = 'font-size:11px;color:#555;display:block;';
                 lonEl.textContent = `Lon: ${lon.toFixed(5)}°`;
+                const dictBox = document.createElement('div');
+                dictBox.className = 'coord-dictamen-box';
+                dictBox.textContent = 'Evaluando vulnerabilidad...';
                 box.appendChild(titleEl);
                 box.appendChild(latEl);
                 box.appendChild(lonEl);
+                box.appendChild(dictBox);
 
                 const markerPopup = new maplibregl.Popup({ offset: 32, className: 'marker-popup', closeButton: true }).setDOMContent(box);
                 tempMarker = new maplibregl.Marker({ color: '#691C32' })
                     .setLngLat([lon, lat])
                     .setPopup(markerPopup)
                     .addTo(map);
-                activeCoordPoint = { lat, lon, name: rawName };
+                activeCoordPoint = { lat, lon, name: rawName, dictamen: '' };
                 tempMarker.togglePopup();
-                map.flyTo({ center: [lon, lat], zoom: 11.5 });
+
+                const myEvalToken = ++coordEvalToken;
+                let dictamenResuelto = false;
+                const consultarDictamenPunto = (esFinal = false) => {
+                    if (dictamenResuelto || myEvalToken !== coordEvalToken) return;
+                    const pt = map.project([lon, lat]);
+                    const hits = map.queryRenderedFeatures(pt, { layers: ['vuln-fill'] });
+                    if (hits && hits.length) {
+                        dictamenResuelto = true;
+                        dictBox.innerHTML = '';
+                        const hp = hits[0].properties;
+                        const vc = String(hp.v || '');
+                        const vCol = vulnColors[vc] || vulnColors.default;
+                        const vLbl = vulnLabels[vc] || 'Sin Datos';
+                        const cl = String(hp.c || '').padStart(4, '0');
+                        const nom = hp.n || 'Sin Nombre';
+                        activeCoordPoint.dictamen = `${vLbl} (${cl})`;
+
+                        const badge = document.createElement('span');
+                        badge.className = 'coord-dictamen-badge';
+                        badge.style.background = vCol;
+                        badge.textContent = vLbl;
+
+                        const aqSpan = document.createElement('span');
+                        aqSpan.className = 'coord-dictamen-aq';
+                        aqSpan.textContent = `${cl} - ${nom}`;
+
+                        dictBox.appendChild(badge);
+                        dictBox.appendChild(aqSpan);
+
+                        const aqKey = findAquiferKeyByClave(cl);
+                        if (aqKey) {
+                            const fBtn = document.createElement('button');
+                            fBtn.type = 'button';
+                            fBtn.className = 'coord-dictamen-btn btn-ico-flex';
+                            fBtn.innerHTML = `${iconFocusSm}<span>Ver ficha del acuífero</span>`;
+                            fBtn.onclick = () => triggerSearch(aqKey);
+                            dictBox.appendChild(fBtn);
+                        }
+                    } else if (esFinal) {
+                        dictamenResuelto = true;
+                        dictBox.innerHTML = '';
+                        activeCoordPoint.dictamen = 'Sin cobertura';
+                        const noneEl = document.createElement('span');
+                        noneEl.style.cssText = 'font-size:11px;color:#64748B;';
+                        noneEl.textContent = 'Sin cobertura de polígonos en este punto';
+                        dictBox.appendChild(noneEl);
+                    }
+                };
+
+                const curCenter = map.getCenter();
+                const yaEnDestino = Math.abs(curCenter.lat - lat) < 0.002 && Math.abs(curCenter.lng - lon) < 0.002 && map.getZoom() >= 11.0;
+                if (yaEnDestino) {
+                    consultarDictamenPunto(false);
+                    if (!dictamenResuelto) {
+                        map.once('idle', () => consultarDictamenPunto(true));
+                        setTimeout(() => consultarDictamenPunto(true), 1200);
+                    }
+                } else {
+                    map.flyTo({ center: [lon, lat], zoom: 11.5, duration: 850 });
+                    map.once('moveend', () => {
+                        consultarDictamenPunto(false);
+                        if (!dictamenResuelto && myEvalToken === coordEvalToken) {
+                            map.once('idle', () => consultarDictamenPunto(true));
+                            setTimeout(() => consultarDictamenPunto(true), 2200);
+                        }
+                    });
+                }
             };
 
             document.getElementById('btn-clear-coord').onclick = () => {
+                coordEvalToken++;
                 if (tempMarker) tempMarker.remove();
                 tempMarker = null;
                 activeCoordPoint = null;
@@ -1131,13 +1632,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             };
 
             document.getElementById('btn-reset').onclick = () => {
+                coordEvalToken++;
                 clearSelection();
                 currentVulnFilter = 'all';
                 document.querySelector('input[name="vuln-filter"][value="all"]').checked = true;
                 updateFilterStyles();
-                searchInput.value = '';
                 if (tempMarker) { tempMarker.remove(); tempMarker = null; }
                 activeCoordPoint = null;
+                measureCoords = [];
+                updateMeasureRender();
+                setMeasureActive(false);
+                repdaPopup.remove();
                 document.getElementById('coord-lat').value = '';
                 document.getElementById('coord-lon').value = '';
                 document.getElementById('coord-name').value = '';
@@ -1201,8 +1706,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 ctx.textAlign = 'left';
 
                 // 3. Simbología vectorial HD abajo-izquierda del mapa
-                const boxW = 330;
-                const boxH = 225;
+                const repdaVisible = document.getElementById('chk-repda') && document.getElementById('chk-repda').checked;
+                const boxW = 350;
+                const boxH = repdaVisible ? 260 : 225;
                 const bx = 28;
                 const by = hHeader + hMap - boxH - 24;
                 ctx.fillStyle = 'rgba(255,255,255,0.95)';
@@ -1233,6 +1739,98 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     ctx.fillStyle = '#1E293B';
                     ctx.fillText(txt, bx + 54, iy + 18);
                 });
+                if (repdaVisible) {
+                    const ry = by + 224;
+                    ctx.beginPath();
+                    ctx.arc(bx + 31, ry + 7, 8, 0, Math.PI * 2);
+                    ctx.fillStyle = '#2563eb';
+                    ctx.fill();
+                    ctx.strokeStyle = '#FFFFFF';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                    ctx.fillStyle = '#1E293B';
+                    ctx.font = 'bold 17px "Segoe UI", Arial, sans-serif';
+                    ctx.fillText('Puntos: Aprovechamientos REPDA', bx + 54, ry + 13);
+                }
+
+                // 3b. Cuadro resumen del acuífero seleccionado (arriba de la barra de escala)
+                if (aqMeta && aqMeta.clases) {
+                    const activeCls = ['5', '4', '3', '2', '1'].filter(c => aqMeta.clases[c] && aqMeta.clases[c].count > 0);
+                    const sumW = 470;
+                    const sumH = 112 + activeCls.length * 30;
+                    const sumX = wCanvas - sumW - 28;
+                    const sumY = hHeader + hMap - 96 - sumH;
+
+                    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                    ctx.strokeStyle = '#BC955C';
+                    ctx.lineWidth = 3;
+                    ctx.fillRect(sumX, sumY, sumW, sumH);
+                    ctx.strokeRect(sumX, sumY, sumW, sumH);
+
+                    ctx.fillStyle = '#691C32';
+                    ctx.fillRect(sumX, sumY, sumW, 42);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
+                    ctx.fillText(`Distribución: ${aqMeta.clave} - ${aqMeta.nombre.slice(0, 26)}`, sumX + 16, sumY + 28);
+
+                    // Barra apilada porcentual
+                    let curX = sumX + 16;
+                    const barW = sumW - 32;
+                    const barY = sumY + 54;
+                    activeCls.forEach(c => {
+                        const segW = (aqMeta.clases[c].pct / 100) * barW;
+                        ctx.fillStyle = vulnColors[c];
+                        ctx.fillRect(curX, barY, segW, 14);
+                        curX += segW;
+                    });
+                    ctx.strokeStyle = '#CBD5E1';
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeRect(sumX + 16, barY, barW, 14);
+
+                    // Filas por clase
+                    activeCls.forEach((c, idx) => {
+                        const info = aqMeta.clases[c];
+                        const ry = sumY + 94 + idx * 30;
+                        ctx.fillStyle = vulnColors[c];
+                        ctx.fillRect(sumX + 16, ry - 14, 16, 16);
+                        ctx.strokeStyle = '#334155';
+                        ctx.lineWidth = 1;
+                        ctx.strokeRect(sumX + 16, ry - 14, 16, 16);
+                        ctx.fillStyle = '#1E293B';
+                        ctx.font = '18px "Segoe UI", Arial, sans-serif';
+                        ctx.fillText(vulnLabels[c], sumX + 42, ry);
+                        ctx.textAlign = 'right';
+                        ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+                        ctx.fillText(`${info.pct.toFixed(1)}%  ·  ${info.area_km2.toLocaleString('es-MX', { maximumFractionDigits: 1 })} km²`, sumX + sumW - 16, ry);
+                        ctx.textAlign = 'left';
+                    });
+
+                    const totY = sumY + sumH - 14;
+                    ctx.fillStyle = '#691C32';
+                    ctx.font = 'bold 18px "Segoe UI", Arial, sans-serif';
+                    ctx.fillText('Superficie total', sumX + 16, totY);
+                    ctx.textAlign = 'right';
+                    ctx.fillText(`${aqMeta.area_km2.toLocaleString('es-MX', { maximumFractionDigits: 1 })} km² (${aqMeta.poligonos} pol.)`, sumX + sumW - 16, totY);
+                    ctx.textAlign = 'left';
+                }
+
+                // 3c. Etiqueta de medición activa si existe (texto limpio institucional sin emojis)
+                if (latestMeasureText) {
+                    const txtMed = `Medición · ${latestMeasureText}`;
+                    ctx.font = 'bold 20px "Segoe UI", Arial, sans-serif';
+                    const mW = Math.max(360, Math.ceil(ctx.measureText(txtMed).width) + 54);
+                    const mx = (wCanvas - mW) / 2;
+                    const my = hHeader + 18;
+                    ctx.fillStyle = 'rgba(105,28,50,0.94)';
+                    ctx.fillRect(mx, my, mW, 42);
+                    ctx.strokeStyle = '#BC955C';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(mx, my, mW, 42);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(txtMed, wCanvas / 2, my + 28);
+                    ctx.textAlign = 'left';
+                }
 
                 // 4. Barra de escala métrica precisa (considerando pixelRatio = 2 sobre ancho 1280px)
                 const metersPerPx = (156543.03392 * Math.cos(centerLat * Math.PI / 180)) / Math.pow(2, currentZoom) / 2;
@@ -1282,7 +1880,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
             document.getElementById('btn-print').onclick = function() {
                 const btn = this;
-                btn.innerHTML = '⏳';
+                btn.innerHTML = iconSpinner;
                 btn.style.cursor = 'wait';
                 btn.disabled = true;
 
@@ -1295,7 +1893,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const limpiar = () => {
                     if (offMap) { try { offMap.remove(); } catch (e) {} offMap = null; }
                     if (offDiv.parentNode) offDiv.parentNode.removeChild(offDiv);
-                    btn.innerHTML = '🖨️';
+                    btn.innerHTML = iconPrint;
                     btn.style.cursor = 'pointer';
                     btn.disabled = false;
                 };
@@ -1426,10 +2024,40 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                                 paint: { 'text-color': '#1E293B', 'text-halo-color': '#FFFFFF', 'text-halo-width': 2 }
                             });
                         }
+                        if (document.getElementById('chk-repda').checked && REPDA_PMTILES_URL) {
+                            offMap.addSource('repda-src', {
+                                type: 'vector',
+                                url: 'pmtiles://' + REPDA_PMTILES_URL,
+                                minzoom: 4,
+                                maxzoom: 8
+                            });
+                            const rMatch = ['match', ['get', 'u']];
+                            Object.entries(repdaUseColors).forEach(([u, c]) => rMatch.push(u, c));
+                            rMatch.push('#64748b');
+                            offMap.addLayer({
+                                id: 'repda-points', type: 'circle', source: 'repda-src', 'source-layer': 'repda',
+                                paint: {
+                                    'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 1.6, 7, 3.0, 10, 5.0, 14, 7.5],
+                                    'circle-color': rMatch,
+                                    'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 4, 0.4, 9, 1.2],
+                                    'circle-stroke-color': '#FFFFFF',
+                                    'circle-opacity': 0.92
+                                }
+                            });
+                        }
+                        if (latestMeasureGeoJSON.features.length) {
+                            offMap.addSource('measure-src', { type: 'geojson', data: latestMeasureGeoJSON });
+                            offMap.addLayer({ id: 'measure-fill', type: 'fill', source: 'measure-src', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#691C32', 'fill-opacity': 0.18 } });
+                            offMap.addLayer({ id: 'measure-line', type: 'line', source: 'measure-src', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#691C32', 'line-width': 2.8, 'line-dasharray': [2.5, 1.5] } });
+                            offMap.addLayer({ id: 'measure-pts', type: 'circle', source: 'measure-src', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#FFFFFF', 'circle-stroke-width': 2.5, 'circle-stroke-color': '#691C32' } });
+                        }
                         if (activeCoordPoint) {
+                            const lblTxt = activeCoordPoint.dictamen
+                                ? `${activeCoordPoint.name} · ${activeCoordPoint.dictamen}`
+                                : activeCoordPoint.name;
                             offMap.addSource('coord-pt-src', {
                                 type: 'geojson',
-                                data: { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [activeCoordPoint.lon, activeCoordPoint.lat] }, properties: { lbl: activeCoordPoint.name } }] }
+                                data: { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [activeCoordPoint.lon, activeCoordPoint.lat] }, properties: { lbl: lblTxt } }] }
                             });
                             offMap.addLayer({
                                 id: 'coord-pt-circle', type: 'circle', source: 'coord-pt-src',
@@ -1514,7 +2142,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 map.getSource('graticule-src').setData(latestGraticuleData);
             }
 
-            map.on('move', updateGraticule);
+            let graticuleRaf = null;
+            let lastGraticuleTs = 0;
+            function scheduleGraticuleUpdate() {
+                if (!map.getLayer('graticule-line') || map.getLayoutProperty('graticule-line', 'visibility') === 'none') return;
+                const now = performance.now();
+                if (now - lastGraticuleTs < 60) {
+                    if (!graticuleRaf) {
+                        graticuleRaf = requestAnimationFrame(() => {
+                            graticuleRaf = null;
+                            lastGraticuleTs = performance.now();
+                            updateGraticule();
+                        });
+                    }
+                    return;
+                }
+                lastGraticuleTs = now;
+                updateGraticule();
+            }
+
+            map.on('move', scheduleGraticuleUpdate);
+            map.on('moveend', updateGraticule);
             document.getElementById('chk-malla').onchange = (e) => {
                 const vis = e.target.checked ? 'visible' : 'none';
                 map.setLayoutProperty('graticule-line', 'visibility', vis);
@@ -1532,6 +2180,10 @@ html_code = (
     HTML_TEMPLATE
     .replace("__CATALOGO_MAPAS__", _json_seguro_html(catalogo_runtime))
     .replace("__INDICE_META__", _json_seguro_html(indice_vuln))
+    .replace("__REPDA_PMTILES_URL__", _json_seguro_html(repda_pmtiles_url))
 )
 
-components.html(html_code, height=760)
+if hasattr(st, "iframe"):
+    st.iframe(html_code, height=760)
+else:
+    components.html(html_code, height=760)
